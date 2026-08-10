@@ -1,0 +1,81 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the P3 conformance fixture. index.js renders from it and tools/ci-p3.sh probes from it, so the app and the gate cannot drift apart. Each case targets ONE prop family that P2 either painted wrongly or did not paint at all, and each carries at least one NEGATIVE probe -- a pixel that must be background -- because a positive-only probe passes for a renderer that floods the box with the right colour and ignores the shape.",
+  "surface": {
+    "width": 600,
+    "height": 400,
+    "background": "#ffffff"
+  },
+
+  "edges": {
+    "_why": "PER-EDGE BORDERS. P2 resolved the border cascade and then took `.left` for all four edges, so `borderTopColor` painted yellow. Four probes, one per edge midpoint, in four different colours: a left-edge-wins renderer fails exactly three of them and passes the fourth, which is the signature that tells this bug from 'borders do not paint at all'.",
+    "x": 20,
+    "y": 20,
+    "width": 160,
+    "height": 120,
+    "borderWidth": 12,
+    "top":    {"color": "#ff0000", "probe": [100, 26],  "expect": [255, 0, 0]},
+    "right":  {"color": "#00cc00", "probe": [174, 80],  "expect": [0, 204, 0]},
+    "bottom": {"color": "#0000ff", "probe": [100, 134], "expect": [0, 0, 255]},
+    "left":   {"color": "#ff9900", "probe": [26, 80],   "expect": [255, 153, 0]},
+    "centerProbe": [100, 80],
+    "centerExpect": [255, 255, 255]
+  },
+
+  "corners": {
+    "_why": "PER-CORNER RADII. P2 collapsed borderRadii to a single `all` value, so a box with ONE rounded corner drew four. Only the top-left corner is rounded here: TL must read background, and the other three corners must read fill. A renderer that rounds all four fails the three fill probes; one that rounds none fails the background probe.",
+    "x": 220,
+    "y": 20,
+    "width": 140,
+    "height": 120,
+    "topLeftRadius": 40,
+    "color": "#8800cc",
+    "cornerTL":     {"probe": [224, 24],  "expect": [255, 255, 255]},
+    "cornerTR":     {"probe": [356, 24],  "expect": [136, 0, 204]},
+    "cornerBL":     {"probe": [224, 136], "expect": [136, 0, 204]},
+    "cornerBR":     {"probe": [356, 136], "expect": [136, 0, 204]},
+    "centerProbe":  [290, 80],
+    "centerExpect": [136, 0, 204]
+  },
+
+  "gradient": {
+    "_why": "LINEAR GRADIENT via experimental_backgroundImage. Vertical red->blue. The three probes are ORDERED samples down the box, so the assertion is monotonic (red falls, blue rises) rather than three exact colours -- exact interpolation bytes are a renderer detail, but the DIRECTION is the contract. A renderer that paints a flat colour fails monotonicity even though every pixel is 'a plausible colour'.",
+    "x": 400,
+    "y": 20,
+    "width": 160,
+    "height": 120,
+    "from": "#ff0000",
+    "to": "#0000ff",
+    "probeTop":    [480, 26],
+    "probeMiddle": [480, 80],
+    "probeBottom": [480, 134],
+    "_whyEndpoints": "MONOTONICITY ALONE IS NOT ENOUGH, measured: a gradient whose endpoints were left in node-local coordinates instead of surface coordinates is SHIFTED but still monotonic, and the direction check waved it through. These bounds pin where the gradient actually starts and ends. The probes sit 6px inside a 120px box, so a correctly-placed gradient is ~95% pure at each end; a gradient offset by the node's own origin is not.",
+    "topMinRed": 225,
+    "bottomMinBlue": 225
+  },
+
+  "transform": {
+    "_why": "TRANSFORM (rotate 45deg). The centre probe proves the box is still painted; the CORNER probe is the one that matters -- it sits inside the UNROTATED bounds but outside the rotated diamond, so it must read background. A renderer that ignores `transform` paints an axis-aligned square, keeps the centre probe green, and is caught only by that corner.",
+    "x": 40,
+    "y": 220,
+    "width": 120,
+    "height": 120,
+    "rotateDeg": 45,
+    "color": "#00aa88",
+    "centerProbe": [100, 280],
+    "centerExpect": [0, 170, 136],
+    "cornerProbe": [46, 226],
+    "cornerExpect": [255, 255, 255]
+  },
+
+  "text": {
+    "_why": "TEXT METRICS, asserted as a RELATIONSHIP between two nodes rather than as absolute pixel sizes, so the gate does not break on a legitimate font substitution. Both <Text>s hold the same string in the same width-constrained box; one is numberOfLines={1}. The unclamped one must be TALLER (it wraps) and the clamped one must stay within one line height. numberOfLines being ignored -- the common silent failure -- makes the two heights equal, which is exactly what the ratio assertion catches. Ink bands prove both actually rendered, because equal-and-correct heights are also what you get when neither paints.",
+    "content": "Impeller conformance wrapping text sample",
+    "fontSize": 18,
+    "boxWidth": 200,
+    "wrapped":  {"x": 220, "y": 220, "inkBand": [220, 220, 200, 60]},
+    "clamped":  {"x": 220, "y": 320, "inkBand": [220, 320, 200, 30]},
+    "minLineHeight": 14,
+    "maxLineHeight": 40,
+    "minWrappedLines": 2
+  }
+}

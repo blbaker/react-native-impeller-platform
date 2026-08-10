@@ -13,6 +13,7 @@
 #include <react/renderer/mounting/ShadowViewMutation.h>
 
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -35,10 +36,32 @@ struct SceneNode {
   float bg[4]{0, 0, 0, 0};   // r,g,b,a
   float opacity{1.0f};
 
-  float borderWidth{0};
-  bool hasBorderColor{false};
-  float border[4]{0, 0, 0, 0};
-  float borderRadius{0};
+  // Borders, PER EDGE. P2 resolved RN's border cascade and then used the left
+  // edge for all four, which paints a uniform frame — a frame that looks
+  // completely reasonable in a screenshot and is wrong for every app that sets
+  // a single edge. Order below is top, right, bottom, left throughout.
+  float borderWidths[4]{0, 0, 0, 0};
+  bool hasBorderColors[4]{false, false, false, false};
+  float borderColors[4][4]{};
+
+  // Radii, PER CORNER, in Impeller's field order: TL, BL, TR, BR (NOT
+  // clockwise). P2 collapsed these to a single `all` value, so one rounded
+  // corner drew as four.
+  float borderRadii[4]{0, 0, 0, 0};
+
+  // Linear gradient (`experimental_backgroundImage`). Painted UNDER the
+  // background colour rule: when a gradient is present it replaces the flat
+  // fill, matching CSS painting order.
+  bool hasGradient{false};
+  float gradStart[2]{0, 0};  // in node-local coordinates
+  float gradEnd[2]{0, 0};
+  std::vector<float> gradStops;         // 0..1, ascending
+  std::vector<std::array<float, 4>> gradColors;
+
+  // Resolved transform matrix (column-major 4x4, RN's own layout), already
+  // including transform-origin. Identity when the node has no transform.
+  bool hasTransform{false};
+  std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
 
   bool overflowHidden{false};
 
@@ -48,6 +71,9 @@ struct SceneNode {
   std::string text;
   float fontSize{14};
   float textColor[4]{0, 0, 0, 1};
+  // numberOfLines. Must be applied at PAINT time as well as measure time, or a
+  // clamped label measures one line and paints three.
+  int maxLines{0};
 
   std::vector<facebook::react::Tag> children;
   facebook::react::Tag parent{};
@@ -87,6 +113,14 @@ class SceneGraph {
                  const SceneNode& node,
                  float originX,
                  float originY);
+  // Split out of paintNode because per-edge borders are a whole geometry
+  // problem: a stroked rect cannot express four colours and straddles the path,
+  // so each edge is drawn as its own mitred quad.
+  void paintBorders(ImpellerDisplayListBuilder builder,
+                    const SceneNode& node,
+                    float x, float y, float w, float h,
+                    const ImpellerRoundingRadii& radii,
+                    bool rounded);
 
   std::mutex mutex_;
   int painted_{0};  // reset per paint(); incremented in paintNode()

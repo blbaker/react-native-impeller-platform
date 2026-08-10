@@ -31,6 +31,27 @@ trap restore EXIT
 PASSED=0
 FAILED=0
 
+# mutate <file> <find> <replace> — fails loudly if <find> is not present.
+#
+# ⛔ THIS GUARD IS NOT OPTIONAL. Every mutant below is a string replacement
+# against engine source. When that source is refactored, a pattern that no
+# longer exists makes the "mutation" a silent no-op, the gate stays green
+# against an unmutated tree, and the run reports the mutant as UNCAUGHT — which
+# reads as a gate defect and sends you debugging the wrong file. Measured here:
+# P3 rewrote the paint path and M2's `if (node.borderRadius > 0.0f)` pattern
+# vanished. Fail loudly instead.
+mutate() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import sys
+path, find, repl = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(path).read()
+if find not in s:
+    sys.stderr.write("MUTANT DID NOT APPLY — pattern not found in %s:\n%s\n" % (path, find))
+    sys.exit(1)
+open(path, "w").write(s.replace(find, repl, 1))
+PY
+}
+
 expect_red() {
   local name="$1"
   echo "--- mutant: $name"
@@ -56,59 +77,53 @@ echo "    ✅ baseline green"
 
 # M1 — the tree mounts perfectly and nothing is drawn. Exit 0, no JS error,
 # mutation log complete. Only pixels catch it.
-python3 - "$SG" <<'PY'
-import sys, re
-p = sys.argv[1]; s = open(p).read()
-s = s.replace("  ++painted_;\n  ImpellerPaint paint = ImpellerPaintNew();",
-              "  ++painted_;\n  if (true) { return; }\n  ImpellerPaint paint = ImpellerPaintNew();", 1)
-open(p, "w").write(s)
-PY
+mutate "$SG" \
+  "  ++painted_;
+  ImpellerPaint paint = ImpellerPaintNew();" \
+  "  ++painted_;
+  if (true) { return; }
+  ImpellerPaint paint = ImpellerPaintNew();"
 expect_red "M1 paintNode draws nothing (tree intact, exit 0)"
 
 # M2 — every View drawn as a plain rect. Three of four colour probes still pass
 # and the frame looks right in a thumbnail; only the corner probe can see it.
-python3 - "$SG" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-s = s.replace("if (node.borderRadius > 0.0f) {\n      ImpellerRoundingRadii radii = {};",
-              "if (false) {\n      ImpellerRoundingRadii radii = {};", 1)
-open(p, "w").write(s)
-PY
+#
+# Retargeted in P3: this used to patch `if (node.borderRadius > 0.0f)`, which no
+# longer exists now that radii are per-corner. Without the mutate() guard the
+# rewrite would have turned this mutant into a silent no-op.
+mutate "$SG" \
+  "  const bool rounded = node.borderRadii[0] > 0.0f || node.borderRadii[1] > 0.0f ||
+                       node.borderRadii[2] > 0.0f || node.borderRadii[3] > 0.0f;" \
+  "  const bool rounded = false;"
 expect_red "M2 rounded rects drawn square (only the corner probe sees it)"
 
 # M3 — the root-adoption regression this phase actually hit: nodes exist,
 # painted_nodes drops to 0.
-python3 - "$SG" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-s = s.replace("        auto& node = nodes_[tag];\n        updateFromShadowView(node, m.newChildShadowView);",
-              "        if (auto it = nodes_.find(tag); it != nodes_.end()) {\n          updateFromShadowView(it->second, m.newChildShadowView);\n        }", 1)
-open(p, "w").write(s)
-PY
+mutate "$SG" \
+  "        auto& node = nodes_[tag];
+        updateFromShadowView(node, m.newChildShadowView);" \
+  "        if (auto it = nodes_.find(tag); it != nodes_.end()) {
+          updateFromShadowView(it->second, m.newChildShadowView);
+        }"
 expect_red "M3 Update is find-not-upsert (surface root never enters the tree)"
 
 # M4 — text measures 0x0, i.e. RN's cxx stub behaviour restored. Boxes all still
 # pass; only the ink band notices the label vanished.
-python3 - "$TLM" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-s = s.replace("  float width = ImpellerParagraphGetLongestLineWidth(paragraph);",
-              "  float width = 0; (void)ImpellerParagraphGetLongestLineWidth(paragraph);", 1)
-s = s.replace("  float height = ImpellerParagraphGetHeight(paragraph);",
-              "  float height = 0; (void)ImpellerParagraphGetHeight(paragraph);", 1)
-open(p, "w").write(s)
-PY
+mutate "$TLM" \
+  "  float width = ImpellerParagraphGetLongestLineWidth(paragraph);" \
+  "  float width = 0; (void)ImpellerParagraphGetLongestLineWidth(paragraph);"
+mutate "$TLM" \
+  "  float height = ImpellerParagraphGetHeight(paragraph);" \
+  "  float height = 0; (void)ImpellerParagraphGetHeight(paragraph);"
 expect_red "M4 TextLayoutManager returns 0x0 (the RN cxx-stub failure)"
 
 # M5 — the packaging half: drop the BaseViewConfig platform-fork redirect and
 # the bundle dies at mount. Proves the gate still covers the consumer path.
-python3 - "$SHIMS" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-s = s.replace("const PLATFORM_FORKED = {\n  'react-native/Libraries/NativeComponent/BaseViewConfig.js': 'BaseViewConfig.ios.js',\n};",
-              "const PLATFORM_FORKED = {};", 1)
-open(p, "w").write(s)
-PY
+mutate "$SHIMS" \
+  "const PLATFORM_FORKED = {
+  'react-native/Libraries/NativeComponent/BaseViewConfig.js': 'BaseViewConfig.ios.js',
+};" \
+  "const PLATFORM_FORKED = {};"
 expect_red "M5 BaseViewConfig fork-redirect removed (ios-stub disease returns)"
 
 echo
