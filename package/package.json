@@ -1,0 +1,32 @@
+{
+  "name": "react-native-impeller",
+  "version": "0.0.1",
+  "description": "Out-of-tree React Native platform rendered with Flutter's Impeller engine",
+  "license": "MIT",
+  "main": "src/index.js",
+  "files": [
+    "src",
+    "templates",
+    "react-native.config.js",
+    "README.md"
+  ],
+  "bin": {
+    "impeller-engine-path": "src/bin/engine-path.js"
+  },
+  "scripts": {
+    "test": "node src/selftest.js"
+  },
+  "peerDependencies": {
+    "react-native": ">=0.86.0"
+  },
+  "optionalDependencies": {
+    "@react-native-impeller/engine-linux-x64": "0.0.1",
+    "@react-native-impeller/engine-linux-arm64": "0.0.1",
+    "@react-native-impeller/engine-win32-x64": "0.0.1",
+    "@react-native-impeller/engine-darwin-x64": "0.0.1",
+    "@react-native-impeller/engine-darwin-arm64": "0.0.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

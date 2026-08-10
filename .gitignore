@@ -2,3 +2,6 @@ engine/third_party/impeller-sdk/
 node_modules/
 *.ppm
 build/
+node_modules/
+packages-engine/*/bin/
+*.tgz

@@ -1,0 +1,18 @@
+# impeller/
+
+Scaffolded by `npx react-native init-impeller` for **{{displayName}}**.
+
+- `impeller.config.json` — window + app identity. The app name registered by the
+  engine is `{{appName}}`, taken from your `app.json`; the engine runs the same
+  name it registers.
+- `build/` — Metro output for `--platform impeller`. Safe to delete; regenerated
+  by `run-impeller`. Add it to `.gitignore`.
+
+The engine binary is **not** here. It is installed from npm as
+`@react-native-impeller/engine-<platform>-<arch>` (an optional dependency of
+`react-native-impeller`) and located at runtime by the resolver. Set
+`IMPELLER_ENGINE_BINARY` to point at a locally built engine instead.
+
+Run it:
+
+    npx react-native run-impeller
