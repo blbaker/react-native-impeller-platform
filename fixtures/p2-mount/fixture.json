@@ -1,0 +1,58 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the P2 fixture geometry. index.js renders from it and tools/ci-p2.sh probes from it, so a change to one cannot silently disagree with the other. Colors are exact sRGB with no alpha blending, so a probe expects the literal byte values.",
+  "surface": {
+    "width": 400,
+    "height": 300,
+    "background": "#ffffff"
+  },
+  "boxes": [
+    {
+      "id": "plain",
+      "_why": "square with no radius: the baseline 'a View becomes pixels' probe",
+      "x": 20,
+      "y": 20,
+      "width": 100,
+      "height": 60,
+      "color": "#ff0000",
+      "probe": [70, 50],
+      "expect": [255, 0, 0]
+    },
+    {
+      "id": "rounded",
+      "_why": "radius 20: corner probe must show BACKGROUND. Catches a renderer that draws every View as a plain rect - which looks correct in a screenshot thumbnail and is wrong.",
+      "x": 200,
+      "y": 20,
+      "width": 150,
+      "height": 100,
+      "radius": 20,
+      "color": "#0000ff",
+      "probe": [275, 70],
+      "expect": [0, 0, 255],
+      "cornerProbe": [202, 22],
+      "cornerExpect": [255, 255, 255]
+    },
+    {
+      "id": "nested",
+      "_why": "child positioned relative to its parent, so a renderer that ignores parent origin paints it in the wrong place and this probe reads background",
+      "x": 20,
+      "y": 150,
+      "width": 120,
+      "height": 100,
+      "color": "#00aa00",
+      "probe": [60, 200],
+      "expect": [0, 170, 0]
+    }
+  ],
+  "label": {
+    "_why": "text through Impeller's typography engine. Probed as 'ink present in this band', not an exact pixel, because glyph rasterisation is not byte-stable across font stacks.",
+    "text": "P2 MOUNT",
+    "x": 200,
+    "y": 200,
+    "fontSize": 28,
+    "color": "#000000",
+    "inkBand": [200, 195, 180, 45],
+    "_whyMeasured": "INK IS NOT ENOUGH. A TextLayoutManager returning 0x0 (RN's platform/cxx stub) still paints glyphs at the node origin, so the ink band passes while Yoga has laid the node out as a zero-sized box. Mutation M4 proved exactly that. These bounds assert the MEASUREMENT, and are wide because glyph advances vary by font.",
+    "measuredMin": [90, 20],
+    "measuredMax": [260, 60]
+  }
+}

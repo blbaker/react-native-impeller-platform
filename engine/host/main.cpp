@@ -1,43 +1,50 @@
-// rn-impeller — P1 engine host.
+// rn-impeller — the engine host.
 //
-// This is the PACKAGING payload, not the renderer. P2 replaces the body with a real
-// bridgeless ReactInstance + Fabric mount; the CLI contract below is what P1 freezes:
+// CLI contract, FROZEN BY P1 (package/src/cli/run.js and the resolver depend on
+// every word of it):
 //
-//   rn-impeller --bundle <ABSOLUTE PATH> --app-name <NAME> [--headless] [--screenshot F]
+//   rn-impeller --bundle <ABSOLUTE PATH> --app-name <NAME>
+//               [--headless] [--screenshot F] [--probe-banner on|off]
+//               [--width N] [--height N] [--log-mutations]
 //
-// Deliberate design rules carried from the plan (D5) and from skia-platform's scars:
-//   * --bundle is REQUIRED and must be absolute. There is NO CWD probe and NO
-//     fallback bundle location, so a wrong path fails loudly instead of silently
-//     rendering yesterday's bundle from some other directory.
-//   * --app-name is REQUIRED and is echoed back: the name the host registers is the
-//     name it runs. skia-platform shipped nine phases with a hardcoded "playground".
-//   * The frame is a FUNCTION OF THE BUNDLE. If the bundle does not contain the
-//     packaging shim marker, the status swatch is painted RED instead of GREEN.
-//     That makes the consumer pixel gate prove the whole chain end to end
-//     (tarball -> metro shim -> bundle -> engine -> pixels) rather than proving
-//     only that a process exited zero.
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#include <GLES3/gl3.h>
-
+//   * --bundle is REQUIRED and ABSOLUTE. There is no CWD probe and no fallback
+//     location, so a wrong path fails loudly instead of quietly rendering some
+//     other directory's stale bundle.
+//   * --app-name is REQUIRED and is the name actually registered AND run.
+//
+// WHAT --probe-banner IS, AND WHY IT DEFAULTS ON IN HEADLESS MODE
+//
+// The banner is the P1 packaging self-test frame: a status swatch that is GREEN
+// only when the packaging shim marker is present in the loaded bundle (RED
+// otherwise), a rounded rect whose corner must show background, an anti-aliased
+// circle, and a bar scaled to the bundle size. It is drawn OVER an opaque
+// backdrop, so with the banner on the frame proves the PACKAGING chain and says
+// nothing about React.
+//
+// `--probe-banner off` paints the React scene graph alone — that is the frame
+// the P2 gate reads. Two frames because they answer two different questions,
+// and a single frame that tried to answer both would answer neither when it
+// went wrong. The banner never draws in windowed mode; it is a test artifact,
+// not UI.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "fabric/FabricHost.h"
+#include "host/HeadlessSurface.h"
 #include "impeller.h"
+#include "runtime/FeatureFlags.h"
+#include "runtime/ReactHost.h"
+#include "scenegraph/SceneGraph.h"
 
 namespace {
 
-constexpr int kW = 400;
-constexpr int kH = 300;
-// Must match RN_IMPELLER_SHIM_MARKER in package/src/metro-shims/shims/Platform.impeller.js
+// Must match RN_IMPELLER_SHIM_MARKER in
+// package/src/metro-shims/shims/Platform.impeller.js
 constexpr const char* kShimMarker = "__RN_IMPELLER_SHIM_V1__";
-
-void* ProcAddr(const char* name, void*) { return (void*)eglGetProcAddress(name); }
-
-struct Px { unsigned char r, g, b, a; };
 
 bool IsAbsolute(const std::string& p) {
 #ifdef _WIN32
@@ -60,123 +67,28 @@ bool ReadFile(const std::string& path, std::string* out) {
 void Usage() {
   fprintf(stderr,
           "usage: rn-impeller --bundle <absolute path> --app-name <name>\n"
-          "                   [--headless] [--screenshot <file.ppm>]\n");
+          "                   [--headless] [--screenshot <file.ppm>]\n"
+          "                   [--probe-banner on|off] [--width N] [--height N]\n"
+          "                   [--log-mutations]\n");
 }
 
-}  // namespace
-
-#define CHECK(cond, msg)                                  \
-  do {                                                    \
-    if (!(cond)) {                                        \
-      fprintf(stderr, "rn-impeller: FATAL: %s\n", (msg)); \
-      return 1;                                           \
-    }                                                     \
-  } while (0)
-
-int main(int argc, char** argv) {
-  std::string bundle_path, app_name, screenshot;
-  bool headless = false;
-
-  for (int i = 1; i < argc; ++i) {
-    std::string a = argv[i];
-    auto next = [&](const char* what) -> std::string {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "rn-impeller: %s requires a value\n", what);
-        exit(2);
-      }
-      return argv[++i];
-    };
-    if (a == "--bundle") bundle_path = next("--bundle");
-    else if (a == "--app-name") app_name = next("--app-name");
-    else if (a == "--screenshot") screenshot = next("--screenshot");
-    else if (a == "--headless") headless = true;
-    else if (a == "--help" || a == "-h") { Usage(); return 0; }
-    // Unknown flags are ignored on purpose: the CLI forwards user args through.
-  }
-
-  if (bundle_path.empty() || app_name.empty()) {
-    Usage();
-    return 2;
-  }
-  // No CWD fallback. An engine that guesses the bundle location is an engine that
-  // renders a stale bundle and wastes an afternoon.
-  CHECK(IsAbsolute(bundle_path), "--bundle must be an ABSOLUTE path (no CWD fallback exists)");
-
-  std::string bundle;
-  if (!ReadFile(bundle_path, &bundle)) {
-    fprintf(stderr, "rn-impeller: FATAL: cannot read bundle at %s\n", bundle_path.c_str());
-    return 1;
-  }
-
-  const bool shim_ok = bundle.find(kShimMarker) != std::string::npos;
-  printf("rn-impeller: app=%s\n", app_name.c_str());
-  printf("rn-impeller: bundle=%s (%zu bytes)\n", bundle_path.c_str(), bundle.size());
-  printf("rn-impeller: shim_marker=%s\n", shim_ok ? "PRESENT" : "MISSING");
-  printf("rn-impeller: headless=%s\n", headless ? "yes" : "no");
-
-  if (!headless) {
-    // P2 brings the windowed WSI path. Until then be explicit rather than pretending.
-    fprintf(stderr,
-            "rn-impeller: windowed mode is not implemented yet (P2). "
-            "Re-run with --headless.\n");
-    return 3;
-  }
-
-  // ---- surfaceless EGL (works in CI with no display server) ----
-  auto getPlatformDisplay =
-      (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
-  CHECK(getPlatformDisplay != nullptr, "eglGetPlatformDisplayEXT unavailable");
-  EGLDisplay dpy = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
-  CHECK(dpy != EGL_NO_DISPLAY, "surfaceless eglGetPlatformDisplay");
-  EGLint egl_major = 0, egl_minor = 0;
-  CHECK(eglInitialize(dpy, &egl_major, &egl_minor), "eglInitialize");
-
-  const EGLint cfg_attrs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-                              EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-                              EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
-                              EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
-  EGLConfig cfg;
-  EGLint n = 0;
-  CHECK(eglChooseConfig(dpy, cfg_attrs, &cfg, 1, &n) && n == 1, "eglChooseConfig");
-  CHECK(eglBindAPI(EGL_OPENGL_ES_API), "eglBindAPI");
-  const EGLint ctx_attrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_NONE};
-  EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attrs);
-  CHECK(ctx != EGL_NO_CONTEXT, "eglCreateContext");
-  CHECK(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx), "eglMakeCurrent surfaceless");
-  printf("rn-impeller: GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
-
-  GLuint tex = 0, fbo = 0;
-  glGenTextures(1, &tex);
-  glBindTexture(GL_TEXTURE_2D, tex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kW, kH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
-  CHECK(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "FBO incomplete");
-
-  ImpellerContext ictx = ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ProcAddr, nullptr);
-  CHECK(ictx != nullptr, "ImpellerContextCreateOpenGLESNew returned null");
-  ImpellerISize size = {kW, kH};
-  ImpellerSurface surface =
-      ImpellerSurfaceCreateWrappedFBONew(ictx, fbo, kImpellerPixelFormatRGBA8888, &size);
-  CHECK(surface != nullptr, "ImpellerSurfaceCreateWrappedFBONew returned null");
-
-  ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
+void DrawProbeBanner(ImpellerDisplayListBuilder builder, bool shimOk,
+                     size_t bundleSize, int w, int h) {
   ImpellerPaint paint = ImpellerPaintNew();
 
   ImpellerColor white = {1.0f, 1.0f, 1.0f, 1.0f, kImpellerColorSpaceSRGB};
   ImpellerPaintSetColor(paint, &white);
-  ImpellerRect full = {0, 0, (float)kW, (float)kH};
+  ImpellerRect full = {0, 0, (float)w, (float)h};
   ImpellerDisplayListBuilderDrawRect(builder, &full, paint);
 
-  // Status swatch: GREEN only if the packaging shim actually reached the bundle.
-  ImpellerColor status = shim_ok ? ImpellerColor{0.0f, 1.0f, 0.0f, 1.0f, kImpellerColorSpaceSRGB}
-                                 : ImpellerColor{1.0f, 0.0f, 0.0f, 1.0f, kImpellerColorSpaceSRGB};
+  // GREEN only if the packaging shim actually reached the bundle.
+  ImpellerColor status = shimOk
+      ? ImpellerColor{0.0f, 1.0f, 0.0f, 1.0f, kImpellerColorSpaceSRGB}
+      : ImpellerColor{1.0f, 0.0f, 0.0f, 1.0f, kImpellerColorSpaceSRGB};
   ImpellerPaintSetColor(paint, &status);
-  ImpellerRect swatch = {20, 20, 100, 100};  // {x, y, w, h} — NOT LTRB
+  ImpellerRect swatch = {20, 20, 100, 100};  // {x,y,w,h}, NOT LTRB
   ImpellerDisplayListBuilderDrawRect(builder, &swatch, paint);
 
-  // Rounded rect + oval: shape fidelity probes (the subtle-mutation gate targets).
   ImpellerColor blue = {0.0f, 0.0f, 1.0f, 1.0f, kImpellerColorSpaceSRGB};
   ImpellerPaintSetColor(paint, &blue);
   ImpellerRect r2 = {200, 20, 150, 100};
@@ -187,91 +99,267 @@ int main(int argc, char** argv) {
   radii.bottom_right = {20, 20};
   ImpellerDisplayListBuilderDrawRoundedRect(builder, &r2, &radii, paint);
 
-  // Bundle-size bar: width scales with the bundle, so an empty/truncated bundle is
-  // visible in pixels, not just in a log line.
   ImpellerColor grey = {0.35f, 0.35f, 0.35f, 1.0f, kImpellerColorSpaceSRGB};
   ImpellerPaintSetColor(paint, &grey);
-  float bar_w = (float)(bundle.size() / 4096);
-  if (bar_w > (float)(kW - 40)) bar_w = (float)(kW - 40);
-  if (bar_w < 1.0f) bar_w = 1.0f;
-  ImpellerRect bar = {20, 250, bar_w, 20};
+  float barW = (float)(bundleSize / 4096);
+  if (barW > (float)(w - 40)) barW = (float)(w - 40);
+  if (barW < 1.0f) barW = 1.0f;
+  ImpellerRect bar = {20, 250, barW, 20};
   ImpellerDisplayListBuilderDrawRect(builder, &bar, paint);
 
-  // Anti-aliased CIRCLE. Two jobs: shape-fidelity probe target, and it is what makes
-  // the distinct-colour floor meaningful — a frame of axis-aligned rects has only a
-  // handful of colours, so a floor measured over such a frame proves nothing.
-  //
-  // It must be a circle, NOT an ellipse. Verified on this SDK pin + llvmpipe: an oval
-  // with width != height draws with NO anti-aliasing at all (hard edges, 4 distinct
-  // colours in the frame), while width == height produces ~40 fringe colours. Making
-  // this an ellipse silently removes every AA pixel and guts the colour floor.
+  // Must be a CIRCLE, not an ellipse: with width != height Impeller draws with
+  // no anti-aliasing at all (4 distinct colours in the frame), which silently
+  // guts the distinct-colour floor this gate depends on.
   ImpellerColor purple = {0.5f, 0.0f, 0.6f, 1.0f, kImpellerColorSpaceSRGB};
   ImpellerPaintSetColor(paint, &purple);
   ImpellerRect circle = {150, 140, 90, 90};
   ImpellerDisplayListBuilderDrawOval(builder, &circle, paint);
 
+  ImpellerPaintRelease(paint);
+}
 
-  ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
-  CHECK(dl != nullptr, "CreateDisplayListNew");
-  CHECK(ImpellerSurfaceDrawDisplayList(surface, dl), "SurfaceDrawDisplayList returned false");
-  glFinish();
-
-  std::vector<Px> buf(kW * kH);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glReadPixels(0, 0, kW, kH, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
-  CHECK(glGetError() == GL_NO_ERROR, "glReadPixels");
-  // glReadPixels origin is bottom-left; Impeller draws top-left.
-  auto at = [&](int x, int y_topleft) -> Px { return buf[(kH - 1 - y_topleft) * kW + x]; };
-
-  Px s = at(70, 70);
-  printf("rn-impeller: status_swatch_rgb=%d,%d,%d\n", s.r, s.g, s.b);
-
-  // Shape-fidelity probe: inside the rounded rect's bounding box but OUTSIDE its
-  // rounded corner, so background must show through. This is the probe that catches
-  // a subtle wrong-shape regression; a swatch-only gate cannot.
-  Px c = at(202, 22);
-  printf("rn-impeller: rrect_corner_rgb=%d,%d,%d\n", c.r, c.g, c.b);
-
-  int distinct = 0;
-  {
-    std::vector<unsigned> seen;
-    for (auto& p : buf) {
-      unsigned k = (p.r << 16) | (p.g << 8) | p.b;
-      bool found = false;
-      for (auto v : seen)
-        if (v == k) { found = true; break; }
-      if (!found && seen.size() < 4096) seen.push_back(k);
+int CountDistinctColors(const std::vector<rni::Px>& px) {
+  std::vector<unsigned> seen;
+  for (const auto& p : px) {
+    unsigned k = (p.r << 16) | (p.g << 8) | p.b;
+    bool found = false;
+    for (auto v : seen) {
+      if (v == k) { found = true; break; }
     }
-    distinct = (int)seen.size();
+    if (!found && seen.size() < 4096) seen.push_back(k);
   }
-  printf("rn-impeller: distinct_colors=%d\n", distinct);
+  return (int)seen.size();
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  // MUST be first: ReactNativeFeatureFlags::override() throws once any flag has
+  // been read, and plenty of construction paths read one.
+  rni::installFeatureFlags();
+
+  std::string bundlePath, appName, screenshot;
+  bool headless = false;
+  bool probeBanner = true;
+  bool logMutations = false;
+  int width = 400, height = 300;
+  // Arbitrary pixel probes, so a gate can assert the geometry ITS fixture
+  // declares instead of whatever probes happen to be hardcoded here. Each
+  // prints `probe=<x>,<y> rgb=r,g,b`.
+  std::vector<std::pair<int, int>> probes;
+  // Rectangles in which to count NON-BACKGROUND pixels. Text is probed this way
+  // rather than by exact pixel because glyph rasterisation is not byte-stable
+  // across font stacks — but "is there ink in the band where the label belongs"
+  // is, and it still fails when text does not render.
+  struct InkBand { int x, y, w, h; };
+  std::vector<InkBand> inkBands;
+
+  for (int i = 1; i < argc; ++i) {
+    std::string a = argv[i];
+    auto next = [&](const char* what) -> std::string {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "rn-impeller: %s requires a value\n", what);
+        exit(2);
+      }
+      return argv[++i];
+    };
+    if (a == "--bundle") bundlePath = next("--bundle");
+    else if (a == "--app-name") appName = next("--app-name");
+    else if (a == "--screenshot") screenshot = next("--screenshot");
+    else if (a == "--headless") headless = true;
+    else if (a == "--log-mutations") logMutations = true;
+    else if (a == "--probe-banner") probeBanner = (next("--probe-banner") != "off");
+    else if (a == "--width") width = atoi(next("--width").c_str());
+    else if (a == "--height") height = atoi(next("--height").c_str());
+    else if (a == "--probe") {
+      std::string v = next("--probe");
+      auto comma = v.find(',');
+      if (comma == std::string::npos) {
+        fprintf(stderr, "rn-impeller: --probe wants x,y (got %s)\n", v.c_str());
+        return 2;
+      }
+      probes.emplace_back(atoi(v.substr(0, comma).c_str()),
+                          atoi(v.substr(comma + 1).c_str()));
+    }
+    else if (a == "--ink-band") {
+      // x,y,w,h
+      std::string v = next("--ink-band");
+      int f[4] = {0, 0, 0, 0};
+      size_t pos = 0;
+      bool ok = true;
+      for (int k = 0; k < 4; ++k) {
+        if (pos > v.size()) { ok = false; break; }
+        auto c = v.find(',', pos);
+        std::string part = v.substr(pos, c == std::string::npos ? c : c - pos);
+        if (part.empty()) { ok = false; break; }
+        f[k] = atoi(part.c_str());
+        pos = (c == std::string::npos) ? v.size() + 1 : c + 1;
+      }
+      if (!ok) {
+        fprintf(stderr, "rn-impeller: --ink-band wants x,y,w,h (got %s)\n", v.c_str());
+        return 2;
+      }
+      inkBands.push_back(InkBand{f[0], f[1], f[2], f[3]});
+    }
+    else if (a == "--help" || a == "-h") { Usage(); return 0; }
+    // Unknown flags are ignored on purpose: the CLI forwards user args through.
+  }
+
+  if (bundlePath.empty() || appName.empty()) {
+    Usage();
+    return 2;
+  }
+  if (!IsAbsolute(bundlePath)) {
+    fprintf(stderr,
+            "rn-impeller: FATAL: --bundle must be an ABSOLUTE path "
+            "(no CWD fallback exists)\n");
+    return 1;
+  }
+
+  std::string bundle;
+  if (!ReadFile(bundlePath, &bundle)) {
+    fprintf(stderr, "rn-impeller: FATAL: cannot read bundle at %s\n",
+            bundlePath.c_str());
+    return 1;
+  }
+  const bool shimOk = bundle.find(kShimMarker) != std::string::npos;
+  const size_t bundleSize = bundle.size();  // captured before the move below
+  printf("rn-impeller: app=%s\n", appName.c_str());
+  printf("rn-impeller: bundle=%s (%zu bytes)\n", bundlePath.c_str(), bundle.size());
+  printf("rn-impeller: shim_marker=%s\n", shimOk ? "PRESENT" : "MISSING");
+  printf("rn-impeller: headless=%s\n", headless ? "yes" : "no");
+  fflush(stdout);
+
+  if (!headless) {
+    // Windowed WSI is a later phase. Say so rather than opening nothing and
+    // exiting zero.
+    fprintf(stderr,
+            "rn-impeller: windowed mode is not implemented yet. "
+            "Re-run with --headless.\n");
+    return 3;
+  }
+
+  rni::HeadlessSurface surface;
+  std::string error;
+  if (!surface.init(width, height, &error)) {
+    fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
+    return 1;
+  }
+
+  int painted = 0;
+  size_t nodeCount = 0;
+  {
+    rni::SceneGraph sceneGraph(surface.typography());
+    rni::ReactHost host;
+    host.setKnownComponents(rni::FabricHost::knownComponentNames());
+    host.displayMetrics()->set((float)width, (float)height, 1.0f);
+
+    // Fabric must be up BEFORE the bundle evaluates: the Scheduler installs
+    // UIManagerBinding through the unbuffered executor, and ReactFabric reads
+    // global.nativeFabricUIManager the moment it initialises.
+    rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
+                           logMutations, host.displayMetrics());
+
+    host.runScript(std::move(bundle), "file://" + bundlePath);
+    // Let the bundle finish evaluating (AppRegistry.registerComponent) before
+    // asking for the surface, otherwise runApplication names a module that is
+    // not registered yet.
+    host.waitForJsIdle(10000);
+
+    fabric.startSurface(appName, 1, (float)width, (float)height);
+    // React renders, Fabric commits, the delegate applies mutations — all on
+    // the JS thread. Idle means that whole chain has drained.
+    host.waitForJsIdle(10000);
+
+    nodeCount = sceneGraph.nodeCount();
+    printf("rn-impeller: scene_nodes=%zu\n", nodeCount);
+    // Always emitted, not gated behind --log-mutations: a gate needs the frames
+    // to prove LAYOUT, and painted pixels alone cannot (a 0x0-measured <Text>
+    // still paints its glyphs).
+    fputs(sceneGraph.frameReport().c_str(), stdout);
+    if (logMutations) {
+      printf("rn-impeller: scene=%s\n", sceneGraph.describe().c_str());
+    }
+    fflush(stdout);
+
+    ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
+    painted = sceneGraph.paint(builder);
+    if (probeBanner) {
+      DrawProbeBanner(builder, shimOk, bundleSize, width, height);
+    }
+    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
+    if (dl == nullptr) {
+      fprintf(stderr, "rn-impeller: FATAL: CreateDisplayListNew returned null\n");
+      return 1;
+    }
+    if (!surface.drawDisplayList(dl)) {
+      fprintf(stderr, "rn-impeller: FATAL: SurfaceDrawDisplayList failed\n");
+      return 1;
+    }
+    ImpellerDisplayListRelease(dl);
+    ImpellerDisplayListBuilderRelease(builder);
+  }
+
+  std::vector<rni::Px> px;
+  if (!surface.readPixels(&px)) {
+    fprintf(stderr, "rn-impeller: FATAL: glReadPixels failed\n");
+    return 1;
+  }
+  auto at = [&](int x, int y) -> rni::Px { return px[(size_t)y * width + x]; };
+
+  printf("rn-impeller: painted_nodes=%d\n", painted);
+  if (probeBanner) {
+    rni::Px s = at(70, 70);
+    printf("rn-impeller: status_swatch_rgb=%d,%d,%d\n", s.r, s.g, s.b);
+    // Inside the rounded rect's bounding box but OUTSIDE its corner, so the
+    // backdrop must show through. This is the probe that catches a subtle
+    // wrong-shape regression that a swatch-only gate cannot.
+    rni::Px c = at(202, 22);
+    printf("rn-impeller: rrect_corner_rgb=%d,%d,%d\n", c.r, c.g, c.b);
+  }
+  printf("rn-impeller: distinct_colors=%d\n", CountDistinctColors(px));
+
+  for (const auto& [px_x, px_y] : probes) {
+    if (px_x < 0 || px_y < 0 || px_x >= width || px_y >= height) {
+      printf("rn-impeller: probe=%d,%d OUT_OF_BOUNDS\n", px_x, px_y);
+      continue;
+    }
+    rni::Px p = at(px_x, px_y);
+    printf("rn-impeller: probe=%d,%d rgb=%d,%d,%d\n", px_x, px_y, p.r, p.g, p.b);
+  }
+
+  for (const auto& band : inkBands) {
+    int ink = 0, total = 0;
+    for (int yy = band.y; yy < band.y + band.h; ++yy) {
+      for (int xx = band.x; xx < band.x + band.w; ++xx) {
+        if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
+        ++total;
+        rni::Px p = at(xx, yy);
+        // "Not background": anything meaningfully darker than white. The
+        // fixture's label is black on white, and anti-aliased glyph edges count
+        // as ink too — which is the point, since a band that only matched pure
+        // black would fail on a correctly-rendered thin font.
+        if (p.r < 200 || p.g < 200 || p.b < 200) ++ink;
+      }
+    }
+    printf("rn-impeller: ink_band=%d,%d,%d,%d ink=%d of %d\n", band.x, band.y,
+           band.w, band.h, ink, total);
+  }
 
   if (!screenshot.empty()) {
-    FILE* f = fopen(screenshot.c_str(), "wb");
-    if (f) {
-      fprintf(f, "P6\n%d %d\n255\n", kW, kH);
-      for (int y = kH - 1; y >= 0; --y)
-        for (int x = 0; x < kW; ++x) {
-          Px p = buf[y * kW + x];
-          fwrite(&p, 1, 3, f);
-        }
-      fclose(f);
+    if (rni::HeadlessSurface::writePpm(screenshot, px, width, height)) {
       printf("rn-impeller: screenshot=%s\n", screenshot.c_str());
     } else {
-      fprintf(stderr, "rn-impeller: WARN: cannot write screenshot %s\n", screenshot.c_str());
+      fprintf(stderr, "rn-impeller: WARN: cannot write screenshot %s\n",
+              screenshot.c_str());
     }
   }
 
-  ImpellerDisplayListRelease(dl);
-  ImpellerPaintRelease(paint);
-  ImpellerDisplayListBuilderRelease(builder);
-  ImpellerSurfaceRelease(surface);
-  ImpellerContextRelease(ictx);
-
-  if (!shim_ok) {
+  if (!shimOk) {
     printf("RN_IMPELLER_FAIL (packaging shim marker absent from bundle)\n");
     return 4;
   }
-  printf("RN_IMPELLER_RENDER_OK app=%s\n", app_name.c_str());
+  printf("RN_IMPELLER_RENDER_OK app=%s\n", appName.c_str());
+  fflush(stdout);
   return 0;
 }

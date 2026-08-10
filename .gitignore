@@ -5,3 +5,11 @@ build/
 node_modules/
 packages-engine/*/bin/
 *.tgz
+
+# P2: the vendored toolchain and build tree. All of it is reproducible from
+# tools/ (sdk-fetch.sh, hermes-build.sh, engine/rn npm install), so none of it
+# belongs in git.
+engine/build/
+engine/rn/node_modules/
+engine/third_party/hermes/
+engine/third_party/hermes-build/

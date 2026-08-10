@@ -27,6 +27,30 @@ const SHIM_TARGETS = {
   'react-native/Libraries/Utilities/Platform.js': 'Platform.impeller.js',
 };
 
+// ---------------------------------------------------------------------------
+// PLATFORM-FORKED RN FILES ("ios-stub disease")
+//
+// Some react-native modules exist ONLY as `.ios.js` / `.android.js`, with a
+// bare `Foo.js` whose entire body is `import Foo from './Foo'; export default
+// Foo;` — a re-export that relies on the platform extension resolving to a
+// sibling. On a custom platform there is no sibling, so `./Foo` resolves to the
+// file ITSELF, the circular import yields `undefined`, and the export is
+// silently undefined.
+//
+// The failure surfaces far away and blames the renderer. Measured here:
+// BaseViewConfig.js self-resolved, so `PlatformBaseViewConfig` was undefined and
+// ViewConfig.js died with `Cannot read property 'bubblingEventTypes' of
+// undefined` while mounting the first <View> — which reads like a broken Fabric
+// component registration and is nothing of the sort.
+//
+// Fix: redirect the bare file to the iOS flavour, which is the desktop-shaped
+// one (the Android variants reach for JNI-backed view managers). This REDIRECTS
+// TO RN'S OWN FILE rather than vendoring a copy, so an RN bump carries its own
+// content and cannot go stale.
+const PLATFORM_FORKED = {
+  'react-native/Libraries/NativeComponent/BaseViewConfig.js': 'BaseViewConfig.ios.js',
+};
+
 function toPosix(p) {
   return p.split(path.sep).join('/');
 }
@@ -36,6 +60,11 @@ function shimForResolvedPath(filePath) {
   const posix = toPosix(filePath);
   for (const [suffix, shim] of Object.entries(SHIM_TARGETS)) {
     if (posix.endsWith(suffix)) return path.join(SHIM_DIR, shim);
+  }
+  for (const [suffix, sibling] of Object.entries(PLATFORM_FORKED)) {
+    if (posix.endsWith(suffix)) {
+      return path.join(path.dirname(filePath), sibling);
+    }
   }
   return null;
 }
@@ -67,4 +96,10 @@ function withImpeller(config = {}) {
   };
 }
 
-module.exports = {withImpeller, shimForResolvedPath, SHIM_TARGETS, SHIM_DIR};
+module.exports = {
+  withImpeller,
+  shimForResolvedPath,
+  SHIM_TARGETS,
+  PLATFORM_FORKED,
+  SHIM_DIR,
+};

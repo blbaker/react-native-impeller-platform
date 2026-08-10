@@ -1,0 +1,7 @@
+{
+  "name": "rn-impeller-reactcommon-pin",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Pins the react-native version whose ReactCommon C++ core the engine compiles against. Not shipped; not the consumer's RN.",
+  "dependencies": { "react-native": "0.86.2" }
+}
