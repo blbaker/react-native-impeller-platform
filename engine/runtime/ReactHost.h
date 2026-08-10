@@ -13,6 +13,8 @@
 #include <string>
 
 #include "modules/CoreModules.h"
+#include "modules/ModuleRegistry.h"
+#include "modules/PlatformModules.h"
 #include "runtime/JsThread.h"
 
 namespace rni {
@@ -38,6 +40,15 @@ class ReactHost {
   }
   std::shared_ptr<JsThread> jsThread() { return jsThread_; }
   std::shared_ptr<DisplayMetrics> displayMetrics() { return displayMetrics_; }
+
+  // The seam, exposed so the host can enumerate it (--list-modules) and so the
+  // CLI can seed platform state before the bundle runs. Constructed in the
+  // ctor, so these are live from the moment the host exists.
+  std::shared_ptr<ModuleRegistry> modules() { return modules_; }
+  std::shared_ptr<AppearanceState> appearance() { return appearance_; }
+  std::shared_ptr<AlertRecord> alerts() { return alerts_; }
+  std::shared_ptr<std::string> initialUrl() { return initialUrl_; }
+
   std::string jsThreadStats() const {
     return jsThread_ ? jsThread_->debugStats() : std::string();
   }
@@ -59,6 +70,10 @@ class ReactHost {
   std::shared_ptr<std::string> scriptURL_;
   std::shared_ptr<DisplayMetrics> displayMetrics_;
   std::shared_ptr<std::vector<std::string>> knownComponents_;
+  std::shared_ptr<ModuleRegistry> modules_;
+  std::shared_ptr<AppearanceState> appearance_;
+  std::shared_ptr<AlertRecord> alerts_;
+  std::shared_ptr<std::string> initialUrl_;
 };
 
 }  // namespace rni

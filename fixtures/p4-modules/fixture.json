@@ -1,0 +1,76 @@
+{
+  "surface": {"width": 400, "height": 300, "background": "#ffffff"},
+
+  "_comment": "P4 module-seam fixture geometry. Every swatch is painted ONLY if a TurboModule returned the expected value, so a module that is absent, unreachable from JS, or returning a default leaves BACKGROUND at that probe. The gate reads these coordinates and the fixture renders from them, so the two cannot drift.",
+
+  "swatchSize": 60,
+
+  "appearance": {
+    "_comment": "Painted green only if Appearance.getColorScheme() === the scheme the engine was told to report (--color-scheme dark). A hardcoded 'light' default — which is what you get if the module is missing and RN falls back — paints RED. Asserting the NON-default value is the point: expecting 'light' would pass without the module existing at all.",
+    "x": 20, "y": 20,
+    "probe": [50, 50],
+    "expect": [0, 170, 0],
+    "expectScheme": "dark",
+    "failColor": "#ff0000"
+  },
+
+  "statusBar": {
+    "_comment": "StatusBarManager is getEnforcing'd at import by NativeStatusBarManagerIOS.js. If it is absent the BUNDLE THROWS and nothing renders at all — so this swatch existing is itself the assertion. Painted from the module's own getConstants().HEIGHT (0 on desktop), proving we read the module rather than a literal.",
+    "x": 100, "y": 20,
+    "probe": [130, 50],
+    "expect": [0, 102, 204]
+  },
+
+  "alert": {
+    "_comment": "Painted only after Alert.alert()'s callback fires. The engine has no dialog, so it records the alert and invokes the callback with button 0; a module that did nothing would leave the promise pending and this swatch background. Paired with the native-side alerts_shown counter: pixels prove JS got the callback, the counter proves native was actually reached.",
+    "x": 180, "y": 20,
+    "probe": [210, 50],
+    "expect": [204, 102, 0]
+  },
+
+  "linking": {
+    "_comment": "canOpenURL('https://example.com') must be TRUE and canOpenURL('file:///etc/passwd') must be FALSE. Both are required to paint: a predicate stuck on true is as broken as one stuck on false, and a one-sided assertion cannot tell them apart.",
+    "x": 260, "y": 20,
+    "probe": [290, 50],
+    "expect": [102, 0, 204],
+    "okUrl": "https://example.com",
+    "refuseUrl": "file:///etc/passwd"
+  },
+
+  "initialUrl": {
+    "_comment": "Linking.getInitialURL() must resolve to the exact string the engine was launched with (--initial-url). A module returning null would be indistinguishable from 'no URL was passed' if the fixture asserted null, so the gate passes a real one.",
+    "x": 20, "y": 100,
+    "probe": [50, 130],
+    "expect": [0, 153, 153],
+    "value": "https://example.com/launch"
+  },
+
+  "devSettings": {
+    "_comment": "getEnforcing'd like StatusBarManager. Calling a no-op method must not throw; painting proves the call returned.",
+    "x": 100, "y": 100,
+    "probe": [130, 130],
+    "expect": [153, 153, 0]
+  },
+
+  "defaults": {
+    "_comment": "The DELEGATION assertion. NativePerformance is vended by RN's own DefaultTurboModules, NOT by our registry — P2 hand-rolled three of those modules by name and was therefore silently missing this one. Painted only if global.performance.now() returns a positive number, i.e. the delegation fallthrough actually works.",
+    "x": 180, "y": 100,
+    "probe": [210, 130],
+    "expect": [204, 0, 102]
+  },
+
+  "platformConstants": {
+    "_comment": "Platform.constants must come FROM the PlatformConstants TurboModule, not from a JS literal. The shim returned {} until P4 while the native module answered correctly — Platform.Version read 0 and nothing indicated the two were unconnected. Asserts the RN version the ENGINE reports (its compiled-in pin), which a JS-side fake could not know.",
+    "x": 260, "y": 100,
+    "probe": [290, 130],
+    "expect": [0, 68, 136],
+    "expectMinor": 86
+  },
+
+  "text": {
+    "_comment": "The color scheme rendered as TEXT, so the frame is human-readable and a reviewer can see WHICH scheme was reported rather than just that a square is green.",
+    "x": 20, "y": 190,
+    "fontSize": 16,
+    "inkBand": [20, 190, 260, 24]
+  }
+}

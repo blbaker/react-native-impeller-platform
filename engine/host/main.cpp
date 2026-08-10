@@ -69,7 +69,82 @@ void Usage() {
           "usage: rn-impeller --bundle <absolute path> --app-name <name>\n"
           "                   [--headless] [--screenshot <file.ppm>]\n"
           "                   [--probe-banner on|off] [--width N] [--height N]\n"
-          "                   [--log-mutations]\n");
+          "                   [--log-mutations] [--color-scheme light|dark]\n"
+          "                   [--initial-url URL]\n"
+          "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
+          "       rn-impeller --test-openurl   (URL predicate self-test)\n");
+}
+
+// Prints the TurboModule seam as a machine-readable manifest:
+//
+//   module=<Name> methods=<a,b,c>
+//
+// This exists so the P4 packaging gate can diff the NATIVE method map against
+// the JS that actually ships in the tarball — the "method in shim" guard. A
+// file-presence check passes happily while half a module's methods are
+// unreachable from JS, which is how four of eleven methods once shipped
+// uncallable with every gate green.
+//
+// ⛔ IT ENUMERATES FROM JAVASCRIPT, NOT FROM C++, AND THAT IS THE WHOLE POINT.
+// Reading `methodMap_` in C++ would answer "what did we register", which is
+// the question we already know the answer to. Reaching the module the way a
+// bundle does answers "what can JS actually CALL". A module that registers
+// perfectly and is unreachable through the binding (wrong install order,
+// non-bridgeless path, name mismatch) is invisible to the first question and
+// caught by the second.
+//
+// ⚠️ TWO GLOBALS THAT ARE EASY TO GET WRONG, BOTH READ FROM SOURCE RATHER
+// THAN ASSUMED:
+//
+//  1. The access path is `nativeModuleProxy`, NOT `__turboModuleProxy`.
+//     TurboModuleBinding::install() branches on `global.RN$Bridgeless` and
+//     installs `__turboModuleProxy` ONLY on the legacy path; bridgeless
+//     (which we are) defines a read-only `nativeModuleProxy` host object.
+//  2. The global object is `globalThis`, not `global`. RN's `global` alias is
+//     set up by InitializeCore, which a bare diagnostic script never loads —
+//     so `global.x` throws ReferenceError and every module reads as
+//     unreachable.
+//
+// Both mistakes produce the SAME output: "<UNREACHABLE FROM JS>" for every
+// module, i.e. a gate failing for a reason with nothing to do with what it
+// tests. Verified against a live run before trusting the manifest.
+//
+// It boots a real ReactHost, so it also proves every module CONSTRUCTS.
+int ListModules() {
+  rni::ReactHost host;
+  auto registry = host.modules();
+
+  // Build the name list as a JS array literal from the registry, so the
+  // manifest cannot drift from what the engine vends.
+  std::string names;
+  for (const auto& n : registry->names()) {
+    if (!names.empty()) names += ",";
+    names += "'" + n + "'";
+  }
+
+  std::string script =
+      "(function(){\n"
+      "  var g = globalThis;\n"
+      "  var names = [" + names + "];\n"
+      "  for (var i = 0; i < names.length; i++) {\n"
+      "    var n = names[i];\n"
+      "    var m = null;\n"
+      "    try { m = g.nativeModuleProxy[n]; } catch (e) {}\n"
+      "    if (m == null) { console.log('module=' + n + ' methods=<UNREACHABLE FROM JS>'); continue; }\n"
+      "    var keys = [];\n"
+      "    for (var k in m) { keys.push(k); }\n"
+      "    keys.sort();\n"
+      "    console.log('module=' + n + ' methods=' + keys.join(','));\n"
+      "  }\n"
+      "  console.log('MODULE_MANIFEST_END');\n"
+      "})();\n";
+
+  host.runScript(std::move(script), "file://list-modules.js");
+  if (!host.waitForJsIdle(10000)) {
+    fprintf(stderr, "rn-impeller: --list-modules: JS never went idle\n");
+    return 1;
+  }
+  return 0;
 }
 
 void DrawProbeBanner(ImpellerDisplayListBuilder builder, bool shimOk,
@@ -139,9 +214,13 @@ int main(int argc, char** argv) {
   rni::installFeatureFlags();
 
   std::string bundlePath, appName, screenshot;
+  std::string colorScheme = "light";
+  std::string initialUrl;
   bool headless = false;
   bool probeBanner = true;
   bool logMutations = false;
+  bool listModules = false;
+  bool testOpenUrl = false;
   int width = 400, height = 300;
   // Arbitrary pixel probes, so a gate can assert the geometry ITS fixture
   // declares instead of whatever probes happen to be hardcoded here. Each
@@ -168,6 +247,10 @@ int main(int argc, char** argv) {
     else if (a == "--screenshot") screenshot = next("--screenshot");
     else if (a == "--headless") headless = true;
     else if (a == "--log-mutations") logMutations = true;
+    else if (a == "--list-modules") listModules = true;
+    else if (a == "--test-openurl") testOpenUrl = true;
+    else if (a == "--color-scheme") colorScheme = next("--color-scheme");
+    else if (a == "--initial-url") initialUrl = next("--initial-url");
     else if (a == "--probe-banner") probeBanner = (next("--probe-banner") != "off");
     else if (a == "--width") width = atoi(next("--width").c_str());
     else if (a == "--height") height = atoi(next("--height").c_str());
@@ -204,6 +287,13 @@ int main(int argc, char** argv) {
     else if (a == "--help" || a == "-h") { Usage(); return 0; }
     // Unknown flags are ignored on purpose: the CLI forwards user args through.
   }
+
+  // Both of these are self-contained diagnostics that take NO bundle, so they
+  // dispatch before the --bundle/--app-name requirement. --test-openurl has no
+  // side effect at all: it exercises the predicate that protects the Windows
+  // opener, on the platform that actually builds today.
+  if (testOpenUrl) return rni::runOpenUrlSelfTest();
+  if (listModules) return ListModules();
 
   if (bundlePath.empty() || appName.empty()) {
     Usage();
@@ -253,6 +343,11 @@ int main(int argc, char** argv) {
     rni::ReactHost host;
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
     host.displayMetrics()->set((float)width, (float)height, 1.0f);
+    // Seed platform-module state BEFORE the bundle evaluates. Appearance is
+    // read at module scope by RN's Appearance.js, so setting it after the
+    // bundle runs would be read too late and look like the prop being ignored.
+    host.appearance()->set(colorScheme);
+    *host.initialUrl() = initialUrl;
 
     // Fabric must be up BEFORE the bundle evaluates: the Scheduler installs
     // UIManagerBinding through the unbuffered executor, and ReactFabric reads
@@ -273,6 +368,9 @@ int main(int argc, char** argv) {
 
     nodeCount = sceneGraph.nodeCount();
     printf("rn-impeller: scene_nodes=%zu\n", nodeCount);
+    // Side effects the modules recorded, so a gate can assert that JS actually
+    // REACHED native rather than merely that the app rendered something.
+    printf("rn-impeller: alerts_shown=%zu\n", host.alerts()->count());
     // Always emitted, not gated behind --log-mutations: a gate needs the frames
     // to prove LAYOUT, and painted pixels alone cannot (a 0x0-measured <Text>
     // still paints its glyphs).

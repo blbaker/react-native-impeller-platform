@@ -43,6 +43,13 @@ file(GLOB rr_css_SRC               ${RR}/css/*.cpp)
 file(GLOB rr_dom_SRC               ${RR}/dom/*.cpp)
 file(GLOB rr_element_SRC           ${RR}/element/*.cpp)
 file(GLOB rr_observers_events_SRC  ${RR}/observers/events/*.cpp)
+# The Intersection/Mutation observer MANAGERS are the implementation behind the
+# NativeIntersectionObserver / NativeMutationObserver TurboModules that
+# DefaultTurboModules vends. Same link-time rule as renderer/animated: the
+# feature flags gating them are read at runtime, so the symbols are required
+# whether or not the flag is ever true.
+file(GLOB rr_observers_intersection_SRC ${RR}/observers/intersection/*.cpp)
+file(GLOB rr_observers_mutation_SRC     ${RR}/observers/mutation/*.cpp)
 # Scheduler.cpp references AnimationBackend/AnimationChoreographer and
 # ViewTransitionModule even when the gating feature flags are off — link-time
 # deps, so they compile regardless.
@@ -56,9 +63,21 @@ file(GLOB rr_legacyinterop_SRC     ${RR}/components/legacyviewmanagerinterop/*.c
 #  - renderer/{debug,consistency,runtimescheduler}: already in reactcommon_core,
 #    re-adding duplicates symbols.
 #  - components/{image,textinput,modal,...}: land with their features.
-#  - renderer/animated/: RN's own NativeAnimated engine, portable C++ — a later
-#    phase, but note it exists in-tree so no third-party animation library gets
-#    scoped by accident.
+#
+# renderer/animated/ IS here as of P4, and NOT because we implemented
+# animations. Delegating TurboModule lookup to RN's own
+# `DefaultTurboModules::getTurboModule` (P4's seam) puts a direct reference to
+# `AnimatedModule::kModuleName` and its ctor on the link line — the gating
+# feature flags are checked at RUNTIME, so the symbol is required at LINK time
+# regardless of whether the flag is ever true. 29 files, all portable C++ (0
+# JNI/ObjC matches), so this is the cheap half of "use the in-tree engine
+# rather than scoping a third-party animation library". The JS-facing feature
+# stays off until an animation phase turns the flags on.
+file(GLOB rr_animated_SRC          ${RR}/animated/*.cpp)
+file(GLOB rr_animated_nodes_SRC    ${RR}/animated/nodes/*.cpp)
+file(GLOB rr_animated_drivers_SRC  ${RR}/animated/drivers/*.cpp)
+file(GLOB rr_animated_evdrv_SRC    ${RR}/animated/event_drivers/*.cpp)
+file(GLOB rr_animated_internal_SRC ${RR}/animated/internal/*.cpp)
 
 set(reactcommon_fabric_SRC
   ${yoga_SRC}
@@ -71,8 +90,11 @@ set(reactcommon_fabric_SRC
   ${rr_imagemanager_SRC} ${rr_imagemanager_cxx_SRC}
   ${rr_telemetry_SRC} ${rr_leakchecker_SRC} ${rr_animations_SRC}
   ${rr_css_SRC} ${rr_dom_SRC} ${rr_element_SRC} ${rr_observers_events_SRC}
+  ${rr_observers_intersection_SRC} ${rr_observers_mutation_SRC}
   ${rr_animationbackend_SRC} ${rr_viewtransition_SRC} ${rr_cdpmetrics_SRC}
   ${rr_legacyinterop_SRC}
+  ${rr_animated_SRC} ${rr_animated_nodes_SRC} ${rr_animated_drivers_SRC}
+  ${rr_animated_evdrv_SRC} ${rr_animated_internal_SRC}
 )
 # Same targeted Perfetto rule as ReactCommonCore.cmake — see the long comment
 # there for why a blanket "Perfetto" filter breaks the non-Perfetto build.
@@ -97,6 +119,17 @@ target_include_directories(reactcommon_fabric SYSTEM PUBLIC
 # expecting the top-level imagemanager dir on the path (upstream adds it in the
 # pod/gradle build). PRIVATE so it cannot shadow anything downstream.
 target_include_directories(reactcommon_fabric PRIVATE ${RR}/imagemanager)
+
+# renderer/animated/ includes the codegen'd spec as
+# `<FBReactNativeSpec/FBReactNativeSpecJSI.h>` — i.e. via the PARENT directory —
+# whereas the host target includes it as a bare `<FBReactNativeSpecJSI.h>`. Both
+# spellings appear upstream, so both roots have to be on the path; adding only
+# the one you happen to have used gives a "No such file" on a header that is
+# plainly right there.
+target_include_directories(reactcommon_fabric SYSTEM PRIVATE
+  "${RN_ROOT}/React"
+  "${RN_ROOT}/React/FBReactNativeSpec"
+)
 
 rni_compile_flags(reactcommon_fabric
   EXCEPTIONS RTTI NO_DEPRECATED

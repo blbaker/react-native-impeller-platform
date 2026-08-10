@@ -3,8 +3,7 @@
 #include <ReactCommon/TurboModuleBinding.h>
 #include <cxxreact/JSBigString.h>
 #include <jserrorhandler/JsErrorHandler.h>
-#include <react/nativemodule/dom/NativeDOM.h>
-#include <react/nativemodule/featureflags/NativeReactNativeFeatureFlags.h>
+#include <react/nativemodule/defaults/DefaultTurboModules.h>
 #include <react/renderer/runtimescheduler/RuntimeSchedulerCallInvoker.h>
 #include <react/runtime/PlatformTimerRegistry.h>
 #include <react/runtime/TimerManager.h>
@@ -103,6 +102,9 @@ ReactHost::ReactHost() {
   scriptURL_ = std::make_shared<std::string>();
   displayMetrics_ = std::make_shared<DisplayMetrics>();
   knownComponents_ = std::make_shared<std::vector<std::string>>();
+  appearance_ = std::make_shared<AppearanceState>();
+  alerts_ = std::make_shared<AlertRecord>();
+  initialUrl_ = std::make_shared<std::string>();
 
   auto jsRuntime = react::HermesInstance::createJSRuntime(
       /*crashManager*/ nullptr, jsThread_, /*allocInOldGenBeforeTTI*/ false);
@@ -133,41 +135,68 @@ ReactHost::ReactHost() {
 
   auto jsInvoker = std::make_shared<react::RuntimeSchedulerCallInvoker>(
       std::weak_ptr<react::RuntimeScheduler>(instance_->getRuntimeScheduler()));
-  auto moduleCache = std::make_shared<
-      std::unordered_map<std::string, std::shared_ptr<react::TurboModule>>>();
 
-  auto moduleProvider = [jsInvoker, moduleCache, scriptURL = scriptURL_,
-                         metrics = displayMetrics_](
+  // ---------------------------------------------------------------------
+  // THE SEAM (D7). What was an if-chain in P2 is now a name->factory table,
+  // because the set of modules this engine vends has to be DATA for anything
+  // to be able to enumerate, diff or gate it. `--list-modules` prints this
+  // registry and the P4 packaging gate diffs that output against the shipped
+  // JS shims — the "method in shim" guard that a file-presence check cannot
+  // give you.
+  //
+  // Boot-path modules (CoreModules.h) and platform modules (PlatformModules.h)
+  // register identically. The distinction is documentation, not mechanism: a
+  // consumer-authored module in v2 will call the same add().
+  // ---------------------------------------------------------------------
+  modules_ = std::make_shared<ModuleRegistry>();
+
+  // -- boot path: every one of these stops the bundle at import if absent --
+  modules_->add("PlatformConstants", [](auto inv) {
+    return std::make_shared<PlatformConstantsModule>(inv);
+  });
+  modules_->add("SourceCode", [url = scriptURL_](auto inv) {
+    return std::make_shared<SourceCodeModule>(inv, url);
+  });
+  modules_->add("ExceptionsManager", [](auto inv) {
+    return std::make_shared<ExceptionsManagerModule>(inv);
+  });
+  modules_->add("AppState", [](auto inv) {
+    return std::make_shared<AppStateModule>(inv);
+  });
+  modules_->add("DeviceInfo", [m = displayMetrics_](auto inv) {
+    return std::make_shared<DeviceInfoModule>(inv, m);
+  });
+
+  // -- D7 platform set --
+  modules_->add("Appearance", [s = appearance_](auto inv) {
+    return std::make_shared<AppearanceModule>(inv, s);
+  });
+  modules_->add("AlertManager", [r = alerts_](auto inv) {
+    return std::make_shared<AlertManagerModule>(inv, r);
+  });
+  // StatusBarManager is getEnforcing'd by NativeStatusBarManagerIOS.js, so its
+  // absence THREW at import — this is what stopped the stock RN template from
+  // running after P2.
+  modules_->add("StatusBarManager", [](auto inv) {
+    return std::make_shared<StatusBarManagerModule>(inv);
+  });
+  modules_->add("DevSettings", [](auto inv) {
+    return std::make_shared<DevSettingsModule>(inv);
+  });
+  modules_->add("LinkingManager", [u = initialUrl_](auto inv) {
+    return std::make_shared<LinkingManagerModule>(inv, u);
+  });
+
+  auto moduleProvider = [jsInvoker, modules = modules_](
                             jsi::Runtime&, const std::string& name)
       -> std::shared_ptr<react::TurboModule> {
-    if (auto it = moduleCache->find(name); it != moduleCache->end()) {
-      return it->second;
-    }
-    std::shared_ptr<react::TurboModule> module;
-    if (name == "PlatformConstants") {
-      module = std::make_shared<PlatformConstantsModule>(jsInvoker);
-    } else if (name == "SourceCode") {
-      module = std::make_shared<SourceCodeModule>(jsInvoker, scriptURL);
-    } else if (name == "ExceptionsManager") {
-      module = std::make_shared<ExceptionsManagerModule>(jsInvoker);
-    } else if (name == "NativeMicrotasksCxx") {
-      module = std::make_shared<MicrotasksModule>(jsInvoker);
-    } else if (name == "AppState") {
-      module = std::make_shared<AppStateModule>(jsInvoker);
-    } else if (name == "DeviceInfo") {
-      module = std::make_shared<DeviceInfoModule>(jsInvoker, metrics);
-    } else if (name == "NativeDOMCxx") {
-      // Fabric's createPublicRootInstance calls NativeDOM.linkRootNode
-      // unconditionally; without this JS gets null and the root never links.
-      module = std::make_shared<react::NativeDOM>(jsInvoker);
-    } else if (name == "NativeReactNativeFeatureFlagsCxx") {
-      // JS reads feature flags through this module. Absent, every accessor
-      // warns and returns a common default — including flags that gate
-      // renderer behaviour, so JS and C++ would disagree about the same flag.
-      module = std::make_shared<react::NativeReactNativeFeatureFlags>(jsInvoker);
-    }
-    if (module) (*moduleCache)[name] = module;
-    return module;
+    if (auto module = modules->get(name, jsInvoker)) return module;
+    // ⛔ DELEGATE, DO NOT DUPLICATE. RN ships DefaultTurboModules as portable
+    // C++ in the package: Microtasks, DOM, FeatureFlags, IdleCallbacks,
+    // Performance and the observers. P2 hand-rolled three of those by name and
+    // was therefore silently MISSING NativePerformance and NativeIdleCallbacks
+    // — and a hand-rolled set goes stale on the next RN bump with no signal.
+    return react::DefaultTurboModules::getTurboModule(name, jsInvoker);
   };
 
   // bindingsInstallFunc runs at the END of initializeRuntime, after

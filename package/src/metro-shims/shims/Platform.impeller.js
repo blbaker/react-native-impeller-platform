@@ -10,15 +10,29 @@ const RN_IMPELLER_SHIM_MARKER = '__RN_IMPELLER_SHIM_V1__';
 const Platform = {
   __constants: null,
   OS: 'impeller',
-  // Populated by the engine host via the PlatformConstants TurboModule (P4).
   get Version() {
-    return (this.constants && this.constants.osVersion) || 0;
+    return this.constants.osVersion || 0;
   },
+  // P4: actually READ the PlatformConstants TurboModule. Until now this
+  // returned `{}`, so `Platform.constants.reactNativeVersion` was undefined and
+  // `Platform.Version` was 0 — while the native module sat there answering
+  // correctly and nothing indicated the two were not connected.
+  //
+  // TurboModuleRegistry.get (not getEnforcing): if the module is somehow
+  // absent, a Platform that reports empty constants is far better than a
+  // bundle that dies at import over a version string.
   get constants() {
-    return this.__constants || {};
+    if (this.__constants == null) {
+      const TurboModuleRegistry = require('react-native/Libraries/TurboModule/TurboModuleRegistry');
+      const NativePlatformConstants = TurboModuleRegistry.get('PlatformConstants');
+      this.__constants = NativePlatformConstants
+        ? NativePlatformConstants.getConstants()
+        : {};
+    }
+    return this.__constants;
   },
   get isTesting() {
-    return process.env.NODE_ENV === 'test';
+    return this.constants.isTesting === true;
   },
   get isTV() {
     return false;

@@ -25,6 +25,13 @@ const SHIM_DIR = path.join(__dirname, 'shims');
 // resolved-path suffix (posix) -> shim file in SHIM_DIR
 const SHIM_TARGETS = {
   'react-native/Libraries/Utilities/Platform.js': 'Platform.impeller.js',
+  // P4. Alert.js is NOT a stub and resolves perfectly — it simply branches
+  // itself out of existence: `if (ios) {...} else if (android) {...}` with no
+  // else. On `impeller` the call never leaves JavaScript, so a flawless native
+  // AlertManager is unreachable and nothing anywhere reports a problem. See
+  // shims/Alert.impeller.js for the full note; this is a distinct failure from
+  // the self-resolving RCTAlertManager.js stub below, and BOTH had to be fixed.
+  'react-native/Libraries/Alert/Alert.js': 'Alert.impeller.js',
 };
 
 // ---------------------------------------------------------------------------
@@ -49,6 +56,19 @@ const SHIM_TARGETS = {
 // content and cannot go stale.
 const PLATFORM_FORKED = {
   'react-native/Libraries/NativeComponent/BaseViewConfig.js': 'BaseViewConfig.ios.js',
+  // P4. `Libraries/Alert/RCTAlertManager.js` is a textbook instance: its entire
+  // body is `export * from './RCTAlertManager'`, which on a platform with no
+  // sibling extension resolves to ITSELF. `alertWithArgs` is then undefined and
+  // `Alert.alert()` dies with "alertWithArgs is not a function" — pointing at
+  // our AlertManager TurboModule, which is fine.
+  //
+  // Note the shape of the trap: the NATIVE module can be perfect and the
+  // feature still 100% broken, because the JS never reaches it. That is why
+  // the P4 gate asserts a native-side side-effect counter (alerts_shown) and
+  // not just "the module is in the manifest".
+  'react-native/Libraries/Alert/RCTAlertManager.js': 'RCTAlertManager.ios.js',
+  // Same disease, same fix. Reached by fetch/XMLHttpRequest.
+  'react-native/Libraries/Network/RCTNetworking.js': 'RCTNetworking.ios.js',
 };
 
 function toPosix(p) {

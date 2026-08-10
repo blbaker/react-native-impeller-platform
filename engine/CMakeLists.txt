@@ -59,6 +59,7 @@ add_executable(rn-impeller
   host/HeadlessSurface.cpp
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
+  modules/PlatformModules.cpp
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
   text/ImpellerTextLayoutManager.cpp
@@ -69,14 +70,44 @@ target_include_directories(rn-impeller PRIVATE
   "${IMPELLER_SDK}/include"
   # Codegen'd CxxSpecs (NativePlatformConstantsIOSCxxSpec etc.) ship PREBUILT
   # in the npm package; we do not run codegen.
+  #
+  # BOTH roots are required. Upstream spells the include two different ways:
+  # a bare `<FBReactNativeSpecJSI.h>` in the nativemodule/ sources, and
+  # `<FBReactNativeSpec/FBReactNativeSpecJSI.h>` in devtoolsruntimesettings/
+  # and renderer/animated/. Adding only the spelling you happened to hit gives
+  # a "No such file" on a header that is plainly present.
+  "${RN_ROOT}/React"
   "${RN_ROOT}/React/FBReactNativeSpec"
 )
 
-# RN's NativeDOM + feature-flags CxxSpec modules are ordinary portable sources
-# in the RN package, not part of any lib target, so the host compiles them.
+# RN's own CxxSpec-backed TurboModules are ordinary portable sources in the RN
+# package, not part of any lib target, so the host compiles them.
+#
+# ⛔ THE SET IS DICTATED BY DefaultTurboModules.cpp, NOT BY WHAT WE USE. P4
+# delegates unknown module names to `DefaultTurboModules::getTurboModule`
+# (engine/modules/ModuleRegistry.h explains why: hand-rolling what upstream
+# already vends goes stale on the next RN bump with no signal). That one
+# function references every module below by ctor, so all of them are LINK-time
+# requirements even though several are gated behind runtime feature flags that
+# are currently false. P2 hand-rolled Microtasks/DOM/FeatureFlags by name and
+# was silently missing Performance and IdleCallbacks entirely.
 target_sources(rn-impeller PRIVATE
+  "${REACT_COMMON}/react/nativemodule/defaults/DefaultTurboModules.cpp"
   "${REACT_COMMON}/react/nativemodule/dom/NativeDOM.cpp"
   "${REACT_COMMON}/react/nativemodule/featureflags/NativeReactNativeFeatureFlags.cpp"
+  "${REACT_COMMON}/react/nativemodule/microtasks/NativeMicrotasks.cpp"
+  "${REACT_COMMON}/react/nativemodule/idlecallbacks/NativeIdleCallbacks.cpp"
+  "${REACT_COMMON}/react/nativemodule/webperformance/NativePerformance.cpp"
+  "${REACT_COMMON}/react/nativemodule/intersectionobserver/NativeIntersectionObserver.cpp"
+  "${REACT_COMMON}/react/nativemodule/mutationobserver/NativeMutationObserver.cpp"
+  "${REACT_COMMON}/react/nativemodule/viewtransition/NativeViewTransition.cpp"
+  # DefaultTurboModules vends DevToolsRuntimeSettingsModule under
+  # REACT_NATIVE_DEBUGGER_ENABLED_DEVONLY, which reactcommon_core defines
+  # PUBLIC (jsinspector needs it — see ReactCommonCore.cmake). Defining the
+  # macro and not compiling the module is a link error naming a symbol nothing
+  # in our source mentions.
+  "${REACT_COMMON}/react/nativemodule/devtoolsruntimesettings/DevToolsRuntimeSettingsModule.cpp"
+  "${REACT_COMMON}/devtoolsruntimesettings/DevToolsRuntimeSettings.cpp"
 )
 
 rni_compile_flags(rn-impeller EXCEPTIONS RTTI NO_DEPRECATED FORCE_INCLUDE cstdint)
