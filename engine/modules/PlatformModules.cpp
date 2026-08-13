@@ -5,7 +5,16 @@
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+// ShellExecuteW + the CP_UTF8 conversion for openURL below. WIN32_LEAN_AND_MEAN
+// and NOMINMAX are set project-wide in engine/CMakeLists.txt (defining them
+// again here is a C4005 redefinition warning); NOMINMAX in particular stops
+// <windows.h> defining min/max as function-like macros, which turns any
+// std::min( call in a TU into `C2589: '(' illegal token`.
+#include <windows.h>
+#include <shellapi.h>
+#include <climits>  // INT_PTR comparison bound
+#else
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -183,7 +192,38 @@ jsi::Value LinkingManagerModule::openURL(jsi::Runtime& rt, jsi::String url) {
   std::printf("rn-impeller: openURL=%s\n", target.c_str());
   std::fflush(stdout);
 
-#ifndef _WIN32
+#ifdef _WIN32
+  // ShellExecuteW, but ONLY behind isOpenableUrl above — see the long comment
+  // on that predicate. ShellExecute resolves its argument the way the shell
+  // would, so it is a launcher, not a URL opener; the allowlist is what makes
+  // this call safe rather than the API itself.
+  //
+  // `nullptr` verb (not L"open"): the default verb is what a user's browser
+  // registration actually binds, and an explicit L"open" fails on schemes whose
+  // registered verb differs. SW_SHOWNORMAL so a browser being launched cold
+  // comes up visible rather than as a background process nobody can see.
+  std::wstring wide;
+  {
+    // MultiByteToWideChar with CP_UTF8: the URL arrived as UTF-8 from JS, and
+    // the ANSI ShellExecuteA would mangle every non-ASCII character in an IDN
+    // or a percent-decoded path.
+    int need = ::MultiByteToWideChar(CP_UTF8, 0, target.c_str(), -1, nullptr, 0);
+    if (need > 0) {
+      wide.resize((size_t)need - 1);
+      ::MultiByteToWideChar(CP_UTF8, 0, target.c_str(), -1, wide.data(), need);
+    }
+  }
+  // ShellExecuteW returns an HINSTANCE-shaped error code; > 32 means success.
+  // Anything else is a real failure and must not be reported to JS as `true`.
+  HINSTANCE rc = ::ShellExecuteW(nullptr, nullptr, wide.c_str(), nullptr,
+                                 nullptr, SW_SHOWNORMAL);
+  if ((INT_PTR)rc <= 32) {
+    std::fprintf(stderr, "rn-impeller: openURL FAILED (ShellExecuteW=%lld): %s\n",
+                 (long long)(INT_PTR)rc, target.c_str());
+    std::fflush(stderr);
+    return resolvedPromise(rt, jsi::Value(false));
+  }
+#else
   // fork+exec, never system(): system() runs /bin/sh -c and would reintroduce
   // exactly the shell interpretation the predicate exists to prevent.
   pid_t pid = fork();

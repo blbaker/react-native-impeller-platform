@@ -105,15 +105,4 @@ bool HeadlessSurface::readPixels(std::vector<Px>* out) {
   return true;
 }
 
-bool HeadlessSurface::writePpm(const std::string& path,
-                               const std::vector<Px>& px, int width,
-                               int height) {
-  FILE* f = fopen(path.c_str(), "wb");
-  if (!f) return false;
-  fprintf(f, "P6\n%d %d\n255\n", width, height);
-  for (const auto& p : px) fwrite(&p, 1, 3, f);
-  fclose(f);
-  return true;
-}
-
 }  // namespace rni

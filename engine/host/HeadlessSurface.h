@@ -9,13 +9,10 @@
 #include <string>
 #include <vector>
 
+#include "host/Pixel.h"
 #include "impeller.h"
 
 namespace rni {
-
-struct Px {
-  unsigned char r, g, b, a;
-};
 
 class HeadlessSurface {
  public:
@@ -38,10 +35,14 @@ class HeadlessSurface {
   // probe would otherwise read the wrong row and the renderer would get blamed.
   bool readPixels(std::vector<Px>* out);
 
-  // Writes a binary PPM (P6). Chosen over PNG so the engine needs no image
-  // encoder; tooling converts.
+  // Writes a binary PPM (P6). The implementation is the SHARED one in
+  // Pixel.cpp — it was a member here until the Windows port, where keeping it
+  // would have forced the Windows surface to duplicate it or inherit an
+  // EGL-flavoured base class for a function that only formats bytes.
   static bool writePpm(const std::string& path, const std::vector<Px>& px,
-                       int width, int height);
+                       int width, int height) {
+    return WritePpm(path, px, width, height);
+  }
 
  private:
   int width_{0};

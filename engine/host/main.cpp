@@ -34,13 +34,33 @@
 #include <vector>
 
 #include "fabric/FabricHost.h"
+// The offscreen surface, per platform. Both classes expose the SAME contract
+// (init / drawDisplayList / readPixels / writePpm / context / typography), so
+// everything below this line is platform-neutral and there is exactly ONE
+// `#ifdef _WIN32` in the host rather than one per call site.
+//
+// They are separate classes rather than one file with internal branches because
+// the difference is not a few calls — it is the entire context-acquisition
+// path: Mesa surfaceless EGL with link-time GL on Linux, versus ANGLE loaded by
+// LoadLibrary with a pbuffer and D3D11 underneath on Windows.
+#ifdef _WIN32
+#include "host/WinGLSurface.h"
+#else
 #include "host/HeadlessSurface.h"
+#endif
 #include "impeller.h"
 #include "runtime/FeatureFlags.h"
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
 
 namespace {
+
+#ifdef _WIN32
+using PlatformSurface = rni::WinGLSurface;
+#else
+using PlatformSurface = rni::HeadlessSurface;
+#endif
+
 
 // Must match RN_IMPELLER_SHIM_MARKER in
 // package/src/metro-shims/shims/Platform.impeller.js
@@ -329,7 +349,7 @@ int main(int argc, char** argv) {
     return 3;
   }
 
-  rni::HeadlessSurface surface;
+  PlatformSurface surface;
   std::string error;
   if (!surface.init(width, height, &error)) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
@@ -445,7 +465,7 @@ int main(int argc, char** argv) {
   }
 
   if (!screenshot.empty()) {
-    if (rni::HeadlessSurface::writePpm(screenshot, px, width, height)) {
+    if (PlatformSurface::writePpm(screenshot, px, width, height)) {
       printf("rn-impeller: screenshot=%s\n", screenshot.c_str());
     } else {
       fprintf(stderr, "rn-impeller: WARN: cannot write screenshot %s\n",
