@@ -32,4 +32,22 @@ bash tools/ci-p3.sh | tail -22
 echo "### gate 6/6: module seam (P4)"
 bash tools/ci-p4.sh | tail -16
 
+# ⛔ THE WINDOWS GATE IS OPT-IN, AND SILENCE IS NOT A PASS.
+# It needs a staged native build (tools/win-sync.sh + engine-build-win.bat), so
+# it cannot be unconditional on a Linux CI box. But a gate that skips quietly is
+# one nobody notices has stopped running — so a skip is ANNOUNCED with its
+# reason, and RNI_REQUIRE_WIN=1 turns the skip itself into a failure for the
+# machine that is supposed to have it.
+echo "### gate 7: Windows (opt-in)"
+if [ -x "/mnt/c/Devel/rni-win-build/stage/bin/rn-impeller.exe" ] && command -v cmd.exe >/dev/null 2>&1; then
+  bash tools/ci-win.sh | tail -14
+elif [ "${RNI_REQUIRE_WIN:-0}" = "1" ]; then
+  echo "WINDOWS_GATE_MISSING: RNI_REQUIRE_WIN=1 but no staged Windows engine" >&2
+  exit 1
+else
+  echo "   SKIPPED — no staged Windows engine (build: tools/win-sync.sh then"
+  echo "   cmd.exe /c C:\\Devel\\rni-win-scripts\\engine-build-win.bat). Set"
+  echo "   RNI_REQUIRE_WIN=1 to make this skip a failure."
+fi
+
 echo "ALL_GATES_PASS"

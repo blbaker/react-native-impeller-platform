@@ -216,6 +216,57 @@ target_link_libraries(rn-impeller PRIVATE
   "${HERMESVM_LIB}"
   "${IMPELLER_LINK_LIB}"
 )
+
+# ⛔ SHARED-vs-STATIC IS A PACKAGING DIFFERENCE, AND IT LEAKS INTO OUR LINK LINE.
+# `hermesvm` is a SHARED library on Linux — libhermesvm.so has already absorbed
+# its 20-odd sibling archives, so linking it alone resolves everything. Under
+# MSVC the same target is a STATIC lib, which absorbs nothing, and the engine
+# fails with 219 unresolved hermes::vm / llvh symbols that appear nowhere in our
+# source.
+#
+# The fix is NOT to hand-write the missing archives from the error text — that
+# reverse-engineers a dependency graph CMake already generated correctly. This
+# list is read out of Hermes' OWN build files, from the link line of a binary
+# that links the same target we do:
+#
+#   grep -n "LINK_LIBRARIES = .*hermesvm.lib" hermes-win-build/build.ninja
+#   -> bin\hdb.exe (build.ninja:9394), order preserved below, dedup'd.
+#
+# Re-derive with that command after any Hermes bump; do not edit by hand.
+# `winmm` (hermesPlatform timers), `icuuc`/`icuin` (-DUSE_WIN10_ICU) are on that
+# same line and are NOT optional — they are Hermes' own system deps, not ours.
+if(WIN32)
+  set(HERMES_WIN_ARCHIVES
+    LLVHSupport jsi hermesVMRuntime hermesADT hermesPlatform
+    hermesInternalBytecode hermesHBCBackend hermesInst hermesPublic
+    hermesBackend hermesFrontend hermesFrontEndDefs hermesOptimizer
+    hermesSourceMap hermesParser hermesAST hermesRegex hermesSupport
+    dtoa hermesPlatformUnicode LLVHDemangle)
+  file(GLOB_RECURSE _all_hermes_libs "${HERMES_BUILD}/*.lib")
+  foreach(_a IN LISTS HERMES_WIN_ARCHIVES)
+    # ONE recursive walk, filtered per name — each archive sits in its own
+    # nested build subdirectory (lib/VM, external/llvh/lib/Support, ...) and
+    # recursing 21 times over a multi-GB build tree is measurably slow.
+    # A miss is FATAL at configure with a name, rather than 200 mangled symbols
+    # at link.
+    set(_lib "")
+    foreach(_c IN LISTS _all_hermes_libs)
+      get_filename_component(_n "${_c}" NAME_WE)
+      if(_n STREQUAL _a)
+        set(_lib "${_c}")
+        break()
+      endif()
+    endforeach()
+    if(NOT _lib)
+      message(FATAL_ERROR
+        "Hermes archive ${_a}.lib not found under ${HERMES_BUILD}. "
+        "Re-derive the list: grep 'LINK_LIBRARIES = .*hermesvm.lib' build.ninja")
+    endif()
+    target_link_libraries(rn-impeller PRIVATE "${_lib}")
+  endforeach()
+  target_link_libraries(rn-impeller PRIVATE winmm icuuc icuin)
+endif()
+
 if(WIN32)
   # NO ANGLE HERE ON PURPOSE. libEGL/libGLESv2 ship without import libraries,
   # so there is nothing to link; WinGLSurface resolves every EGL and GL entry

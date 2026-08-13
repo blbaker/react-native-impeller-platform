@@ -40,5 +40,17 @@ echo === build ===
 REM -k 0 keeps going after the first failure so ONE run enumerates the whole
 REM error set instead of one error per cross-OS round trip.
 "%CMAKE%" --build "%BUILD%" --target rn-impeller -- -k 0
-echo BUILD_EXIT=%errorlevel%
+if errorlevel 1 ( echo BUILD_EXIT=1 & exit /b 1 )
+echo BUILD_EXIT=0
+
+echo === install ===
+REM ⛔ THE EXE IS NOT RUNNABLE FROM THE BUILD DIRECTORY ON WINDOWS.
+REM There is no RPATH here: impeller.dll, libEGL.dll and libGLESv2.dll must be
+REM PHYSICALLY BESIDE the .exe or the loader kills the process before main()
+REM with no output at all — which reads exactly like an instant crash. The
+REM install rules already stage all three, so install is part of BUILDING on
+REM Windows, not a packaging afterthought.
+"%CMAKE%" --install "%BUILD%" --component engine
+if errorlevel 1 ( echo INSTALL_FAIL & exit /b 1 )
+echo INSTALL_OK %BUILD%\stage\bin
 endlocal

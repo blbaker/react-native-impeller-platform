@@ -138,3 +138,18 @@ set_property(TARGET folly_runtime PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_include_directories(folly_runtime SYSTEM PUBLIC "${FOLLY_DIR}")
 target_link_libraries(folly_runtime PUBLIC
   rc_boost glog::glog double-conversion fmt::fmt FastFloat::fast_float)
+
+# folly's PORTABILITY layer is the Winsock dependency, not anything we call.
+# On Linux, socket()/poll()/ioctl() live in libc and cost nothing to link. On
+# Windows those same functions are folly::portability::sockets shims over
+# ws2_32, so NetOps/Sockets/Fcntl/Unistd.cpp pull 28 __imp_* symbols even though
+# this engine opens no sockets — folly compiles the portability TUs
+# unconditionally.
+#
+# Declared on folly_runtime rather than the executable BECAUSE THAT IS WHERE THE
+# DEPENDENCY IS: as a PUBLIC link on the owning target it propagates to every
+# future consumer, instead of being re-diagnosed the first time something other
+# than rn-impeller links folly.
+if(WIN32)
+  target_link_libraries(folly_runtime PUBLIC ws2_32)
+endif()
