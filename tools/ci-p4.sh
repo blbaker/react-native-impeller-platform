@@ -224,16 +224,7 @@ BUNDLE="$APP/impeller/build/index.impeller.bundle"
 
 # ---------------------------------------------------------------------------
 echo "== 6. build probe args FROM the fixture =="
-mapfile -t ARGS < <(node -e '
-const g = require(process.argv[1]);
-const p = xy => { console.log("--probe"); console.log(xy.join(",")); };
-for (const k of ["appearance","statusBar","alert","linking","initialUrl","devSettings","defaults","platformConstants"]) p(g[k].probe);
-console.log("--ink-band"); console.log(g.text.inkBand.join(","));
-console.log("--width"); console.log(String(g.surface.width));
-console.log("--height"); console.log(String(g.surface.height));
-console.log("--color-scheme"); console.log(g.appearance.expectScheme);
-console.log("--initial-url"); console.log(g.initialUrl.value);
-' "$FIXTURE/fixture.json")
+mapfile -t ARGS < <(node "$ROOT/tools/fixture-probe-args.js" "$FIXTURE/fixture.json" p4)
 
 echo "== 7. run the engine on the fixture bundle =="
 LOG="$WORK/engine.log"
@@ -258,71 +249,7 @@ PAINTED="$(grep -oE 'painted_nodes=[0-9]+' "$LOG" | cut -d= -f2)"
 echo "   scene_nodes=$NODES painted_nodes=$PAINTED"
 
 echo "== 9. assert the seam IN PIXELS =="
-node - "$FIXTURE/fixture.json" "$LOG" <<'NODE'
-const fs = require('fs');
-const g = require(process.argv[2]);
-const log = fs.readFileSync(process.argv[3], 'utf8');
-
-const probes = new Map();
-for (const m of log.matchAll(/probe=(\d+),(\d+) rgb=(\d+),(\d+),(\d+)/g)) {
-  probes.set(`${m[1]},${m[2]}`, [+m[3], +m[4], +m[5]]);
-}
-const fails = [];
-const near = (a, b, tol = 3) => Math.abs(a - b) <= tol;
-
-function check(label, spec, why) {
-  const got = probes.get(spec.probe.join(','));
-  if (!got) { fails.push(`${label}: engine never reported probe ${spec.probe}`); return; }
-  if (!spec.expect.every((e, i) => near(e, got[i]))) {
-    fails.push(`${label}: probe ${spec.probe} expected rgb=${spec.expect} got rgb=${got} — ${why}`);
-  } else {
-    console.log(`   OK ${label} @${spec.probe} rgb=${got}`);
-  }
-}
-
-// Each of these paints ONLY if the module returned the expected value, so a
-// background-coloured probe means the module is absent, unreachable, or
-// returning its default. Every expectation is a NON-DEFAULT value.
-check('Appearance reports the engine-supplied scheme', g.appearance,
-      `expected colorScheme='${g.appearance.expectScheme}'. RN falls back to 'light' with NO module at all, ` +
-      `so a 'light' assertion would pass without Appearance existing`);
-check('StatusBarManager constants readable', g.statusBar,
-      'NativeStatusBarManagerIOS.js getEnforcing()s this module — if it were absent the bundle would have thrown at import');
-check('Alert callback fired', g.alert,
-      'a module that recorded the alert but never called back leaves the JS promise pending forever');
-check('Linking.canOpenURL both directions', g.linking,
-      `${g.linking.okUrl} must be allowed AND ${g.linking.refuseUrl} refused — a predicate stuck on true fails here too`);
-check('Linking.getInitialURL round-trips', g.initialUrl,
-      `expected the exact --initial-url the engine was launched with (${g.initialUrl.value})`);
-check('DevSettings callable', g.devSettings, 'getEnforcing()d like StatusBarManager; a no-op method must not throw');
-check('DefaultTurboModules delegation (performance.now)', g.defaults,
-      'performance is vended by RN\'s OWN DefaultTurboModules, not by our registry — this probe is the delegation assertion');
-check('Platform.constants come from the native module', g.platformConstants,
-      `expected reactNativeVersion.minor === ${g.platformConstants.expectMinor}, which is the RN pin the ENGINE was compiled against — ` +
-      `the shim returned {} for two phases while the module answered correctly`);
-
-// The alert must have reached NATIVE, not just resolved in JS. The pixel proves
-// JS got its callback; this proves the call crossed the seam. Both, because a
-// JS-side stub could satisfy either one alone.
-const alerts = log.match(/alerts_shown=(\d+)/);
-if (!alerts) fails.push('engine never reported alerts_shown');
-else if (+alerts[1] < 1) fails.push(`alerts_shown=${alerts[1]} — Alert.alert() never reached native (the JS shim may be self-resolving)`);
-else console.log(`   OK alerts_shown=${alerts[1]} (the call crossed into native)`);
-
-// Text ink: the frame must be human-readable too, so a reviewer can see WHICH
-// scheme was reported rather than only that a square is green.
-const ink = [...log.matchAll(/ink_band=(\d+),(\d+),\d+,\d+ ink=(\d+) of (\d+)/g)]
-  .map(m => ({x: +m[1], y: +m[2], ink: +m[3], total: +m[4]}));
-const band = ink.find(i => i.x === g.text.inkBand[0] && i.y === g.text.inkBand[1]);
-if (!band) fails.push('engine never reported the text ink band');
-else if (band.ink < 40) fails.push(`text: only ${band.ink}/${band.total} ink pixels — the colorScheme label did not render`);
-else console.log(`   OK colorScheme label ink=${band.ink}/${band.total}`);
-
-if (fails.length) {
-  console.error('P4_MODULES_FAIL:\n  ' + fails.join('\n  '));
-  process.exit(1);
-}
-NODE
+node "$ROOT/tools/assert-fixture.js" p4 "$FIXTURE/fixture.json" "$LOG" P4_MODULES_FAIL
 
 if [ -n "${SCREENSHOT_OUT:-}" ]; then cp "$WORK/frame.ppm" "$SCREENSHOT_OUT"; echo "   screenshot -> $SCREENSHOT_OUT"; fi
 echo "P4_MODULES_PASS (modules=$MODULE_COUNT nodes=$NODES painted=$PAINTED)"

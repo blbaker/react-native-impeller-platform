@@ -19,6 +19,12 @@ LOG_P2="$(mktemp)"
 KEEP_WORKDIR=1 bash tools/ci-p2.sh > "$LOG_P2" 2>&1 || { tail -20 "$LOG_P2"; echo "MUTATION_SETUP_FAIL: the Linux P2 gate failed"; exit 1; }
 WORK="$(grep -oE 'workdir kept: .*' "$LOG_P2" | tail -1 | cut -d' ' -f3-)"
 export WIN_BUNDLE="$WORK/FixtureApp/impeller/build/index.impeller.bundle"
+# ⛔ THE FRAME IS NOT OPTIONAL. ci-win.sh's cross-wiring check used to SKIP when
+# WIN_BUNDLE was supplied — i.e. it was disabled for every mutant this script
+# runs, which meant the suite verifying the Windows gate had the gate's most
+# important assertion switched off throughout. Passing the frame keeps it live.
+export WIN_LINUX_FRAME="$WORK/frame.ppm"
+[ -s "$WIN_LINUX_FRAME" ] || { echo "MUTATION_SETUP_FAIL: no Linux frame at $WIN_LINUX_FRAME"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 echo "   bundle: $WIN_BUNDLE"
 

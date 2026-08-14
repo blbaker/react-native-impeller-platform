@@ -8,9 +8,10 @@
 #   6. P4 module seam: JS can actually CALL native, and the packaging ships a
 #      callable seam (three-layer guard + per-module pixel probes)
 #
-# Mutation verification (tools/mutation-verify-p*.sh) is deliberately NOT here:
+# Mutation verification (tools/mutation-verify-*.sh) is deliberately NOT here:
 # each mutant costs a full consumer install, so it belongs on a nightly or
-# pre-release run.
+# pre-release run. Windows phase coverage is verified by
+# tools/mutation-verify-win-phases.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -40,7 +41,18 @@ bash tools/ci-p4.sh | tail -16
 # machine that is supposed to have it.
 echo "### gate 7: Windows (opt-in)"
 if [ -x "/mnt/c/Devel/rni-win-build/stage/bin/rn-impeller.exe" ] && command -v cmd.exe >/dev/null 2>&1; then
-  bash tools/ci-win.sh | tail -14
+  # ⛔ ALL THREE PHASES, NOT JUST P2. Through P5-D only the P2 fixture had ever
+  # run on Windows — a static tree of solid fills, the cheapest thing a renderer
+  # can get right. P3 drives the gradient/transform/AA paths and DirectWrite text
+  # measurement; P4 crosses the JS<->native seam, where Windows has genuinely
+  # different implementations (ShellExecuteW rather than exec) behind the same
+  # TurboModule interface. Running P2 alone and calling the port "verified on
+  # Windows" is the same shape of gap as running one Windows gate and calling
+  # delivery covered.
+  for phase in p2 p3 p4; do
+    echo "###   phase $phase"
+    bash tools/ci-win.sh "$phase" | tail -12
+  done
   # ⛔ TWO WINDOWS GATES, AND THE SECOND IS NOT A DUPLICATE OF THE FIRST.
   # ci-win.sh drives the STAGED BUILD; it proves the port runs. ci-win-consumer.sh
   # drives an engine INSTALLED FROM A TARBALL into an app outside the repo; it
