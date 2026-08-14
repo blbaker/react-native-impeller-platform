@@ -15,21 +15,30 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-SDK="${IMPELLER_SDK:-engine/third_party/impeller-sdk}"
-[ -f "${SDK}/include/impeller.h" ] || bash tools/sdk-fetch.sh "${SDK}"
-[ -f "engine/third_party/hermes-build/lib/libhermesvm.so" ] || bash tools/hermes-build.sh
-[ -d "engine/rn/node_modules/react-native" ] || (cd engine/rn && npm install --ignore-scripts --no-audit --no-fund)
 
+# ⛔ THE TRIPLE IS node's `process.platform`-`process.arch`, NOT a friendly name.
+# `resolve.js` computes the package name from those values at runtime, so the
+# directory here must be `win32-x64` and never `windows-x64`: a mismatch produces
+# a package that publishes fine, installs fine, and can never be found.
 PLATFORM="${1:-linux}"
 ARCH="${2:-x64}"
+case "${PLATFORM}" in
+  windows|win) PLATFORM=win32 ;;
+esac
 TRIPLE="${PLATFORM}-${ARCH}"
 PKG="packages-engine/engine-${TRIPLE}"
 VERSION="$(node -p "require('${ROOT}/package/package.json').version")"
 
-if [ "${PLATFORM}" != "linux" ]; then
-  echo "engine-build: ${PLATFORM} is not supported yet (P5=windows, P6=macos)" >&2
-  exit 1
-fi
+case "${PLATFORM}" in
+  linux) ;;
+  win32) exec bash tools/engine-build-win-stage.sh "${ARCH}" ;;
+  *) echo "engine-build: ${PLATFORM} is not supported yet (P6=macos)" >&2; exit 1 ;;
+esac
+
+SDK="${IMPELLER_SDK:-engine/third_party/impeller-sdk}"
+[ -f "${SDK}/include/impeller.h" ] || bash tools/sdk-fetch.sh "${SDK}"
+[ -f "engine/third_party/hermes-build/lib/libhermesvm.so" ] || bash tools/hermes-build.sh
+[ -d "engine/rn/node_modules/react-native" ] || (cd engine/rn && npm install --ignore-scripts --no-audit --no-fund)
 
 echo "engine-build: configuring + compiling ${TRIPLE} host (cmake)"
 cmake -S engine -B engine/build -G Ninja -DCMAKE_BUILD_TYPE=Release \

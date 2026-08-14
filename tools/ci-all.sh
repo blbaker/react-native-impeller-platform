@@ -41,6 +41,15 @@ bash tools/ci-p4.sh | tail -16
 echo "### gate 7: Windows (opt-in)"
 if [ -x "/mnt/c/Devel/rni-win-build/stage/bin/rn-impeller.exe" ] && command -v cmd.exe >/dev/null 2>&1; then
   bash tools/ci-win.sh | tail -14
+  # ⛔ TWO WINDOWS GATES, AND THE SECOND IS NOT A DUPLICATE OF THE FIRST.
+  # ci-win.sh drives the STAGED BUILD; it proves the port runs. ci-win-consumer.sh
+  # drives an engine INSTALLED FROM A TARBALL into an app outside the repo; it
+  # proves the port can be DELIVERED. Mutation M1 measures the difference: with a
+  # runtime DLL dropped from the npm package, ci-win.sh stays green and only the
+  # consumer gate reddens. Running one and calling Windows covered is how the
+  # skia-platform packaging bugs survived nine phases.
+  echo "### gate 8: Windows consumer (opt-in)"
+  bash tools/ci-win-consumer.sh | tail -8
 elif [ "${RNI_REQUIRE_WIN:-0}" = "1" ]; then
   echo "WINDOWS_GATE_MISSING: RNI_REQUIRE_WIN=1 but no staged Windows engine" >&2
   exit 1

@@ -1,0 +1,9 @@
+{
+  "name": "@react-native-impeller/engine-win32-x64",
+  "version": "0.0.1",
+  "description": "Prebuilt Impeller engine host for win32-x64 (installed automatically by react-native-impeller)",
+  "license": "MIT",
+  "files": ["bin", "README.md"],
+  "os": ["win32"],
+  "cpu": ["x64"]
+}

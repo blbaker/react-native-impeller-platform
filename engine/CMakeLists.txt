@@ -311,6 +311,37 @@ if(WIN32)
     "${ANGLE_DIR}/libGLESv2.dll"
     "${ANGLE_DIR}/LICENSE.electron"
     DESTINATION bin COMPONENT engine)
+
+  # ⛔ THE VC++ RUNTIME IS NOT PART OF WINDOWS. `dumpbin /dependents` on the
+  # linked exe lists MSVCP140.dll, VCRUNTIME140.dll and VCRUNTIME140_1.dll —
+  # they arrive with Visual Studio or with a redist installer, so they are
+  # present on THIS box and absent on a plain consumer machine. The failure is
+  # the same silent pre-main() death as a missing impeller.dll: no output, no
+  # stderr, an exit code from the loader. Shipping them app-local beside the exe
+  # is Microsoft's supported deployment mode and costs ~1.5 MB.
+  #
+  # Derived from the toolchain via InstallRequiredSystemLibraries rather than
+  # hardcoding C:/Devel/VSBuildTools/VC/Redist/MSVC/<version>/... — that path
+  # embeds an MSVC version that changes with every VS update, and the pin would
+  # rot into "file not found" at install time on the next toolchain bump.
+  #
+  # _NO_WARNINGS: the module warns when it cannot find the debug CRT, which we
+  # never want (Release only, and the debug CRT is not redistributable at all).
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION bin)
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT engine)
+  set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)   # ucrtbase ships with Windows 10+
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)  # we install them ourselves, below
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS TRUE)
+  include(InstallRequiredSystemLibraries)
+  if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+    message(FATAL_ERROR
+      "InstallRequiredSystemLibraries found no MSVC runtime DLLs to stage. "
+      "The engine imports MSVCP140/VCRUNTIME140 and would die before main() on "
+      "any machine without Visual Studio installed. Refusing to build a package "
+      "that only runs on this box.")
+  endif()
+  install(FILES ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+          DESTINATION bin COMPONENT engine)
 else()
   install(FILES
     "${IMPELLER_RUNTIME}"
