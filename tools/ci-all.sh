@@ -71,4 +71,15 @@ else
   echo "   RNI_REQUIRE_WIN=1 to make this skip a failure."
 fi
 
+# ⛔ THE DARWIN STAGING FETCHERS RUN ON EVERY HOST, ON PURPOSE.
+# They stage macOS artifacts and are therefore easy to leave broken for weeks
+# while every green run says nothing about them — nobody notices a fetcher rot
+# until the one session that needs it. They are pure downloads with no macOS
+# code, so any host can run them: cheap, and it keeps the pins honest (a
+# replaced Electron asset or a moved SDK path reddens HERE, on the box that can
+# actually fix it, rather than on a Mac reachable only over SSH).
+echo "### gate 9: darwin staging fetchers"
+bash tools/sdk-fetch-darwin.sh | tail -2
+ANGLE_PLATFORM=darwin-arm64 bash tools/angle-fetch.sh | tail -1
+
 echo "ALL_GATES_PASS"

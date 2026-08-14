@@ -62,20 +62,23 @@ if(NOT EXISTS "${REACT_COMMON}/jsi/jsi/jsi.h")
     "ReactCommon not found at ${REACT_COMMON}. Run: (cd engine/rn && npm install --ignore-scripts)")
 endif()
 
-# The Windows SDK is fetched to its OWN directory by tools/sdk-fetch-win.sh:
-# `uname` says Linux inside WSL, so one directory cannot serve both, and the two
-# have DIFFERENT LAYOUTS — linux ships lib/libimpeller.so (link it directly),
-# windows ships lib/impeller.dll + impeller.dll.lib (link the IMPORT lib and
-# copy the DLL next to the exe, because Windows has no rpath).
+# Each target OS gets its OWN SDK directory: `uname` says Linux inside WSL, so
+# one directory cannot serve a cross-OS stage, and the three have DIFFERENT
+# LAYOUTS — linux ships lib/libimpeller.so (link it directly), windows ships
+# lib/impeller.dll + impeller.dll.lib (link the IMPORT lib and copy the DLL next
+# to the exe, because Windows has no rpath), darwin ships lib/libimpeller.dylib
+# (link directly, @rpath at load time).
 if(WIN32)
   set(_impeller_sdk_default "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-win")
+elseif(APPLE)
+  set(_impeller_sdk_default "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-darwin")
 else()
   set(_impeller_sdk_default "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk")
 endif()
 set(IMPELLER_SDK "${_impeller_sdk_default}"
-    CACHE PATH "Unzipped Impeller standalone SDK (tools/sdk-fetch.sh, sdk-fetch-win.sh)")
+    CACHE PATH "Unzipped Impeller standalone SDK (tools/sdk-fetch.sh, sdk-fetch-win.sh, sdk-fetch-darwin.sh)")
 if(NOT EXISTS "${IMPELLER_SDK}/include/impeller.h")
-  message(FATAL_ERROR "Impeller SDK not found at ${IMPELLER_SDK}. Run: bash tools/sdk-fetch.sh (or sdk-fetch-win.sh)")
+  message(FATAL_ERROR "Impeller SDK not found at ${IMPELLER_SDK}. Run: bash tools/sdk-fetch.sh (or sdk-fetch-win.sh / sdk-fetch-darwin.sh)")
 endif()
 
 if(WIN32)
@@ -89,6 +92,23 @@ if(WIN32)
   set(ANGLE_DIR "${CMAKE_SOURCE_DIR}/third_party/angle-win-x64")
   if(NOT EXISTS "${ANGLE_DIR}/libEGL.dll")
     message(FATAL_ERROR "ANGLE not found at ${ANGLE_DIR}. Run: bash tools/angle-fetch.sh")
+  endif()
+elseif(APPLE)
+  set(IMPELLER_LINK_LIB "${IMPELLER_SDK}/lib/libimpeller.dylib")
+  set(IMPELLER_RUNTIME  "${IMPELLER_SDK}/lib/libimpeller.dylib")
+  # macOS needs ANGLE for the SAME reason Windows does, and it is NOT "no GPU
+  # API" — Metal is right there. It is that the only OFFSCREEN surface
+  # constructor in the SDK takes a GL framebuffer object.
+  # ImpellerSurfaceCreateWrappedMetalDrawableNew needs a CAMetalDrawable, i.e. a
+  # CAMetalLayer in a real window, and over SSH `launchctl managername` is
+  # `Background` so Cocoa refuses to create one. Every headless frame therefore
+  # goes through GLES3, and macOS ships neither GLES nor EGL (its system GL is a
+  # frozen desktop 2.1 compatibility profile). ANGLE translates GLES3 onto
+  # Metal. Same pinned Electron build as Windows, different asset.
+  # Loaded with dlopen at runtime, exactly as Windows LoadLibrary's it.
+  set(ANGLE_DIR "${CMAKE_SOURCE_DIR}/third_party/angle-darwin-arm64")
+  if(NOT EXISTS "${ANGLE_DIR}/libEGL.dylib")
+    message(FATAL_ERROR "ANGLE not found at ${ANGLE_DIR}. Run: ANGLE_PLATFORM=darwin-arm64 bash tools/angle-fetch.sh")
   endif()
 else()
   set(IMPELLER_LINK_LIB "${IMPELLER_SDK}/lib/libimpeller.so")

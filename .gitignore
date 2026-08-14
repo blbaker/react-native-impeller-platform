@@ -1,4 +1,5 @@
 engine/third_party/impeller-sdk/
+engine/third_party/impeller-sdk-darwin/
 node_modules/
 *.ppm
 build/
@@ -15,3 +16,4 @@ engine/third_party/hermes/
 engine/third_party/hermes-build/
 # Fetched binary (pinned + sha256-verified by tools/angle-fetch.sh), not source.
 engine/third_party/angle-win-x64/
+engine/third_party/angle-darwin-arm64/
