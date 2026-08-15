@@ -111,11 +111,27 @@ storage that proves selection works and then deletes everything; this one keeps
 its storage in `~/.local/share/rni-registry` so what you published yesterday is
 still installable today.
 
-To keep it running across reboots (Linux):
+To keep it running across reboots:
 
 ```bash
+# Linux
 systemctl --user enable --now rni-registry
+
+# macOS
+cp tools/launchd/dev.rni.registry.plist ~/Library/LaunchAgents/
+# edit the plist: replace /Users/USERNAME and set PATH to your node bin dir
+launchctl load -w ~/Library/LaunchAgents/dev.rni.registry.plist
 ```
+
+⚠️ Neither systemd nor launchd sources your shell rc, so nvm's node is not on
+their PATH — both unit files set it explicitly. A wrong path there produces a
+service that reports itself loaded/active and serves nothing (`npx: not found`,
+restart-looping). If you switch node versions, update the unit.
+
+Each machine runs its own registry and publishes the engine IT built: this box
+serves `engine-linux-x64`, the Mac serves `engine-darwin-arm64`. The storage is
+per-machine, so `status` on one will show the other's engine as "not
+published" — that is expected, not a failure.
 
 Re-run `publish` after rebuilding an engine; it unpublishes the old version
 first, so the same version number can be replaced (a real registry refuses
