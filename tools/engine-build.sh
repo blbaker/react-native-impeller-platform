@@ -54,7 +54,24 @@ SDK="${IMPELLER_SDK:-engine/third_party/impeller-sdk}"
 # a cold-start defect that no amount of green local runs could surface. This is
 # exactly the class of bug CI exists to find, found on its first run.
 [ -d "engine/rn/node_modules/react-native" ] || (cd engine/rn && npm install --ignore-scripts --no-audit --no-fund)
-[ -f "engine/third_party/hermes-build/lib/libhermesvm.so" ] || bash tools/hermes-build.sh
+# ⛔ THE GUARD MUST ASSERT WHAT CMAKE ACTUALLY NEEDS, NOT JUST THE LIBRARY.
+# CMakeLists.txt requires BOTH the Hermes build output (libhermesvm.so) AND the
+# Hermes SOURCE checkout (API/hermes/hermes.h, for headers). This line used to
+# test only the .so, which is satisfiable WITHOUT the source — and a CI cache
+# that restored `hermes-build` but not `hermes` did exactly that: the build was
+# skipped as "already done" and CMake then failed with
+#
+#     Hermes not found at .../third_party/hermes. Run: bash tools/hermes-build.sh
+#
+# on a warm run, for a repo whose COLD run had just succeeded. A cache that
+# makes the second run fail where the first passed is the worst kind, because
+# it looks like a flaky build rather than a missing precondition.
+#
+# Testing both halves makes this self-healing regardless of what a cache
+# restored: whatever is missing, hermes-build.sh runs and supplies it.
+[ -f "engine/third_party/hermes-build/lib/libhermesvm.so" ] \
+  && [ -f "engine/third_party/hermes/API/hermes/hermes.h" ] \
+  || bash tools/hermes-build.sh
 
 echo "engine-build: configuring + compiling ${TRIPLE} host (cmake)"
 cmake -S engine -B engine/build -G Ninja -DCMAKE_BUILD_TYPE=Release \

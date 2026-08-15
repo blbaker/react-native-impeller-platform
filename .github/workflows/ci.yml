@@ -62,17 +62,27 @@ jobs:
           cmake --version | head -1
           node --version
 
-      # ⛔ CACHE THE BUILD OUTPUT, KEYED ON WHAT DETERMINES IT.
+      # ⛔ CACHE THE SOURCE AND THE BUILD TOGETHER, AS ONE ENTRY.
       # Hermes is built from source at the exact tag react-native pins, which is
       # a ~40 minute compile. The tag is derived from the pinned RN version, so
       # the lockfile hash is the honest key: bump RN and the cache MUST miss,
       # because a Hermes built from a different tag mis-reads RN's bytecode and
       # fails somewhere that looks like a bundler problem.
-      - name: Cache Hermes build
+      #
+      # BOTH paths, because CMake needs both — libhermesvm.so from the build dir
+      # AND API/hermes/hermes.h from the checkout. Caching only the build output
+      # produced a warm run that failed where the cold run had just succeeded
+      # ("Hermes not found at .../third_party/hermes"), since the guard saw the
+      # library and skipped the step that would have restored the source. Two
+      # halves of one artifact belong in one cache entry, so they can never be
+      # restored apart.
+      - name: Cache Hermes (source + build)
         uses: actions/cache@v4
         with:
-          path: engine/third_party/hermes-build
-          key: hermes-${{ runner.os }}-${{ hashFiles('engine/rn/package-lock.json') }}
+          path: |
+            engine/third_party/hermes
+            engine/third_party/hermes-build
+          key: hermes-v2-${{ runner.os }}-${{ hashFiles('engine/rn/package-lock.json') }}
 
       # Keyed on the pinned SHA, which is the whole identity of the artifact.
       - name: Cache Impeller SDK
