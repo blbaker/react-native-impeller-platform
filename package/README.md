@@ -70,6 +70,57 @@ that is a bug worth reporting.
 Everything below is for working ON react-native-impeller. None of it is
 required — or appropriate — for using the published package.
 
+## Installing it locally, before the first npm release
+
+You can consume the package on this machine exactly the way a published install
+works — `npm install @react-native-impeller/core`, no flags, no env vars, no
+build step in the consuming app — by serving it from a persistent local
+registry.
+
+```bash
+bash tools/local-registry.sh serve         # start it (or use the systemd unit)
+bash tools/local-registry.sh publish       # push the current builds into it
+bash tools/local-registry.sh use ~/my-app  # point an app at it
+bash tools/local-registry.sh status        # what is published, is it running
+```
+
+Then, in that app:
+
+```bash
+npm install @react-native-impeller/core
+```
+
+`use` writes a **scoped** line to the app's `.npmrc`:
+
+```
+@react-native-impeller:registry=http://127.0.0.1:4873
+```
+
+⛔ Scoped, never a global `registry=`. Everything else — React, React Native,
+the whole rest of the tree — keeps resolving from npmjs. A global redirect would
+route an app's entire dependency graph through a personal server, which is a
+supply-chain change nobody asked for and miserable to debug when the server is
+off. Verified: a real install pulled 3 packages from the local registry and 224
+from npmjs.
+
+This is the same npm mechanism the published package will use —
+`optionalDependencies` plus `os`/`cpu` selection, real tarballs, real
+`npm publish` — so it is a rehearsal, not a shortcut. It differs from
+`tools/ci-registry.sh` only in durability: that one is a gate with throwaway
+storage that proves selection works and then deletes everything; this one keeps
+its storage in `~/.local/share/rni-registry` so what you published yesterday is
+still installable today.
+
+To keep it running across reboots (Linux):
+
+```bash
+systemctl --user enable --now rni-registry
+```
+
+Re-run `publish` after rebuilding an engine; it unpublishes the old version
+first, so the same version number can be replaced (a real registry refuses
+that, which is correct for npmjs and pure friction for a dev loop).
+
 ## Building the engine
 
 ```bash
