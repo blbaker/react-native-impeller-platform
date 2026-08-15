@@ -25,7 +25,11 @@ BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
 
 fail() { echo "PACK_AND_CONSUME_FAIL: $*" >&2; exit 1; }
 
-[ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP (see docs/STATE.md)"
+# Provision the cached stock RN app rather than requiring a human to have
+# made one. This precondition used to be satisfied by HISTORY on a dev box,
+# which is why CI could not run this gate at all.
+[ -d "$BASE_APP/node_modules/react-native" ] || bash tools/base-app.sh
+[ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP (tools/base-app.sh failed)"
 [ -x packages-engine/engine-linux-x64/bin/rn-impeller ] || bash tools/engine-build.sh linux x64
 
 WORK="$(mktemp -d)"

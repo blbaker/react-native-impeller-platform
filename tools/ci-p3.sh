@@ -29,7 +29,11 @@ FIXTURE="$ROOT/fixtures/p3-conformance"
 
 fail() { echo "P3_CONFORMANCE_FAIL: $*" >&2; exit 1; }
 
-[ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP (see docs/STATE.md)"
+# Provision the cached stock RN app rather than requiring a human to have
+# made one. This precondition used to be satisfied by HISTORY on a dev box,
+# which is why CI could not run this gate at all.
+[ -d "$BASE_APP/node_modules/react-native" ] || bash tools/base-app.sh
+[ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP (tools/base-app.sh failed)"
 bash tools/engine-build.sh linux x64 > /dev/null || fail "engine build failed"
 
 WORK="$(mktemp -d)"

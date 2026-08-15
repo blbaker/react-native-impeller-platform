@@ -87,6 +87,17 @@ jobs:
           path: engine/rn/node_modules
           key: rnpin-${{ runner.os }}-${{ hashFiles('engine/rn/package-lock.json') }}
 
+      # The stock RN app that all four consumer gates copy from. Creating it
+      # takes minutes, and it depends only on the pinned RN version — so it
+      # caches on the same key as the pin. tools/base-app.sh provisions it on a
+      # miss and verifies the resulting app is actually the requested version;
+      # this step only decides whether that work is repeated.
+      - name: Cache base RN app
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rni/base
+          key: baseapp-${{ runner.os }}-${{ hashFiles('engine/rn/package.json') }}
+
       # ⛔ THE WINDOWS GATE IS OPT-IN AND THIS RUNNER CANNOT SATISFY IT.
       # ci-all.sh announces that skip with its reason rather than passing over it
       # silently. RNI_REQUIRE_WIN stays unset HERE, deliberately: setting it on a
