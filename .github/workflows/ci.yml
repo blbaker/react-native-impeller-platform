@@ -1,0 +1,90 @@
+# The gates, as CI runs them. Also the single implementation of "run the gates",
+# reused by the release workflow via workflow_call — a hand-copied job list
+# drifts exactly the way a hand-copied assertion does (see P5-E), and a release
+# that runs a STALE copy of the gates is the worst possible version of that bug.
+name: gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+# A pull request can be opened by anyone, so this workflow's token is read-only
+# and declared here rather than inherited from a repository setting no file can
+# see. tools/ci-workflows.sh rejects this workflow if the block is missing.
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    # ⛔ THE FIRST RUN MUST FIT, OR THE CACHE NEVER EXISTS.
+    # Hermes is compiled from source on a cache miss. That happens on this box
+    # with 22 cores; a hosted runner has 4, so the cold build is several times
+    # longer than any local measurement. A timeout tuned to the WARM run
+    # deadlocks the pipeline: the cold build is killed before it finishes, so
+    # actions/cache never saves, so the next run is cold again — a permanently
+    # red CI that looks like a flaky build. 6 hours is the GitHub maximum and
+    # costs nothing on the warm path, which exits in minutes.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # The engine links against EGL/GLESv2 and renders through Mesa's software
+      # rasteriser — there is no GPU on a hosted runner, which is precisely the
+      # configuration tools/ci-headless.sh was written for.
+      - name: System dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ \
+            libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libglvnd-dev
+          cmake --version | head -1
+          node --version
+
+      # ⛔ CACHE THE BUILD OUTPUT, KEYED ON WHAT DETERMINES IT.
+      # Hermes is built from source at the exact tag react-native pins, which is
+      # a ~40 minute compile. The tag is derived from the pinned RN version, so
+      # the lockfile hash is the honest key: bump RN and the cache MUST miss,
+      # because a Hermes built from a different tag mis-reads RN's bytecode and
+      # fails somewhere that looks like a bundler problem.
+      - name: Cache Hermes build
+        uses: actions/cache@v4
+        with:
+          path: engine/third_party/hermes-build
+          key: hermes-${{ runner.os }}-${{ hashFiles('engine/rn/package-lock.json') }}
+
+      # Keyed on the pinned SHA, which is the whole identity of the artifact.
+      - name: Cache Impeller SDK
+        uses: actions/cache@v4
+        with:
+          path: engine/third_party/impeller-sdk
+          key: impeller-${{ runner.os }}-${{ hashFiles('engine/IMPELLER_SHA') }}
+
+      - name: Cache RN pin
+        uses: actions/cache@v4
+        with:
+          path: engine/rn/node_modules
+          key: rnpin-${{ runner.os }}-${{ hashFiles('engine/rn/package-lock.json') }}
+
+      # ⛔ THE WINDOWS GATE IS OPT-IN AND THIS RUNNER CANNOT SATISFY IT.
+      # ci-all.sh announces that skip with its reason rather than passing over it
+      # silently. RNI_REQUIRE_WIN stays unset HERE, deliberately: setting it on a
+      # Linux runner would turn a correct skip into a permanent red, and the way
+      # people fix a permanently-red gate is by deleting it.
+      - name: Run all gates
+        run: bash tools/ci-all.sh
+
+      # Runs last because it is the cheapest thing here and the most likely to be
+      # edited: it asserts what these very files are allowed to do.
+      - name: Workflow policy
+        run: bash tools/ci-workflows.sh

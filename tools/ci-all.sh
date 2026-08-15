@@ -92,4 +92,13 @@ bash tools/ci-release-meta.sh | tail -2
 echo "### gate 11: package selftest (what a user's npm test runs)"
 (cd package && node src/selftest.js | tail -2)
 
+# ⛔ THE WORKFLOW POLICY GATE RUNS EVERYWHERE, LIKE THE RELEASE GATE.
+# It reads the workflow FILES and touches nothing, so any host can run it — and
+# it is the only gate whose subject is what a push is allowed to CAUSE. Every
+# other gate here asserts something about the artifact; a defect they all miss
+# is a pipeline that publishes from a branch. Free to catch on this box, and
+# permanent if it reaches the registry.
+echo "### gate 12: workflow policy"
+bash tools/ci-workflows.sh | tail -2
+
 echo "ALL_GATES_PASS"
