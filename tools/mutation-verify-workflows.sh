@@ -235,6 +235,22 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ── W12: the lock weakened to a ref check that is always true.
+# The most dangerous plausible edit now that the 402 backstop is gone. It reads
+# as "tighten the release condition to tags only" and, on a workflow that ONLY
+# triggers on tags, evaluates true on every run — publishing unconditionally
+# without ever naming the guard variable.
+mutate "publish gated on the ref alone instead of the guard" W12 '
+import sys, pathlib
+p = pathlib.Path(sys.argv[1], "release.yml")
+s = p.read_text()
+s = s.replace("npm publish ./package --dry-run", "npm publish ./package")
+s = s.replace("npm publish \"$p\" --dry-run", "npm publish \"$p\"")
+s = s.replace("      - name: Publish (dry run)",
+              "      - name: Publish (dry run)\n        if: startsWith(github.ref, \x27refs/tags/v\x27)")
+p.write_text(s)
+'
+
 # ── W1: the workflow directory is emptied.
 # "The gates run on every PR" with nothing implementing it. A gate that treats
 # no-workflows as nothing-to-check would pass here, which is the silent-skip

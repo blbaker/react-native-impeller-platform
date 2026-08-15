@@ -12,9 +12,10 @@ platforms" before installing.
 
 ## Install
 
-> **Private packages.** `@react-native-impeller/*` publishes as **restricted**,
-> so `npm install` works only for accounts granted access to the scope. This is
-> deliberate while the API settles.
+> **Not published yet.** These packages are configured to publish **publicly**,
+> but nothing has been released to npm — publishing stays deliberately gated
+> while the API settles. Until the first release, install from a git checkout or
+> a packed tarball. The command below will work once a version ships.
 
 ```bash
 npm install @react-native-impeller/core

@@ -137,7 +137,7 @@ cat > "${PKG}/package.json" <<JSON
   "license": "MIT",
   "files": ["bin", "README.md"],
   "publishConfig": {
-    "access": "restricted"
+    "access": "public"
   },
   "os": ["win32"],
   "cpu": ["${ARCH}"]

@@ -24,7 +24,7 @@
     "@react-native-impeller/engine-win32-x64": "0.0.1"
   },
   "publishConfig": {
-    "access": "restricted"
+    "access": "public"
   },
   "engines": {
     "node": ">=20"

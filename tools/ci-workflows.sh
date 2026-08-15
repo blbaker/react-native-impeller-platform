@@ -231,6 +231,24 @@ for path in files:
                                f" runs `{label}` for real (no --dry-run) without a"
                                f" {GUARD_VAR} condition on that step")
 
+            # W12 — THE LOCK MUST NOT BE WEAKENED TO A TAG-ONLY CONDITION.
+            # An armed publish gated solely on the ref (`startsWith(github.ref,
+            # 'refs/tags/')`) looks careful and is not: a tag is exactly what
+            # this workflow already triggers on, so that condition is TRUE on
+            # every run and publishes unconditionally. The guard variable must
+            # be present in its own right. This is the one edit that would let
+            # a plausible-looking "tighten the release condition" commit ungate
+            # publishing without ever naming the variable.
+            for step, body_text in armed:
+                cond = str(step.get("if", "")) or str(job.get("if", ""))
+                if GUARD_VAR in cond:
+                    continue
+                if "refs/tags" in cond or "github.ref" in cond:
+                    fail("W12", f"{name}:{job_name} step"
+                                f" {step.get('name', '?')!r} gates `{label}` on the"
+                                " ref alone — that is always true on a tag-triggered"
+                                f" workflow. It must require {GUARD_VAR}.")
+
             # W11 — workflow_dispatch on a tag-only workflow is a way to run the
             # same job from an arbitrary branch. Allowed, but the job must then
             # assert its own ref at runtime; the file's triggers alone no longer

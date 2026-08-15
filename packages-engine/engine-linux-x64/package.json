@@ -5,7 +5,7 @@
   "license": "MIT",
   "files": ["bin", "README.md"],
   "publishConfig": {
-    "access": "restricted"
+    "access": "public"
   },
   "os": ["linux"],
   "cpu": ["x64"]

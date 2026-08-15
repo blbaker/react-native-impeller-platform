@@ -168,23 +168,36 @@ sys.exit(1 if bad else 0)
 PY
 [ $? -eq 0 ] || FAIL=1
 
-# 5. PUBLISH ACCESS MUST BE DECLARED, AND IT IS CURRENTLY `restricted`.
-#    Baker's call, 2026-08-14: these stay PRIVATE for now.
+# 5. PUBLISH ACCESS MUST BE DECLARED, AND IT IS `public`.
+#    Baker's call, 2026-08-15: these ship PUBLIC. (Was `restricted` through
+#    P7-B; the reversal is deliberate and is why the value is a single
+#    variable.)
 #
 #    Declaring it in package.json, rather than passing an access flag on the
 #    publish invocation, keeps the setting attached to the artifact: it shows up
 #    in review as a one-line diff, and no CI edit can widen visibility on its
-#    own. npm already defaults a scoped package to restricted, but "private
-#    deliberately" and "private by omission" must not be indistinguishable —
-#    only the first survives a later edit that asks for public.
+#    own.
 #
-#    An npm publish is not reversible. A package made public cannot be made
-#    private again; it can only be deprecated, and the tarball stays fetchable.
+#    ⛔ THE DIRECTION OF RISK JUST REVERSED, AND THIS CHECK MATTERS MORE NOW.
+#    For a SCOPED package npm defaults to `restricted`, so while the decision
+#    was "private" the default silently agreed with us and an omission was
+#    harmless. `public` is NOT the default: an omitted or reverted
+#    publishConfig now means the publish is refused (or, worse on a paid
+#    account, quietly succeeds as a private package nobody can install). The
+#    setting is now load-bearing rather than merely documentary.
 #
-#    NOTE: restricted scoped packages require a PAID npm plan. On a free
-#    account the publish is refused with a 402 no matter what this says. That
-#    is a billing fact, not something a check can fix; see docs/STATE.md P7-A.
-EXPECT_ACCESS="${RNI_EXPECT_ACCESS:-restricted}"
+#    An npm publish is not reversible in either direction. A package made
+#    public cannot be made private again; it can only be deprecated, and the
+#    tarball stays fetchable forever. That is the whole reason publishing stays
+#    gated behind RNI_PUBLISH_ENABLED until Baker explicitly says otherwise —
+#    see .github/workflows/release.yml.
+#
+#    NOTE: going public also removes the accidental backstop that was holding
+#    the line until now. A restricted scoped package requires a PAID npm plan,
+#    so a free account was refused with a 402 regardless of any config. Public
+#    scoped packages are free to publish, so RNI_PUBLISH_ENABLED is now the
+#    ONLY thing between a version tag and a permanent registry entry.
+EXPECT_ACCESS="${RNI_EXPECT_ACCESS:-public}"
 python3 - "$EXPECT_ACCESS" <<'PY'
 import glob, json, sys
 want = sys.argv[1]

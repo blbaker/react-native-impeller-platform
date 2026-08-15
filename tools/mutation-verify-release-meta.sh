@@ -153,24 +153,31 @@ d=json.load(open(p)); d["files"]=[f for f in d["files"] if f!="src"]
 json.dump(d,open(p,"w"),indent=2)
 ' "NOT covered by"
 
-# M9: publish visibility drifts from the declared decision. These are PRIVATE
-# by Baker's call; a workflow or a careless edit flipping them to public is
-# unrecoverable — an npm publish cannot be taken back, only deprecated.
+# M9: publish visibility drifts from the declared decision. These are PUBLIC by
+# Baker's call (2026-08-15, reversing the P7-B private decision). A workflow or
+# careless edit flipping them BACK to restricted is not merely wrong-by-policy:
+# a restricted scoped package needs a paid plan, so it fails the publish or
+# ships something nobody can install. The mutation flips to the opposite of
+# whatever is declared, so this stays honest if the decision moves again.
 mutate "publish access flipped away from the declared value" '
 import json
 p="package/package.json"
-d=json.load(open(p)); d["publishConfig"]={"access":"public"}; json.dump(d,open(p,"w"),indent=2)
-' "expected 'restricted'"
+d=json.load(open(p)); d["publishConfig"]={"access":"restricted"}; json.dump(d,open(p,"w"),indent=2)
+' "expected 'public'"
 
-# M10: publishConfig removed entirely. npm would DEFAULT a scoped package to
-# restricted, so the artifact happens to be right — but "private on purpose"
-# and "private because nobody said" must not share an exit status, since only
-# the first survives someone adding --access public to a workflow.
-mutate "publishConfig removed (right answer, no longer a decision)" '
+# M10: publishConfig removed entirely.
+#
+# ⛔ THIS MUTATION CHANGED MEANING WHEN THE DECISION FLIPPED, AND IT IS NOW
+# STRONGER. While the answer was "private" npm's default for a scoped package
+# AGREED, so the artifact was still correct and this only defended the decision
+# being RECORDED. Public is NOT the default — removing publishConfig now
+# produces a genuinely wrong artifact (refused, or silently private). Same
+# assertion, and it went from documentary to load-bearing.
+mutate "publishConfig removed (now a genuinely wrong artifact)" '
 import json
 p="package/package.json"
 d=json.load(open(p)); d.pop("publishConfig",None); json.dump(d,open(p,"w"),indent=2)
-' "expected 'restricted'"
+' "expected 'public'"
 
 echo
 if [ "$CAUGHT" -eq "$TOTAL" ]; then

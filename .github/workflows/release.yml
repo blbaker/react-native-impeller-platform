@@ -13,11 +13,22 @@
 #      variable, so arming the pipeline is a settings change with an audit
 #      trail, not a commit.
 #
-# ⚠️ NOTHING CAN PUBLISH TODAY, ON PURPOSE. The packages are scoped and
-# restricted, which npm only permits on a PAID plan (~$7/user/month); on a free
-# account the publish is refused with a 402 regardless of this file. That is a
-# billing decision, not a defect — the dry-run path is fully wired and will work
-# the day the plan (or the public/private call) is decided.
+# ⛔ PUBLISHING IS LOCKED, AND THE LOCK IS NOW THE ONLY THING HOLDING.
+# Baker's direction, 2026-08-15: the packages go PUBLIC, and NOTHING publishes
+# until he gives explicit direction to ungate it.
+#
+# Read that in the context of what just changed. Until today a second,
+# accidental backstop was doing most of the work: the packages were scoped and
+# restricted, which npm only permits on a PAID plan, so a publish from this
+# free account was refused with a 402 no matter what any file said. Public
+# scoped packages are free to publish. That backstop is GONE.
+#
+#   RNI_PUBLISH_ENABLED is now the ONLY thing between a version tag and a
+#   permanent public registry entry. Do not set it, and do not add a step that
+#   reads a different variable, until Baker says so.
+#
+# An npm publish cannot be undone in either direction: a public package can be
+# deprecated but never un-published, and the tarball stays fetchable forever.
 name: release
 
 on:
@@ -38,6 +49,19 @@ jobs:
     needs: gates
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # ⚠️ THIS LINE IS NOT PROTECTION YET — IT IS A PLACEHOLDER WITH A NAME.
+    # A GitHub environment only gates a job once it EXISTS and has a required
+    # reviewer configured. Verified against the live repo on 2026-08-15: the
+    # environments list is empty, and creating one needs permissions this
+    # token does not have (403). Referencing a nonexistent environment does not
+    # fail the job — GitHub creates it implicitly with no rules — so this reads
+    # like a second lock and currently is not one.
+    #
+    # ⛔ THE ONLY REAL LOCK IS `vars.RNI_PUBLISH_ENABLED` ON THE STEP BELOW.
+    # Baker: to add the human-approval layer, create an environment named
+    # npm-publish (Settings → Environments) and add yourself as a required
+    # reviewer. Then a publish pauses for an explicit approval click in
+    # addition to the variable.
     environment: npm-publish
     steps:
       - uses: actions/checkout@v4
