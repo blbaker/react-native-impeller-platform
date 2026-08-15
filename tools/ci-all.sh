@@ -101,4 +101,21 @@ echo "### gate 11: package selftest (what a user's npm test runs)"
 echo "### gate 12: workflow policy"
 bash tools/ci-workflows.sh | tail -2
 
+# ⛔ GATE 13 IS THE ONLY ONE THAT TESTS npm's SELECTION MECHANISM.
+# Every other consumer gate installs the tarballs BY PATH, which hand-places
+# both packages and therefore proves nothing about `optionalDependencies` +
+# `os`/`cpu` — the mechanism that decides whether a real user gets an engine at
+# all. npm skips an optional dependency it cannot use AND EXITS 0, so every
+# failure mode there is silent: a wrong os field, a typo'd triple, a version
+# skew all yield a clean install with no engine.
+#
+# It runs a real private registry (verdaccio) on loopback, publishes with the
+# real `npm publish`, and installs BY NAME. Nothing leaves the machine: the
+# script refuses to run unless the target URL resolves to loopback, and it uses
+# a throwaway .npmrc so the developer's npmjs credentials are never read.
+#
+# Last, because it is the slowest and depends on staged engines existing.
+echo "### gate 13: install from a real registry (by name)"
+bash tools/ci-registry.sh | tail -3
+
 echo "ALL_GATES_PASS"

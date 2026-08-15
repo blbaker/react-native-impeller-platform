@@ -87,6 +87,46 @@ all the gates need. Cocoa cannot open a window from an SSH session
 (`launchctl managername` is `Background`), so a visible window requires a
 Terminal in the GUI session.
 
+## Local development against a real registry
+
+The install commands above use tarball paths, which is fine for a smoke test and
+**does not exercise the mechanism a real user depends on**: npm reading
+`optionalDependencies` off `@react-native-impeller/core` and selecting the one
+engine whose `os`/`cpu` match the host. Installing a tarball by path hand-places
+the package and bypasses that selection entirely.
+
+To develop against the real thing, run a private registry locally:
+
+```bash
+bash tools/ci-registry.sh          # publishes + installs by name, then cleans up
+```
+
+That script starts verdaccio on `127.0.0.1:4873`, publishes every built package
+with the real `npm publish`, installs `@react-native-impeller/core` **by name**
+into a pristine app, and asserts npm picked the right engine (and only that
+one). It is gate 13 in `tools/ci-all.sh`.
+
+To keep a registry running and point your own app at it:
+
+```bash
+npx verdaccio --listen 4873                      # terminal 1
+cd package && npm publish --registry http://127.0.0.1:4873
+cd ../packages-engine/engine-$(node -p 'process.platform+"-"+process.arch') \
+  && npm publish --registry http://127.0.0.1:4873
+
+# in YOUR app — exactly what a published install will look like
+npm install @react-native-impeller/core --registry http://127.0.0.1:4873
+```
+
+Bump the version in every `package.json` before re-publishing; a registry
+refuses to overwrite an existing version, the same as npmjs.
+
+> **Safety:** `tools/ci-registry.sh` refuses to run unless the registry URL
+> resolves to loopback, and writes a throwaway `.npmrc` in its work directory
+> rather than touching `~/.npmrc`, so it cannot reach npmjs or read your
+> credentials. Publishing to npm proper stays gated behind `RNI_PUBLISH_ENABLED`
+> in the release workflow.
+
 ## Using a locally built engine
 
 Any platform can be driven by a binary you built yourself:
