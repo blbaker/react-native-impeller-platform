@@ -17,12 +17,20 @@
 const fs = require('fs');
 const path = require('path');
 
+// ⛔ THIS SET IS A PROMISE, NOT A ROADMAP (P7, 2026-08-14)
+//
+// A triple listed here with no published engine package produces the WORST
+// possible failure: npm silently skips a missing optionalDependency and exits
+// 0, so the user gets a clean install with no engine, then hits the "Missing
+// engine package" error below — which instructs them to install a package that
+// does not exist. A good error message with an impossible instruction.
+//
+// So a triple joins this list when its engine package is BUILT, not when it is
+// planned. `tools/ci-release-meta.sh` fails the build if the two ever disagree.
+// darwin-arm64/darwin-x64/linux-arm64 belong here the moment P6 ships them.
 const SUPPORTED = new Set([
   'linux-x64',
-  'linux-arm64',
   'win32-x64',
-  'darwin-x64',
-  'darwin-arm64',
 ]);
 
 function hostTriple(platform = process.platform, arch = process.arch) {
@@ -62,9 +70,15 @@ function resolveEngine(opts = {}) {
   }
 
   if (!SUPPORTED.has(triple)) {
+    // Name the escape hatch. A developer on an unsupported triple can very
+    // often BUILD the engine (the port is source-available and the SDK ships
+    // prebuilts for more platforms than we publish packages for); dead-ending
+    // them with "unsupported" hides a path that works today.
     throw new Error(
-      `react-native-impeller has no engine build for ${triple}.\n` +
-        `Supported: ${[...SUPPORTED].join(', ')}`
+      `react-native-impeller has no published engine build for ${triple}.\n` +
+        `Published: ${[...SUPPORTED].join(', ')}\n\n` +
+        'If you can build the engine for this platform, point the resolver at it:\n\n' +
+        '    export IMPELLER_ENGINE_BINARY=/path/to/rn-impeller\n'
     );
   }
 

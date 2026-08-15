@@ -21,10 +21,7 @@
   },
   "optionalDependencies": {
     "@react-native-impeller/engine-linux-x64": "0.0.1",
-    "@react-native-impeller/engine-linux-arm64": "0.0.1",
-    "@react-native-impeller/engine-win32-x64": "0.0.1",
-    "@react-native-impeller/engine-darwin-x64": "0.0.1",
-    "@react-native-impeller/engine-darwin-arm64": "0.0.1"
+    "@react-native-impeller/engine-win32-x64": "0.0.1"
   },
   "engines": {
     "node": ">=20"

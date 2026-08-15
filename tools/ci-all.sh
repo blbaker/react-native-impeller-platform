@@ -82,4 +82,14 @@ echo "### gate 9: darwin staging fetchers"
 bash tools/sdk-fetch-darwin.sh | tail -2
 ANGLE_PLATFORM=darwin-arm64 bash tools/angle-fetch.sh | tail -1
 
+# ⛔ THE RELEASE GATE RUNS ON EVERY HOST, LIKE THE DARWIN FETCHERS.
+# It reads package metadata and touches no engine, so any box can run it — and
+# a version-lockstep or shipped-files defect found here is free, while the same
+# defect found after `npm publish` is a version burned forever.
+echo "### gate 10: release metadata"
+bash tools/ci-release-meta.sh | tail -2
+
+echo "### gate 11: package selftest (what a user's npm test runs)"
+(cd package && node src/selftest.js | tail -2)
+
 echo "ALL_GATES_PASS"
