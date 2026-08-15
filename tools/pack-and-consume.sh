@@ -95,9 +95,19 @@ npm install --no-audit --no-fund --silent "$ENGINE_TGZ" "$MAIN_TGZ" \
 echo "== 4. resolver finds the engine from the CONSUMER's node_modules =="
 RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
-case "$RESOLVED" in
-  "$APP"/node_modules/@react-native-impeller/*) echo "   $RESOLVED" ;;
-  *) fail "resolver returned an out-of-app path: $RESOLVED" ;;
+# ⛔ COMPARE REALPATHS, NOT THE STRINGS THE SHELL HAPPENS TO HOLD.
+# On macOS $TMPDIR lives under /var, which is a symlink to /private/var. mktemp
+# hands back the /var spelling while node's require.resolve returns the resolved
+# /private/var one, so a prefix match on the raw strings fails even though both
+# name the SAME directory — a false "resolver escaped the app" on darwin only.
+# pwd -P gives the canonical form of the app dir; realpath does the same for the
+# resolved binary (python3 as the fallback, since macOS has no coreutils
+# realpath by default).
+APP_REAL="$(cd "$APP" && pwd -P)"
+RESOLVED_REAL="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$RESOLVED")"
+case "$RESOLVED_REAL" in
+  "$APP_REAL"/node_modules/@react-native-impeller/*) echo "   $RESOLVED" ;;
+  *) fail "resolver returned an out-of-app path: $RESOLVED_REAL (app=$APP_REAL)" ;;
 esac
 
 echo "== 5. init-impeller (scaffold) =="
