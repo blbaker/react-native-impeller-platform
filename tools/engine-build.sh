@@ -37,8 +37,24 @@ esac
 
 SDK="${IMPELLER_SDK:-engine/third_party/impeller-sdk}"
 [ -f "${SDK}/include/impeller.h" ] || bash tools/sdk-fetch.sh "${SDK}"
-[ -f "engine/third_party/hermes-build/lib/libhermesvm.so" ] || bash tools/hermes-build.sh
+
+# ⛔ ORDER IS LOAD-BEARING: THE RN PIN INSTALLS BEFORE HERMES BUILDS.
+# hermes-build.sh reads the Hermes tag from
+# engine/rn/node_modules/react-native/sdks/.hermesversion — deriving it from RN
+# rather than hardcoding it is deliberate (an RN bump carries its own Hermes
+# bump). So the install is a PREREQUISITE of the Hermes build, not a peer.
+#
+# These two lines were the other way round, which worked on every developer box
+# and only on developer boxes: node_modules was already there from a previous
+# run, so the dependency was satisfied by history rather than by the script. The
+# first CI run on a clean clone failed here —
+#
+#     hermes-build: FAIL: .../engine/rn/node_modules/react-native not installed
+#
+# a cold-start defect that no amount of green local runs could surface. This is
+# exactly the class of bug CI exists to find, found on its first run.
 [ -d "engine/rn/node_modules/react-native" ] || (cd engine/rn && npm install --ignore-scripts --no-audit --no-fund)
+[ -f "engine/third_party/hermes-build/lib/libhermesvm.so" ] || bash tools/hermes-build.sh
 
 echo "engine-build: configuring + compiling ${TRIPLE} host (cmake)"
 cmake -S engine -B engine/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
