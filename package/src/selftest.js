@@ -77,12 +77,19 @@ check('every engine optionalDependency is pinned exactly, never a range', () => 
   }
 });
 
-check('an unsupported triple is refused, and names the escape hatch', () => {
+check('an unsupported triple is refused, without demanding the user build it', () => {
+  // ⛔ THIS TEST USED TO REQUIRE THE OPPOSITE.
+  // It asserted the error names IMPELLER_ENGINE_BINARY — i.e. it ENFORCED
+  // telling a consumer whose install just failed to go compile a C++ engine.
+  // A test can pin the wrong behaviour just as firmly as the right one; this
+  // one kept contributor workflow in a consumer error path.
   assert.throws(
     () => resolveEngine({platform: 'sunos', arch: 'sparc', env: {}}),
     (e) =>
-      /no published engine build for sunos-sparc/.test(e.message) &&
-      /IMPELLER_ENGINE_BINARY/.test(e.message)
+      /does not support sunos-sparc yet/.test(e.message) &&
+      /Supported: /.test(e.message) &&
+      // The message must NOT hand a consumer a build instruction.
+      !/IMPELLER_ENGINE_BINARY/.test(e.message)
   );
 });
 

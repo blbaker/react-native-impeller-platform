@@ -71,15 +71,22 @@ function resolveEngine(opts = {}) {
   }
 
   if (!SUPPORTED.has(triple)) {
-    // Name the escape hatch. A developer on an unsupported triple can very
-    // often BUILD the engine (the port is source-available and the SDK ships
-    // prebuilts for more platforms than we publish packages for); dead-ending
-    // them with "unsupported" hides a path that works today.
+    // ⛔ DO NOT TELL A CONSUMER TO BUILD THE ENGINE.
+    // This message used to lead with `export IMPELLER_ENGINE_BINARY=...`, which
+    // reads as "the supported fix is to compile a C++ engine yourself" — a
+    // 40-minute Hermes build, a native toolchain, and an env var the app now
+    // depends on forever. That is contributor work leaking into a consumer
+    // error path. A package that needs an env var to function has not shipped.
+    //
+    // Say what is true (this platform is not supported yet) and point at the
+    // one place that will change when it is. The env var is still honoured and
+    // still documented under contributing — it is simply not the answer we hand
+    // to someone whose install just failed.
     throw new Error(
-      `@react-native-impeller/core has no published engine build for ${triple}.\n` +
-        `Published: ${[...SUPPORTED].join(', ')}\n\n` +
-        'If you can build the engine for this platform, point the resolver at it:\n\n' +
-        '    export IMPELLER_ENGINE_BINARY=/path/to/rn-impeller\n'
+      `@react-native-impeller/core does not support ${triple} yet.\n` +
+        `Supported: ${[...SUPPORTED].join(', ')}\n\n` +
+        'Track or request platform support:\n' +
+        '    https://github.com/blbaker/react-native-impeller-platform/issues\n'
     );
   }
 

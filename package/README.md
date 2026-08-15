@@ -40,81 +40,73 @@ on screen there (P1 consumer + P2 mount + P3 conformance + P4 module seam).
 **A platform is listed only once its engine package actually exists.** npm
 silently skips a missing optional dependency and exits 0, so declaring a
 platform we cannot ship would give you a clean install with no engine — and
-then an error telling you to install a package that does not exist. If your
-platform is not listed, `resolveEngine` says so directly and points at
-`IMPELLER_ENGINE_BINARY`.
+then an error telling you to install a package that does not exist.
 
-## Using it on macOS today (before the first npm release)
+If your platform is not listed, it is not supported yet. `resolveEngine` says so
+directly rather than failing obscurely at runtime.
 
-darwin-arm64 (Apple Silicon) is fully supported by the code; it just is not
-published yet. Two ways to consume it right now, both exercised by
-`tools/pack-and-consume.sh` on a real Mac:
+## Not published yet — what that means for you
 
-**1. Install from packed tarballs** — the closest thing to the published
-experience, and the one the consumer gate actually runs:
+Until the first release lands on npm there is no consumer story, and this
+README will not pretend otherwise. **Do not build the engine to use this
+package.** Compiling Hermes from source, installing Xcode and cmake, packing
+tarballs by hand, or running a local registry are all things a *contributor to
+this repo* does. A consumer runs `npm install` and nothing else.
+
+If you want to use `@react-native-impeller/core` in an app today, the honest
+answer is: wait for the release. The install above is the entire intended
+experience, and it is one command deliberately — the engine arrives as an
+optional dependency selected by your platform, with no build step, no native
+toolchain, and no environment variables.
+
+`IMPELLER_ENGINE_BINARY` exists for engine development, not for consumption. If
+you find yourself setting it in an app, something is wrong with the package and
+that is a bug worth reporting.
+
+---
+
+# Contributing to this repo
+
+Everything below is for working ON react-native-impeller. None of it is
+required — or appropriate — for using the published package.
+
+## Building the engine
 
 ```bash
-# in the react-native-impeller checkout, on the Mac
-bash tools/engine-build.sh darwin arm64          # builds + stages the engine
-(cd packages-engine/engine-darwin-arm64 && npm pack --pack-destination /tmp)
-(cd package && npm pack --pack-destination /tmp)
-
-# in YOUR app
-npm install /tmp/react-native-impeller-engine-darwin-arm64-0.0.1.tgz \
-            /tmp/react-native-impeller-core-0.0.1.tgz
-npx react-native init-impeller                   # scaffolds impeller/, wraps metro.config.js
-npx react-native run-impeller                    # bundles for --platform impeller and runs
+bash tools/engine-build.sh <platform> <arch>   # e.g. darwin arm64
 ```
 
-**2. Point at a locally built engine** — no packing, best while iterating on the
-engine itself:
+Needs a C++ toolchain, `cmake`, `ninja` and Node 18+ (on macOS: full Xcode, not
+just Command Line Tools). The first run compiles Hermes from source at the exact
+tag React Native pins — budget ~40 minutes; later builds reuse it.
+
+## Testing the consumer experience
+
+Two gates, in increasing fidelity:
 
 ```bash
-export IMPELLER_ENGINE_BINARY=/path/to/react-native-impeller/packages-engine/engine-darwin-arm64/bin/rn-impeller
+bash tools/pack-and-consume.sh   # installs packed tarballs into a pristine app
+bash tools/ci-registry.sh        # publishes to a local registry, installs BY NAME
 ```
 
-### Requirements on the Mac
+The second is the one that matters. Installing a tarball by path hand-places the
+package and **cannot** exercise what a real user hits: npm reading
+`optionalDependencies` and selecting the one engine whose `os`/`cpu` match. npm
+skips an optional dependency it cannot use *and exits 0*, so every failure in
+that path is silent. `ci-registry.sh` runs verdaccio on loopback, publishes with
+the real `npm publish`, installs by name, and asserts both that the host's
+engine arrived and that no foreign-platform engine did. It is gate 13 in
+`tools/ci-all.sh`.
 
-Xcode (full, not just Command Line Tools), plus `cmake` and `ninja`
-(`brew install cmake ninja`) and Node 18+. The first build compiles Hermes from
-source at the exact tag React Native pins — budget ~40 minutes on 8 cores; every
-build after that reuses it.
-
-### ⚠️ Headless only over SSH
-
-The engine renders offscreen through ANGLE→Metal and writes a `.ppm`, which is
-all the gates need. Cocoa cannot open a window from an SSH session
-(`launchctl managername` is `Background`), so a visible window requires a
-Terminal in the GUI session.
-
-## Local development against a real registry
-
-The install commands above use tarball paths, which is fine for a smoke test and
-**does not exercise the mechanism a real user depends on**: npm reading
-`optionalDependencies` off `@react-native-impeller/core` and selecting the one
-engine whose `os`/`cpu` match the host. Installing a tarball by path hand-places
-the package and bypasses that selection entirely.
-
-To develop against the real thing, run a private registry locally:
+To keep a registry up and point a scratch app at it:
 
 ```bash
-bash tools/ci-registry.sh          # publishes + installs by name, then cleans up
-```
-
-That script starts verdaccio on `127.0.0.1:4873`, publishes every built package
-with the real `npm publish`, installs `@react-native-impeller/core` **by name**
-into a pristine app, and asserts npm picked the right engine (and only that
-one). It is gate 13 in `tools/ci-all.sh`.
-
-To keep a registry running and point your own app at it:
-
-```bash
-npx verdaccio --listen 4873                      # terminal 1
+npx verdaccio --listen 127.0.0.1:4873
 cd package && npm publish --registry http://127.0.0.1:4873
 cd ../packages-engine/engine-$(node -p 'process.platform+"-"+process.arch') \
   && npm publish --registry http://127.0.0.1:4873
 
-# in YOUR app — exactly what a published install will look like
+# in a scratch app — exactly what a published install will look like
 npm install @react-native-impeller/core --registry http://127.0.0.1:4873
 ```
 
@@ -127,17 +119,21 @@ refuses to overwrite an existing version, the same as npmjs.
 > credentials. Publishing to npm proper stays gated behind `RNI_PUBLISH_ENABLED`
 > in the release workflow.
 
-## Using a locally built engine
+## Using a locally built engine (engine development only)
 
-Any platform can be driven by a binary you built yourself:
+`IMPELLER_ENGINE_BINARY` points the resolver at a binary you built yourself:
 
 ```bash
 export IMPELLER_ENGINE_BINARY=/path/to/rn-impeller
 ```
 
-This takes priority over the installed engine package and skips the version
-lockstep check — it is the supported path for engine development and for
-platforms with no published package yet.
+It takes priority over the installed engine package and skips the version
+lockstep check.
+
+> **This is not a consumer workaround.** It exists so engine developers can test
+> a build without packing it. If a platform has no published engine package, the
+> answer is to publish one — not to tell users to set an environment variable.
+> A package that requires an env var to function has not shipped.
 
 ## Versioning
 
