@@ -25,8 +25,16 @@
 # outside the repo — because a seam that only works from the repo is not
 # shipped.
 set -euo pipefail
+# ⛔ RESOLVE tools/ BEFORE the cd. Sourcing via "$(dirname "$0")/..." AFTER it
+# re-resolves a relative $0 against the repo root and silently looks for
+# <repo>/ci-triple.sh — a miss that only shows when the gate is invoked from
+# inside tools/.
+CI_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+# Host triple (RNI_PLATFORM / RNI_ARCH / RNI_TRIPLE / RNI_ENGINE_PKG). Replaces
+# the hardcoded "linux x64" that made this gate unrunnable on any other host.
+. "$CI_TOOLS/ci-triple.sh"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
 FIXTURE="$ROOT/fixtures/p4-modules"
 
@@ -37,8 +45,8 @@ fail() { echo "P4_MODULES_FAIL: $*" >&2; exit 1; }
 # which is why CI could not run this gate at all.
 [ -d "$BASE_APP/node_modules/react-native" ] || bash tools/base-app.sh
 [ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP (tools/base-app.sh failed)"
-bash tools/engine-build.sh linux x64 > /dev/null || fail "engine build failed"
-ENGINE_LOCAL="$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller"
+bash tools/engine-build.sh "$RNI_PLATFORM" "$RNI_ARCH" > /dev/null || fail "engine build failed"
+ENGINE_LOCAL="$ROOT/${RNI_ENGINE_PKG}/bin/rn-impeller"
 
 WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
@@ -87,7 +95,7 @@ echo "   D7 set present: Appearance AlertManager StatusBarManager DevSettings Li
 
 # ---------------------------------------------------------------------------
 echo "== 3. pack + install into a pristine app OUTSIDE the repo =="
-ENGINE_TGZ="$(cd packages-engine/engine-linux-x64 && npm pack --silent --pack-destination "$WORK")"
+ENGINE_TGZ="$(cd "${RNI_ENGINE_PKG}" && npm pack --silent --pack-destination "$WORK")"
 MAIN_TGZ="$(cd package && npm pack --silent --pack-destination "$WORK")"
 APP="$WORK/ModuleSeamApp"
 cp -r "$BASE_APP" "$APP"

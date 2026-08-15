@@ -19,8 +19,16 @@
 # A base app is required (it takes minutes to create, so it is cached):
 #   BASE_APP=~/.cache/rni/base  (override with $BASE_APP)
 set -euo pipefail
+# ⛔ RESOLVE tools/ BEFORE the cd. Sourcing via "$(dirname "$0")/..." AFTER it
+# re-resolves a relative $0 against the repo root and silently looks for
+# <repo>/ci-triple.sh — a miss that only shows when the gate is invoked from
+# inside tools/.
+CI_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+# Host triple (RNI_PLATFORM / RNI_ARCH / RNI_TRIPLE / RNI_ENGINE_PKG). Replaces
+# the hardcoded "linux x64" that made this gate unrunnable on any other host.
+. "$CI_TOOLS/ci-triple.sh"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
 
 fail() { echo "PACK_AND_CONSUME_FAIL: $*" >&2; exit 1; }
@@ -30,7 +38,7 @@ fail() { echo "PACK_AND_CONSUME_FAIL: $*" >&2; exit 1; }
 # which is why CI could not run this gate at all.
 [ -d "$BASE_APP/node_modules/react-native" ] || bash tools/base-app.sh
 [ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP (tools/base-app.sh failed)"
-[ -x packages-engine/engine-linux-x64/bin/rn-impeller ] || bash tools/engine-build.sh linux x64
+[ -x "${RNI_ENGINE_PKG}/bin/rn-impeller" ] || bash tools/engine-build.sh "$RNI_PLATFORM" "$RNI_ARCH"
 
 WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
@@ -38,7 +46,7 @@ cleanup() { [ "$KEEP" = "1" ] && echo "workdir kept: $WORK" || rm -rf "$WORK"; }
 trap cleanup EXIT
 
 echo "== 1. pack =="
-ENGINE_TGZ="$(cd packages-engine/engine-linux-x64 && npm pack --silent --pack-destination "$WORK")"
+ENGINE_TGZ="$(cd "${RNI_ENGINE_PKG}" && npm pack --silent --pack-destination "$WORK")"
 MAIN_TGZ="$(cd package && npm pack --silent --pack-destination "$WORK")"
 ENGINE_TGZ="$WORK/$ENGINE_TGZ"; MAIN_TGZ="$WORK/$MAIN_TGZ"
 echo "   $(basename "$ENGINE_TGZ") $(du -h "$ENGINE_TGZ" | cut -f1)"
@@ -76,7 +84,7 @@ fs.writeFileSync("app.json", JSON.stringify(a,null,2));
 npm install --no-audit --no-fund --silent "$ENGINE_TGZ" "$MAIN_TGZ" \
   || fail "npm install of the tarballs failed"
 [ -d node_modules/@react-native-impeller/core ] || fail "main package not installed"
-[ -d node_modules/@react-native-impeller/engine-linux-x64 ] || fail "engine package not installed"
+[ -d "node_modules/@react-native-impeller/engine-${RNI_TRIPLE}" ] || fail "engine package not installed"
 
 echo "== 4. resolver finds the engine from the CONSUMER's node_modules =="
 RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \

@@ -2,6 +2,12 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#if defined(__APPLE__)
+// EGL_PLATFORM_ANGLE_* live ONLY in ANGLE's own extension header, not in the
+// Khronos eglext.h (grep: 0 hits there, 3 here). Vendored alongside the other
+// Khronos headers. Windows includes it via WinGLSurface for the same reason.
+#include <EGL/eglext_angle.h>
+#endif
 #include <GLES3/gl3.h>
 
 #include <cstdio>
@@ -32,12 +38,62 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   auto getPlatformDisplay =
       (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
   if (!getPlatformDisplay) return fail("eglGetPlatformDisplayEXT unavailable");
-  EGLDisplay dpy = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA,
-                                      EGL_DEFAULT_DISPLAY, nullptr);
+  // ⛔ THE DISPLAY PATH IS PER-PLATFORM, AND SO IS THE CAST.
+  //
+  // Linux/Mesa: EGL_PLATFORM_SURFACELESS_MESA is the whole trick — it yields a
+  // display with no display server at all.
+  //
+  // macOS: that enum is a MESA extension and ANGLE does not implement it. The
+  // same job is done by EGL_PLATFORM_ANGLE_ANGLE with a backend type, exactly
+  // as WinGLSurface does for D3D11 — here METAL, then ANGLE's own default.
+  // The chosen backend is PRINTED, never inferred: a silent fallback renders
+  // correctly and identically, which is precisely how a platform gets declared
+  // working on a path it never actually took.
+  //
+  // ⚠️ AND EGL_DEFAULT_DISPLAY IS NOT THE SAME TYPE EVERYWHERE. eglplatform.h
+  // makes EGLNativeDisplayType a POINTER on Linux/Windows but a plain `int` on
+  // Apple, so passing EGL_DEFAULT_DISPLAY straight into the void* parameter is
+  // a hard compile error on macOS only.
+  //
+  // ⛔ ONE reinterpret_cast, NOT static_cast — and the Linux build is what
+  // proved it. A first attempt used static_cast<intptr_t> to widen Apple's int,
+  // which is exactly right on Apple and ILLEGAL on Linux, where the operand is
+  // already a void* ("invalid static_cast from void* to intptr_t"). A cast
+  // written for the new platform must still compile on the old one;
+  // reinterpret_cast is the one spelling valid for both an integer and a
+  // pointer source, so this stays a single code path.
+  EGLDisplay dpy = EGL_NO_DISPLAY;
+  auto nativeDefaultDisplay = []() -> void* {
+    return reinterpret_cast<void*>(EGL_DEFAULT_DISPLAY);
+  };
+
+#if defined(__APPLE__)
+  struct Attempt { const char* name; EGLint type; };
+  const Attempt attempts[] = {
+      {"METAL", EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE},
+      {"DEFAULT", EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE},
+  };
+  for (const auto& a : attempts) {
+    const EGLint dpyAttrs[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, a.type, EGL_NONE};
+    EGLDisplay d = getPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE,
+                                      nativeDefaultDisplay(), dpyAttrs);
+    if (d == EGL_NO_DISPLAY) continue;
+    EGLint maj = 0, min = 0;
+    if (!eglInitialize(d, &maj, &min)) continue;
+    dpy = d;
+    fprintf(stderr, "rn-impeller: ANGLE backend=%s\n", a.name);
+    break;
+  }
+  if (dpy == EGL_NO_DISPLAY) return fail("no ANGLE display could be initialised");
+  display_ = dpy;
+#else
+  dpy = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA,
+                           nativeDefaultDisplay(), nullptr);
   if (dpy == EGL_NO_DISPLAY) return fail("surfaceless eglGetPlatformDisplay failed");
   EGLint major = 0, minor = 0;
   if (!eglInitialize(dpy, &major, &minor)) return fail("eglInitialize failed");
   display_ = dpy;
+#endif
 
   const EGLint cfgAttrs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
                              EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,

@@ -165,16 +165,23 @@ target_include_directories(rn-impeller PRIVATE
   "${RN_ROOT}/React/FBReactNativeSpec"
 )
 
-if(WIN32)
+if(WIN32 OR APPLE)
   # Khronos EGL/GLES3 headers, VENDORED. On Linux these come from the system
-  # (libegl-dev / libgles-dev); Windows has no such package and ANGLE's binary
-  # redistribution is DLLs only — no headers, no import libs. Vendoring them is
-  # ~760 KB of pure declarations and removes a "install these dev packages"
-  # step from every Windows build.
+  # (libegl-dev / libgles-dev); neither Windows nor macOS has such a package,
+  # and ANGLE's binary redistribution is shared libraries only — no headers, no
+  # import libs. Vendoring them is ~760 KB of pure declarations and removes an
+  # "install these dev packages" step from every non-Linux build.
   #
-  # They are headers ONLY. Nothing links against EGL/GLESv2 on Windows —
-  # WinGLSurface resolves every entry point with GetProcAddress — so these
-  # supply types, enums and the calling-convention macros, and no symbols.
+  # ⛔ macOS NEEDS THESE FOR THE SAME REASON WINDOWS DOES, AND IT IS EASY TO
+  # ASSUME OTHERWISE. Apple ships OpenGL headers, so <OpenGL/gl.h> exists and a
+  # reader concludes "macOS has GL, it's fine". It has DESKTOP GL 2.1 and no
+  # EGL whatsoever — HeadlessSurface.cpp includes <EGL/egl.h> and the darwin
+  # build died on exactly that after compiling 337 of 355 objects.
+  #
+  # They are headers ONLY. Nothing links against EGL/GLESv2 on either platform —
+  # the surface implementations resolve every entry point dynamically
+  # (GetProcAddress / dlsym) — so these supply types, enums and calling
+  # conventions, and no symbols.
   #
   # Includes EGL/eglext_angle.h, which is NOT part of the Khronos eglext.h and
   # is where EGL_PLATFORM_ANGLE_ANGLE and the TYPE_* backend tokens live.
@@ -293,6 +300,27 @@ if(WIN32)
   # point with LoadLibrary/GetProcAddress. shlwapi/shell32 are for ShellExecuteW
   # in LinkingManager.
   target_link_libraries(rn-impeller PRIVATE shell32 shlwapi)
+elseif(APPLE)
+  # ⛔ SAME REASON AS WINDOWS: DO NOT LINK EGL/GLESv2 BY NAME.
+  # ANGLE's macOS redistribution is libEGL.dylib + libGLESv2.dylib with no
+  # headers; falling through to the Linux branch would pass `-lEGL -lGLESv2`
+  # and fail with "library not found" — the system has neither.
+  #
+  # Unlike Windows DLLs, a Mach-O dylib IS directly linkable, so HeadlessSurface
+  # compiles unchanged (it calls eglGetProcAddress directly) and no macOS
+  # equivalent of WinGLSurface is needed.
+  #
+  # ⚠️ BUT ANGLE'S INSTALL NAME IS `./libEGL.dylib` — measured with `otool -D`,
+  # not assumed. That is Electron's convention and it resolves against the
+  # PROCESS WORKING DIRECTORY, not the binary. Linked as-is, the packaged engine
+  # would load only when launched from its own bin/ and fail everywhere else —
+  # the precise class of defect the consumer gate exists to catch. Rewritten to
+  # @loader_path at install time below.
+  target_link_libraries(rn-impeller PRIVATE
+    "${ANGLE_DIR}/libEGL.dylib"
+    "${ANGLE_DIR}/libGLESv2.dylib"
+    "-framework CoreFoundation"
+    "-framework Foundation")
 else()
   target_link_libraries(rn-impeller PRIVATE EGL GLESv2)
 endif()
@@ -304,9 +332,16 @@ endif()
 # why packaging goes through install rather than copying build/rn-impeller.
 # This box has neither patchelf nor chrpath, and a copied binary keeps absolute
 # build-tree rpaths that only resolve on the machine that built it.
+#
+# macOS spells $ORIGIN as @loader_path; the ELF token is meaningless to dyld.
+if(APPLE)
+  set(_install_rpath "@loader_path")
+else()
+  set(_install_rpath "$ORIGIN")
+endif()
 set_target_properties(rn-impeller PROPERTIES
-  BUILD_RPATH "${HERMES_BUILD}/lib;${IMPELLER_SDK}/lib"
-  INSTALL_RPATH "$ORIGIN"
+  BUILD_RPATH "${HERMES_BUILD}/lib;${IMPELLER_SDK}/lib;${ANGLE_DIR}"
+  INSTALL_RPATH "${_install_rpath}"
   BUILD_WITH_INSTALL_RPATH FALSE
 )
 
@@ -362,6 +397,66 @@ if(WIN32)
   endif()
   install(FILES ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
           DESTINATION bin COMPONENT engine)
+elseif(APPLE)
+  # macOS DOES have an rpath (@loader_path, set above), so unlike Windows the
+  # libraries do not have to sit beside the binary for the loader to find
+  # them — but they DO have to ship, and their install names have to be fixed.
+  #
+  # ⛔ HERMES BUILDS A FRAMEWORK ON macOS, NOT A .dylib.
+  # The artifact is lib/hermesvm.framework/Versions/0/hermesvm — there is no
+  # libhermesvm.dylib anywhere in the tree. Measured after the first real Mac
+  # build; assuming the Linux name here yields "file INSTALL cannot find".
+  # ⛔ HERMES IS A FRAMEWORK ON macOS, AND ITS *STRUCTURE* MUST SHIP.
+  # The artifact is lib/hermesvm.framework/Versions/0/hermesvm, and the linked
+  # executable references it as
+  #   @rpath/hermesvm.framework/Versions/0/hermesvm
+  # — a PATH, not a bare name. Staging the framework's binary as a flat file
+  # called `hermesvm` therefore produced a package that linked cleanly and died
+  # at dyld:
+  #
+  #   Library not loaded: @rpath/hermesvm.framework/Versions/0/hermesvm
+  #   tried: .../bin/hermesvm.framework/Versions/0/hermesvm (no such file)
+  #
+  # Copy the framework DIRECTORY so the path the binary asks for exists
+  # relative to @loader_path.
+  install(DIRECTORY "${HERMES_BUILD}/lib/hermesvm.framework"
+          DESTINATION bin COMPONENT engine
+          USE_SOURCE_PERMISSIONS)
+  install(FILES
+    "${IMPELLER_RUNTIME}"
+    "${ANGLE_DIR}/libEGL.dylib"
+    "${ANGLE_DIR}/libGLESv2.dylib"
+    "${ANGLE_DIR}/LICENSE.electron"
+    DESTINATION bin COMPONENT engine)
+
+  # ⛔ REWRITE THE INSTALL NAMES, OR THE PACKAGE ONLY RUNS FROM ITS OWN bin/.
+  # ANGLE ships with install name `./libEGL.dylib` (Electron's convention,
+  # confirmed with `otool -D`), and the Impeller SDK ships `./libimpeller.dylib`
+  # the same way — dyld resolves those against the PROCESS WORKING DIRECTORY.
+  # A consumer launching the engine from their app root would get "image not
+  # found" for a file sitting right next to the binary.
+  #
+  # This was NOT predicted: the engine-build gate caught it on the first
+  # successful darwin link ("staged binary links non-relocatable paths:
+  # ./libimpeller.dylib"), which is exactly the delivery defect that gate
+  # exists to find. Every shipped dylib gets its ID rewritten, and every
+  # reference inside the executable is repointed at @loader_path.
+  install(CODE "
+    set(_bin \"\${CMAKE_INSTALL_PREFIX}/bin\")
+    foreach(_lib libEGL.dylib libGLESv2.dylib libimpeller.dylib)
+      execute_process(COMMAND install_name_tool -id \"@loader_path/\${_lib}\" \"\${_bin}/\${_lib}\")
+    endforeach()
+    execute_process(COMMAND install_name_tool -id \"@loader_path/hermesvm.framework/Versions/0/hermesvm\" \"\${_bin}/hermesvm.framework/Versions/0/hermesvm\")
+    execute_process(COMMAND install_name_tool
+      -change \"./libEGL.dylib\"      \"@loader_path/libEGL.dylib\"
+      -change \"./libGLESv2.dylib\"   \"@loader_path/libGLESv2.dylib\"
+      -change \"./libimpeller.dylib\" \"@loader_path/libimpeller.dylib\"
+      \"\${_bin}/rn-impeller\")
+    # libGLESv2 references libEGL by the same relative name.
+    execute_process(COMMAND install_name_tool
+      -change \"./libEGL.dylib\" \"@loader_path/libEGL.dylib\"
+      \"\${_bin}/libGLESv2.dylib\")
+  " COMPONENT engine)
 else()
   install(FILES
     "${IMPELLER_RUNTIME}"
