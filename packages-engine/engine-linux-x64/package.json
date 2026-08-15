@@ -1,9 +1,12 @@
 {
   "name": "@react-native-impeller/engine-linux-x64",
   "version": "0.0.1",
-  "description": "Prebuilt Impeller engine host for linux-x64 (installed automatically by react-native-impeller)",
+  "description": "Prebuilt Impeller engine host for linux-x64 (installed automatically by @react-native-impeller/core)",
   "license": "MIT",
   "files": ["bin", "README.md"],
+  "publishConfig": {
+    "access": "restricted"
+  },
   "os": ["linux"],
   "cpu": ["x64"]
 }

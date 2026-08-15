@@ -3,7 +3,17 @@
   "version": "0.0.1",
   "description": "Prebuilt Impeller engine host for win32-x64 (installed automatically by react-native-impeller)",
   "license": "MIT",
-  "files": ["bin", "README.md"],
-  "os": ["win32"],
-  "cpu": ["x64"]
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ]
 }

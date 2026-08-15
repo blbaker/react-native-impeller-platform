@@ -52,7 +52,7 @@ cp "$FIXTURE/index.js" "$APP/index.js"
 cp "$FIXTURE/fixture.json" "$APP/fixture.json"
 
 npx --no-install react-native init-impeller 2>&1 | sed 's/^/   /' || fail "init-impeller failed"
-RESOLVED="$(node node_modules/react-native-impeller/src/bin/engine-path.js)" || fail "engine resolver failed"
+RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" || fail "engine resolver failed"
 
 echo "== 3. bundle --platform impeller =="
 npx --no-install react-native bundle --platform impeller --dev false \

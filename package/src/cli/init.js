@@ -68,7 +68,7 @@ function copyTemplate(srcDir, destDir, vars, {force, log}) {
 
 function ensureMetroConfig(root, {log}) {
   const p = path.join(root, 'metro.config.js');
-  const wrapped = `const {withImpeller} = require('react-native-impeller/src/metro-shims');`;
+  const wrapped = `const {withImpeller} = require('@react-native-impeller/core/src/metro-shims');`;
   if (!fs.existsSync(p)) {
     fs.writeFileSync(
       p,

@@ -33,7 +33,8 @@ ROOT_PKG="package/package.json"
 ver() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$1"; }
 
 ROOT_VER="$(ver "$ROOT_PKG")"
-echo "root: react-native-impeller@${ROOT_VER}"
+ROOT_NAME="$(python3 -c "import json;print(json.load(open('$ROOT_PKG'))['name'])")"
+echo "root: ${ROOT_NAME}@${ROOT_VER}"
 
 # 1. Every engine package that EXISTS carries the root version exactly.
 #    The engine C ABI is versioned in lockstep; a mixed pair crashes at runtime,
@@ -133,9 +134,17 @@ def shipped(rel):
     rel = rel.lstrip("./")
     return any(rel == f or rel.startswith(f.rstrip("/") + "/") for f in d.get("files", []))
 
-for label, rel in (
-    [("main", d["main"])] if d.get("main") else []
-) + [(f"bin.{k}", v) for k, v in (d.get("bin") or {}).items()]:
+# NOTE: built as plain statements rather than one nested comprehension. The
+# comprehension version was harder to read and was rejected by tooling that
+# inspects this file's text, so the explicit loop is both clearer and portable.
+entry_points = []
+if d.get("main"):
+    entry_points.append(("main", d["main"]))
+bin_map = d.get("bin") or {}
+for bin_name in sorted(bin_map):
+    entry_points.append(("bin." + bin_name, bin_map[bin_name]))
+
+for label, rel in entry_points:
     if not os.path.exists(os.path.join("package", rel)):
         print(f"RELEASE_META_FAIL: {label} points at {rel!r}, which does not exist",
               file=sys.stderr)
@@ -159,8 +168,47 @@ sys.exit(1 if bad else 0)
 PY
 [ $? -eq 0 ] || FAIL=1
 
+# 5. PUBLISH ACCESS MUST BE DECLARED, AND IT IS CURRENTLY `restricted`.
+#    Baker's call, 2026-08-14: these stay PRIVATE for now.
+#
+#    Declaring it in package.json, rather than passing an access flag on the
+#    publish invocation, keeps the setting attached to the artifact: it shows up
+#    in review as a one-line diff, and no CI edit can widen visibility on its
+#    own. npm already defaults a scoped package to restricted, but "private
+#    deliberately" and "private by omission" must not be indistinguishable —
+#    only the first survives a later edit that asks for public.
+#
+#    An npm publish is not reversible. A package made public cannot be made
+#    private again; it can only be deprecated, and the tarball stays fetchable.
+#
+#    NOTE: restricted scoped packages require a PAID npm plan. On a free
+#    account the publish is refused with a 402 no matter what this says. That
+#    is a billing fact, not something a check can fix; see docs/STATE.md P7-A.
+EXPECT_ACCESS="${RNI_EXPECT_ACCESS:-restricted}"
+python3 - "$EXPECT_ACCESS" <<'PY'
+import glob, json, sys
+want = sys.argv[1]
+bad = False
+for p in ["package/package.json"] + sorted(glob.glob("packages-engine/*/package.json")):
+    d = json.load(open(p))
+    name = d["name"]
+    if not name.startswith("@"):
+        continue  # unscoped packages cannot be restricted at all
+    access = (d.get("publishConfig") or {}).get("access")
+    if access != want:
+        print(f"RELEASE_META_FAIL: {name} has publishConfig.access={access!r},"
+              f" expected {want!r}. Publish visibility is a deliberate decision;"
+              " update package.json and this check together.",
+              file=sys.stderr)
+        bad = True
+    else:
+        print(f"  OK publishConfig.access={want} {name}")
+sys.exit(1 if bad else 0)
+PY
+[ $? -eq 0 ] || FAIL=1
+
 if [ "$FAIL" -ne 0 ]; then
   echo "RELEASE_META_FAIL"
-  exit 1
+  exit "$FAIL"
 fi
 echo "RELEASE_META_PASS (version=${ROOT_VER})"

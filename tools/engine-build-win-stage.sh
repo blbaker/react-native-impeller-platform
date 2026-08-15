@@ -133,9 +133,12 @@ cat > "${PKG}/package.json" <<JSON
 {
   "name": "@react-native-impeller/engine-${TRIPLE}",
   "version": "${VERSION}",
-  "description": "Prebuilt Impeller engine host for ${TRIPLE} (installed automatically by react-native-impeller)",
+  "description": "Prebuilt Impeller engine host for ${TRIPLE} (installed automatically by @react-native-impeller/core)",
   "license": "MIT",
   "files": ["bin", "README.md"],
+  "publishConfig": {
+    "access": "restricted"
+  },
   "os": ["win32"],
   "cpu": ["${ARCH}"]
 }

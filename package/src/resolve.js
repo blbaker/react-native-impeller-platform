@@ -75,7 +75,7 @@ function resolveEngine(opts = {}) {
     // prebuilts for more platforms than we publish packages for); dead-ending
     // them with "unsupported" hides a path that works today.
     throw new Error(
-      `react-native-impeller has no published engine build for ${triple}.\n` +
+      `@react-native-impeller/core has no published engine build for ${triple}.\n` +
         `Published: ${[...SUPPORTED].join(', ')}\n\n` +
         'If you can build the engine for this platform, point the resolver at it:\n\n' +
         '    export IMPELLER_ENGINE_BINARY=/path/to/rn-impeller\n'
@@ -89,7 +89,7 @@ function resolveEngine(opts = {}) {
   } catch (e) {
     throw new Error(
       `Missing engine package "${pkgName}".\n` +
-        'It ships as an optional dependency of react-native-impeller and should have\n' +
+        'It ships as an optional dependency of @react-native-impeller/core and should\n' +
         'been installed automatically. Install it explicitly:\n\n' +
         `    npm install ${pkgName}@${ownVersion()}\n\n` +
         'Or point IMPELLER_ENGINE_BINARY at a locally built engine.'
@@ -101,7 +101,7 @@ function resolveEngine(opts = {}) {
   if (enginePkg.version !== expected) {
     throw new Error(
       `Engine version mismatch: ${pkgName}@${enginePkg.version} is installed but\n` +
-        `react-native-impeller@${expected} requires exactly ${expected}.\n` +
+        `@react-native-impeller/core@${expected} requires exactly ${expected}.\n` +
         'The engine C ABI is versioned in lockstep; mixed versions crash at runtime.\n\n' +
         `    npm install ${pkgName}@${expected}`
     );

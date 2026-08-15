@@ -32,7 +32,7 @@ function check(name, fn) {
   }
 }
 
-console.log('react-native-impeller selftest');
+console.log('@react-native-impeller/core selftest');
 
 check('host triple is platform-arch', () => {
   assert.strictEqual(hostTriple('linux', 'x64'), 'linux-x64');

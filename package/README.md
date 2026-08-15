@@ -12,8 +12,12 @@ platforms" before installing.
 
 ## Install
 
+> **Private packages.** `@react-native-impeller/*` publishes as **restricted**,
+> so `npm install` works only for accounts granted access to the scope. This is
+> deliberate while the API settles.
+
 ```bash
-npm install react-native-impeller
+npm install @react-native-impeller/core
 ```
 
 The engine binary is not in this package. It installs automatically as an

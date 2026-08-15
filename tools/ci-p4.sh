@@ -188,7 +188,7 @@ console.log(`   LAYER2 ok — ${checked} native methods each declared in the ins
 
 // ---- LAYER 3: the installed copy must be the tarball's copy. A correct
 // tarball with a stale node_modules is a green gate over a broken install.
-const installedShim = path.join(app, 'node_modules/react-native-impeller/src/metro-shims/index.js');
+const installedShim = path.join(app, 'node_modules/@react-native-impeller/core/src/metro-shims/index.js');
 if (!fs.existsSync(installedShim)) {
   fails.push('LAYER3: react-native-impeller is not installed in the consumer app');
 } else {
@@ -215,7 +215,7 @@ echo "== 5. swap in the P4 fixture and bundle --platform impeller =="
 cp "$FIXTURE/index.js" "$APP/index.js"
 cp "$FIXTURE/fixture.json" "$APP/fixture.json"
 npx --no-install react-native init-impeller 2>&1 | sed 's/^/   /' || fail "init-impeller failed"
-RESOLVED="$(node node_modules/react-native-impeller/src/bin/engine-path.js)" || fail "engine resolver failed"
+RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" || fail "engine resolver failed"
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/index.impeller.bundle \
     2>&1 | tail -3 | sed 's/^/   /'

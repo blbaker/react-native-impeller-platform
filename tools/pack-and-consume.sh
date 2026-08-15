@@ -71,11 +71,11 @@ fs.writeFileSync("app.json", JSON.stringify(a,null,2));
 '
 npm install --no-audit --no-fund --silent "$ENGINE_TGZ" "$MAIN_TGZ" \
   || fail "npm install of the tarballs failed"
-[ -d node_modules/react-native-impeller ] || fail "main package not installed"
+[ -d node_modules/@react-native-impeller/core ] || fail "main package not installed"
 [ -d node_modules/@react-native-impeller/engine-linux-x64 ] || fail "engine package not installed"
 
 echo "== 4. resolver finds the engine from the CONSUMER's node_modules =="
-RESOLVED="$(node node_modules/react-native-impeller/src/bin/engine-path.js)" \
+RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
 case "$RESOLVED" in
   "$APP"/node_modules/@react-native-impeller/*) echo "   $RESOLVED" ;;

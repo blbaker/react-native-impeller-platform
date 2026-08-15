@@ -1,5 +1,5 @@
 {
-  "name": "react-native-impeller",
+  "name": "@react-native-impeller/core",
   "version": "0.0.1",
   "description": "Out-of-tree React Native platform rendered with Flutter's Impeller engine",
   "license": "MIT",
@@ -22,6 +22,9 @@
   "optionalDependencies": {
     "@react-native-impeller/engine-linux-x64": "0.0.1",
     "@react-native-impeller/engine-win32-x64": "0.0.1"
+  },
+  "publishConfig": {
+    "access": "restricted"
   },
   "engines": {
     "node": ">=20"

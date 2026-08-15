@@ -46,7 +46,7 @@ mutate() {  # name, python-edit, expected-substring
   out=$(cd "$dir" && bash tools/ci-release-meta.sh 2>&1); rc=$?
   # ASSERT THE POSITIVE HALF FIRST: a mutant that died before the checks ran is
   # a non-zero exit that says nothing about the check under test.
-  if ! grep -q "^root: react-native-impeller@" <<<"$out"; then
+  if ! grep -q "^root: @*react-native-impeller" <<<"$out"; then
     echo "  M$TOTAL $name -> ❌ INCONCLUSIVE (gate never started)"
     echo "$out" | tail -3 | sed 's/^/      /'
     return
@@ -152,6 +152,25 @@ p="package/package.json"
 d=json.load(open(p)); d["files"]=[f for f in d["files"] if f!="src"]
 json.dump(d,open(p,"w"),indent=2)
 ' "NOT covered by"
+
+# M9: publish visibility drifts from the declared decision. These are PRIVATE
+# by Baker's call; a workflow or a careless edit flipping them to public is
+# unrecoverable — an npm publish cannot be taken back, only deprecated.
+mutate "publish access flipped away from the declared value" '
+import json
+p="package/package.json"
+d=json.load(open(p)); d["publishConfig"]={"access":"public"}; json.dump(d,open(p,"w"),indent=2)
+' "expected 'restricted'"
+
+# M10: publishConfig removed entirely. npm would DEFAULT a scoped package to
+# restricted, so the artifact happens to be right — but "private on purpose"
+# and "private because nobody said" must not share an exit status, since only
+# the first survives someone adding --access public to a workflow.
+mutate "publishConfig removed (right answer, no longer a decision)" '
+import json
+p="package/package.json"
+d=json.load(open(p)); d.pop("publishConfig",None); json.dump(d,open(p,"w"),indent=2)
+' "expected 'restricted'"
 
 echo
 if [ "$CAUGHT" -eq "$TOTAL" ]; then
