@@ -106,7 +106,36 @@ jobs:
       - name: Run all gates
         run: bash tools/ci-all.sh
 
+      # ⛔ CI IS THE ONE HOST WHERE actionlint MUST NOT BE OPTIONAL.
+      # tools/ci-workflows.sh treats it as an announced skip, because requiring
+      # a downloaded binary would make a fresh clone red for a reason unrelated
+      # to the code. That is right for a laptop and wrong here — the FIRST green
+      # CI run reported:
+      #
+      #   SKIPPED actionlint — not installed. Expression/schema errors are NOT
+      #   covered by the policy rules above.
+      #
+      # So the gate went green having never run the layer that catches a typo'd
+      # expression context (`varz.RNI_PUBLISH_ENABLED` is valid YAML, satisfies
+      # every policy rule, and fails on the runner). Install it, and set
+      # RNI_REQUIRE_ACTIONLINT=1 so a future install failure is a RED GATE
+      # rather than a silent downgrade back to policy-only.
+      - name: Install actionlint
+        run: |
+          VER=1.7.7
+          # Verified against the release's published actionlint_1.7.7_checksums.txt
+          # AND against a locally downloaded copy. A pinned version with an
+          # unverified digest is a supply-chain hole wearing a pin.
+          SHA=023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+          curl -fsSL -o /tmp/actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v${VER}/actionlint_${VER}_linux_amd64.tar.gz"
+          echo "${SHA}  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /usr/local/bin actionlint
+          actionlint --version
+
       # Runs last because it is the cheapest thing here and the most likely to be
       # edited: it asserts what these very files are allowed to do.
       - name: Workflow policy
+        env:
+          RNI_REQUIRE_ACTIONLINT: '1'
         run: bash tools/ci-workflows.sh
