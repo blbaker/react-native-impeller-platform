@@ -24,8 +24,26 @@
 #   bash tools/engine-build.sh "$RNI_PLATFORM" "$RNI_ARCH"
 #   ... "packages-engine/engine-${RNI_TRIPLE}" ...
 
-RNI_PLATFORM="$(node -p 'process.platform')"
-RNI_ARCH="$(node -p 'process.arch')"
+# ⛔ A MISSING node MUST STOP THE GATE, NOT PRODUCE AN EMPTY TRIPLE.
+# `node -p ...` on a host without node in PATH prints an error to stderr and
+# yields an EMPTY string, so RNI_TRIPLE silently became "-" and
+# RNI_ENGINE_PKG "packages-engine/engine--". Every downstream check then
+# operated on nonsense paths: the registry gate ran for two minutes and exited
+# with NO output at all, which reads as a hung or crashed script rather than a
+# missing interpreter.
+#
+# Hit for real over SSH, where a non-interactive shell does not source the
+# rc file that puts nvm's node on PATH. Fail loudly, and say what to do.
+RNI_PLATFORM="$(node -p 'process.platform' 2>/dev/null)"
+RNI_ARCH="$(node -p 'process.arch' 2>/dev/null)"
+if [ -z "$RNI_PLATFORM" ] || [ -z "$RNI_ARCH" ]; then
+  echo "ci-triple: FAIL — cannot determine the host triple: node is not on PATH." >&2
+  echo "  Every gate derives its engine package name from node's own" >&2
+  echo "  process.platform/process.arch, so there is no safe fallback." >&2
+  echo "  Over SSH this usually means a non-interactive shell did not load nvm:" >&2
+  echo "    . \"\$HOME/.nvm/nvm.sh\"   (or run the gate from a login shell)" >&2
+  return 1 2>/dev/null || exit 1
+fi
 RNI_TRIPLE="${RNI_PLATFORM}-${RNI_ARCH}"
 RNI_ENGINE_PKG="packages-engine/engine-${RNI_TRIPLE}"
 export RNI_PLATFORM RNI_ARCH RNI_TRIPLE RNI_ENGINE_PKG

@@ -115,7 +115,15 @@ bash tools/ci-workflows.sh | tail -2
 # a throwaway .npmrc so the developer's npmjs credentials are never read.
 #
 # Last, because it is the slowest and depends on staged engines existing.
+#
+# ⛔ DO NOT `| tail -N` THIS ONE. The first CI run showed only the final three
+# lines, which meant the two assertions that justify the gate's existence —
+# "installed engine-<triple> via optionalDependencies" and "no foreign-platform
+# engines installed (N checked)" — were invisible in the log. A green gate whose
+# evidence you cannot read is a gate you have to trust rather than verify, and
+# this repo has already been bitten twice by checks that passed while examining
+# nothing. grep keeps the output short AND keeps the proof.
 echo "### gate 13: install from a real registry (by name)"
-bash tools/ci-registry.sh | tail -3
+bash tools/ci-registry.sh | grep -E "registry up|published |installed engine|foreign-platform|selftest passed|REGISTRY_GATE_PASS"
 
 echo "ALL_GATES_PASS"
