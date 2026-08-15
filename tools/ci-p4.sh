@@ -74,7 +74,18 @@ echo "== 2. the module manifest, enumerated FROM JAVASCRIPT =="
 # bundle CALL". A module registered perfectly but unreachable through the
 # binding is invisible to the first question.
 MANIFEST="$WORK/manifest.txt"
-"$ENGINE_LOCAL" --list-modules 2>/dev/null | sed 's/^\[js\] //' > "$MANIFEST" || fail "--list-modules failed"
+# ⛔ CAPTURE THE ENGINE'S EXIT CODE, NOT THE PIPE'S.
+# `engine ... | sed > file || fail` tests SED's status, so an engine that
+# printed a perfect manifest and then CRASHED reads as success. That is not
+# hypothetical: the darwin engine segfaulted in ~ReactHost after emitting a
+# complete manifest, and this line reported PASS for it. Run first, check the
+# real status, then post-process.
+RAW_MANIFEST="$WORK/manifest.raw"
+if ! "$ENGINE_LOCAL" --list-modules > "$RAW_MANIFEST" 2>/dev/null; then
+  echo "--- raw output ---"; tail -5 "$RAW_MANIFEST" 2>/dev/null
+  fail "--list-modules exited non-zero (rc=$?) — a complete manifest does NOT excuse a crash"
+fi
+sed 's/^\[js\] //' "$RAW_MANIFEST" > "$MANIFEST"
 grep -q '^MODULE_MANIFEST_END$' "$MANIFEST" || fail "manifest is truncated — the engine did not finish enumerating"
 if grep -q 'UNREACHABLE FROM JS' "$MANIFEST"; then
   echo "--- manifest ---"; cat "$MANIFEST"

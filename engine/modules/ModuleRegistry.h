@@ -92,6 +92,25 @@ class ModuleRegistry {
     return module;
   }
 
+  // ⛔ RELEASE THE CACHED MODULES WHILE THE RUNTIME IS STILL ALIVE.
+  // A TurboModule holds jsi::WeakObject members (RN's TurboModule.h keeps a
+  // unique_ptr<WeakObject> for its JS-side representation). ~WeakObject calls
+  // into the jsi::Runtime that created it, so destroying a cached module AFTER
+  // the runtime is gone dereferences a dead runtime:
+  //
+  //   EXC_BAD_ACCESS at 0x0
+  //     facebook::jsi::Pointer::~Pointer()            jsi.h:833
+  //     facebook::jsi::WeakObject::~WeakObject()      jsi.h:1461
+  //     facebook::react::TurboModule::~TurboModule()  TurboModule.h:46
+  //     rni::ModuleRegistry::~ModuleRegistry()        ModuleRegistry.h:53
+  //
+  // ~ReactHost calls this on the JS thread before dropping the instance.
+  // Nothing may look a module up afterwards; the runtime is being torn down.
+  void clearInstances() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cache_.clear();
+  }
+
  private:
   std::unordered_map<std::string, Factory> factories_;
   std::unordered_map<std::string, std::shared_ptr<react::TurboModule>> cache_;

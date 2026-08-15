@@ -220,7 +220,37 @@ ReactHost::~ReactHost() {
   if (jsThread_) {
     waitForJsIdle(5000);
   }
-  instance_.reset();
+
+  // ⛔ TEARDOWN ORDER IS LOAD-BEARING, AND THE RUNTIME MUST OUTLIVE THE MODULES.
+  //
+  // A TurboModule holds jsi::WeakObject members, and ~WeakObject calls into the
+  // jsi::Runtime that created it. ModuleRegistry caches every module it vends,
+  // so if the registry outlives the runtime its destructor walks that cache and
+  // dereferences a dead runtime. Measured, not guessed — the debug build's
+  // crash report named every frame:
+  //
+  //   EXC_BAD_ACCESS at 0x0
+  //     facebook::jsi::Pointer::~Pointer()            jsi.h:833
+  //     facebook::jsi::WeakObject::~WeakObject()      jsi.h:1461
+  //     facebook::react::TurboModule::~TurboModule()  TurboModule.h:46
+  //     rni::ModuleRegistry::~ModuleRegistry()        ModuleRegistry.h:53
+  //
+  // Linux tolerated the wrong order for six phases; macOS faults on it. The
+  // crash is at TEARDOWN, so `--list-modules` printed its COMPLETE, CORRECT
+  // manifest and MODULE_MANIFEST_END and *then* died with rc=139 — correct
+  // output, wrong exit code, which is why every gate that piped the output
+  // (`| sed`, `| tail`) read the PIPE's status and called it green.
+  //
+  // Both steps run on the JS thread: that thread owns the runtime, and jsi
+  // objects must be released on it.
+  if (jsThread_) {
+    jsThread_->runOnQueueSync([this] {
+      if (modules_) modules_->clearInstances();
+      instance_.reset();
+    });
+  }
+  instance_.reset();  // no-op if the above ran; correct if there is no thread
+
   if (jsThread_) {
     jsThread_->quitSynchronous();
   }

@@ -220,13 +220,25 @@ fi
 # --help is chosen deliberately: it exercises dyld's full load of every
 # dependency and exits without needing a bundle, a display or a GPU.
 echo "engine-build: launch check (dyld must resolve every dependency)"
-LAUNCH_OUT="$(cd / && "${ROOT}/${PKG}/bin/rn-impeller" --help 2>&1 || true)"
+set +e
+LAUNCH_OUT="$(cd / && "${ROOT}/${PKG}/bin/rn-impeller" --help 2>&1)"
+LAUNCH_RC=$?
+set -e
 case "${LAUNCH_OUT}" in
   *"Library not loaded"*|*"image not found"*|*"error while loading shared libraries"*|*"cannot open shared object"*)
     echo "engine-build: FAIL — the staged binary cannot start:" >&2
     echo "${LAUNCH_OUT}" | head -6 >&2
     exit 1 ;;
 esac
+# ⛔ AND ITS EXIT CODE MUST BE CLEAN — a crash AFTER correct output is still a
+# crash. The darwin engine printed a complete module manifest and then
+# segfaulted in ~ReactHost (rc=139); every gate that piped the output saw the
+# PIPE's status and called it green. Check the process, not the text.
+if [ "${LAUNCH_RC}" -ne 0 ]; then
+  echo "engine-build: FAIL — staged binary exited ${LAUNCH_RC} on --help" >&2
+  echo "${LAUNCH_OUT}" | tail -6 >&2
+  exit 1
+fi
 
 # R3 size budget: <60 MB unpacked per platform. Measure, never assume.
 UNPACKED_KB=$(du -sk "${PKG}/bin" | cut -f1)
