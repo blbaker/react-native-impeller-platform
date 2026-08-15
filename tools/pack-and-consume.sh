@@ -70,7 +70,13 @@ echo "   all required files present"
 
 echo "== 3. install into a pristine app OUTSIDE the repo =="
 APP="$WORK/ConsumerApp"
-cp -r "$BASE_APP" "$APP"
+# ⛔ `cp -r` IS NOT PORTABLE FOR A node_modules TREE.
+# node_modules/.bin/* are SYMLINKS (react-native -> ../react-native/cli.js).
+# GNU cp -r preserves them; BSD/macOS cp -r DEREFERENCES them, so the copy gets
+# a real file whose own relative require('./package.json') then resolves against
+# .bin/ and dies with MODULE_NOT_FOUND — a failure that reads as a broken RN
+# install rather than a broken copy. `cp -R` (capital) preserves links on both.
+cp -R "$BASE_APP" "$APP"
 cd "$APP"
 node -e '
 const fs=require("fs");

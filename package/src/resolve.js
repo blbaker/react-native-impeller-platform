@@ -31,6 +31,7 @@ const path = require('path');
 const SUPPORTED = new Set([
   'linux-x64',
   'win32-x64',
+  'darwin-arm64',
 ]);
 
 function hostTriple(platform = process.platform, arch = process.arch) {

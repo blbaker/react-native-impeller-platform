@@ -1,0 +1,12 @@
+{
+  "name": "@react-native-impeller/engine-darwin-arm64",
+  "version": "0.0.1",
+  "description": "Prebuilt Impeller engine host for darwin-arm64 (installed automatically by @react-native-impeller/core)",
+  "license": "MIT",
+  "files": ["bin", "README.md"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"]
+}
