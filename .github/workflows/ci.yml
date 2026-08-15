@@ -16,9 +16,20 @@ on:
 permissions:
   contents: read
 
+# ⛔ ONLY CANCEL PULL-REQUEST RUNS.
+# `cancel-in-progress: true` everywhere is the standard snippet and it is wrong
+# for this repo, for the same reason a short timeout is: on a cache MISS this
+# job compiles Hermes from source, and actions/cache only saves when the job
+# finishes. Two pushes in quick succession then cancel the cold build before it
+# can populate the cache, so the next run is cold again — indefinitely. Seen
+# immediately: a docs-only follow-up commit killed the very run that was
+# building the cache.
+#
+# On a pull request, superseding an old run is what you want and the cache is
+# already warm. On main, let it finish.
 concurrency:
   group: gates-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gates:
