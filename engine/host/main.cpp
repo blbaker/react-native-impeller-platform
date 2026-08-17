@@ -89,6 +89,7 @@ void Usage() {
           "usage: rn-impeller --bundle <absolute path> --app-name <name>\n"
           "                   [--headless] [--screenshot <file.ppm>]\n"
           "                   [--probe-banner on|off] [--width N] [--height N]\n"
+          "                   [--scale N]  (device pixels per point; default 1)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--initial-url URL]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
@@ -242,6 +243,14 @@ int main(int argc, char** argv) {
   bool listModules = false;
   bool testOpenUrl = false;
   int width = 400, height = 300;
+  // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
+  // The surface is allocated at width x height PIXELS; layout then happens in
+  // POINTS = pixels / scale, exactly as a real display works. `--width 800
+  // --height 600 --scale 2` is a 400x300-point retina surface, NOT a bigger
+  // app — the same fixture renders identical geometry with twice the detail.
+  //
+  // Default 1.0 keeps every existing gate byte-identical: points == pixels.
+  float pointScale = 1.0f;
   // Arbitrary pixel probes, so a gate can assert the geometry ITS fixture
   // declares instead of whatever probes happen to be hardcoded here. Each
   // prints `probe=<x>,<y> rgb=r,g,b`.
@@ -274,6 +283,14 @@ int main(int argc, char** argv) {
     else if (a == "--probe-banner") probeBanner = (next("--probe-banner") != "off");
     else if (a == "--width") width = atoi(next("--width").c_str());
     else if (a == "--height") height = atoi(next("--height").c_str());
+    else if (a == "--scale") {
+      pointScale = (float)atof(next("--scale").c_str());
+      if (!(pointScale > 0.0f)) {
+        fprintf(stderr, "rn-impeller: --scale must be > 0 (got %s)\n",
+                argv[i]);
+        return 2;
+      }
+    }
     else if (a == "--probe") {
       std::string v = next("--probe");
       auto comma = v.find(',');
@@ -362,7 +379,14 @@ int main(int argc, char** argv) {
     rni::SceneGraph sceneGraph(surface.typography());
     rni::ReactHost host;
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
-    host.displayMetrics()->set((float)width, (float)height, 1.0f);
+    // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
+    // Dimensions/PixelRatio read this. RN code branches on PixelRatio.get()
+    // for asset selection (@2x/@3x) and hairline widths, so reporting 1 while
+    // laying out at 2 gives an app that is internally inconsistent: correct
+    // geometry, wrong assets. window/screen are POINTS, which is what
+    // Dimensions.get('window') means on every other RN platform.
+    host.displayMetrics()->set((float)width / pointScale,
+                               (float)height / pointScale, pointScale);
     // Seed platform-module state BEFORE the bundle evaluates. Appearance is
     // read at module scope by RN's Appearance.js, so setting it after the
     // bundle runs would be read too late and look like the prop being ignored.
@@ -381,7 +405,7 @@ int main(int argc, char** argv) {
     // not registered yet.
     host.waitForJsIdle(10000);
 
-    fabric.startSurface(appName, 1, (float)width, (float)height);
+    fabric.startSurface(appName, 1, (float)width, (float)height, pointScale);
     // React renders, Fabric commits, the delegate applies mutations — all on
     // the JS thread. Idle means that whole chain has drained.
     host.waitForJsIdle(10000);
@@ -401,7 +425,7 @@ int main(int argc, char** argv) {
     fflush(stdout);
 
     ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
-    painted = sceneGraph.paint(builder);
+    painted = sceneGraph.paint(builder, pointScale);
     if (probeBanner) {
       DrawProbeBanner(builder, shimOk, bundleSize, width, height);
     }

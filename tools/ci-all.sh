@@ -126,4 +126,14 @@ bash tools/ci-workflows.sh | tail -2
 echo "### gate 13: install from a real registry (by name)"
 bash tools/ci-registry.sh | grep -E "registry up|published |installed engine|foreign-platform|selftest passed|REGISTRY_GATE_PASS"
 
+# ⛔ GATE 14 IS THE ONLY ONE THAT WOULD NOTICE A ZOOM PRETENDING TO BE RETINA.
+# Every other pixel gate renders at exactly one scale, so a change that made
+# --scale multiply LAYOUT instead of RESOLUTION would leave all of them green:
+# the fixture would still paint, still hit its probes, still count its nodes.
+# This one renders the SAME bundle twice and asserts both halves of the claim —
+# identical geometry in points, strictly more colour detail in pixels. An
+# upscale fails the second half; a zoom fails the first.
+echo "### gate 14: retina (points vs pixels)"
+bash tools/retina-check.sh | grep -E "^\[fabric\]|distinct colours|RETINA_OK"
+
 echo "ALL_GATES_PASS"

@@ -90,7 +90,14 @@ class SceneGraph {
   // Paints the whole tree into `builder`. Returns the number of nodes drawn —
   // a caller can tell "painted nothing" from "painted an empty-looking frame",
   // which are different bugs.
-  int paint(ImpellerDisplayListBuilder builder);
+  //
+  // ⛔ LAYOUT IS IN POINTS; THE SURFACE IS IN DEVICE PIXELS.
+  // Every frame/origin in the tree comes out of Yoga in POINTS, so painting
+  // them straight onto a 2x surface would fill only the top-left quarter of
+  // it. pointScaleFactor is applied as a root transform, which is also what
+  // makes text and vector geometry rasterise at full device resolution rather
+  // than being upscaled after the fact.
+  int paint(ImpellerDisplayListBuilder builder, float pointScaleFactor = 1.0f);
 
   // Diagnostics: node count and root tag, for gates that need to distinguish
   // "no tree" from "tree present but invisible".

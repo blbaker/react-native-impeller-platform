@@ -37,8 +37,12 @@ class FabricHost {
 
   // Registers and starts a surface, which triggers
   // AppRegistry.runApplication(moduleName) on the JS thread.
+  //
+  // width/height are DEVICE PIXELS (what the render surface allocates);
+  // pointScaleFactor is how many device pixels one React point occupies.
+  // The surface is constrained in POINTS = pixels / scale.
   void startSurface(const std::string& moduleName, int surfaceId, float width,
-                    float height);
+                    float height, float pointScaleFactor = 1.0f);
   void stopSurface();
 
   // The component names this host can actually mount. Handed to ReactHost so

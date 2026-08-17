@@ -204,23 +204,41 @@ FabricHost::~FabricHost() {
 }
 
 void FabricHost::startSurface(const std::string& moduleName, int surfaceId,
-                              float width, float height) {
+                              float width, float height, float pointScaleFactor) {
   surfaceHandler_ = std::make_unique<react::SurfaceHandler>(
       moduleName, static_cast<react::SurfaceId>(surfaceId));
   scheduler_->registerSurface(*surfaceHandler_);
 
+  // ⛔ WIDTH/HEIGHT ARRIVE IN DEVICE PIXELS; YOGA LAYS OUT IN POINTS.
+  // React Native's unit is the POINT, and pointScaleFactor is how many device
+  // pixels one point occupies. A 800x600 @2x surface is 400x300 POINTS, and a
+  // `width: 200` view must occupy 200 points = 400 device pixels.
+  //
+  // Constraining Yoga with raw pixels while claiming scale 2 would lay out an
+  // 800-point-wide tree and then rasterise it twice as large again — content
+  // scaled to 4x, clipped on every side. Divide once, here, where the pixel
+  // count enters the layout system.
+  const float scale = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;
+  const float pointWidth = width / scale;
+  const float pointHeight = height / scale;
+
   react::LayoutConstraints constraints;
-  constraints.minimumSize = {.width = width, .height = height};
-  constraints.maximumSize = {.width = width, .height = height};
+  constraints.minimumSize = {.width = pointWidth, .height = pointHeight};
+  constraints.maximumSize = {.width = pointWidth, .height = pointHeight};
   constraints.layoutDirection = react::LayoutDirection::LeftToRight;
   react::LayoutContext layoutContext;
-  layoutContext.pointScaleFactor = 1.0f;
+  // Fabric rounds every layout value to a whole device pixel using this. Left
+  // at 1.0 on a 2x display, a 0.5-point border rounds to 0 and vanishes rather
+  // than becoming the 1 physical pixel it should be.
+  layoutContext.pointScaleFactor = scale;
   surfaceHandler_->constraintLayout(constraints, layoutContext);
 
   surfaceHandler_->start();  // → AppRegistry.runApplication on the JS thread
 
-  std::printf("[fabric] surface %d (%s) started %gx%g@1x\n", surfaceId,
-              moduleName.c_str(), (double)width, (double)height);
+  std::printf("[fabric] surface %d (%s) started %gx%g points @%gx (%gx%g px)\n",
+              surfaceId, moduleName.c_str(), (double)pointWidth,
+              (double)pointHeight, (double)scale, (double)width,
+              (double)height);
   std::fflush(stdout);
 }
 

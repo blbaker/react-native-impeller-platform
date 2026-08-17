@@ -533,8 +533,23 @@ void SceneGraph::paintBorders(ImpellerDisplayListBuilder builder,
   }
 }
 
-int SceneGraph::paint(ImpellerDisplayListBuilder builder) {
+int SceneGraph::paint(ImpellerDisplayListBuilder builder,
+                      float pointScaleFactor) {
   std::lock_guard<std::mutex> lock(mutex_);
+  // ⛔ SCALE ONCE, AT THE ROOT — NOT PER NODE.
+  // The tree's frames are in points. Applying the device scale as a single
+  // root transform means every child, every stroke width and every glyph run
+  // is rasterised at device resolution by the same matrix. Scaling per node
+  // would compound on nested views and re-round geometry at each level.
+  //
+  // Save/restore so the builder is handed back in the state it arrived in;
+  // callers reuse it for the probe banner, which draws in device pixels.
+  const bool scaled = pointScaleFactor != 1.0f && pointScaleFactor > 0.0f;
+  if (scaled) {
+    ImpellerDisplayListBuilderSave(builder);
+    ImpellerDisplayListBuilderScale(builder, pointScaleFactor,
+                                    pointScaleFactor);
+  }
   // Counts every node actually visited, not the roots and not nodes_.size():
   // a gate needs to tell "walked the tree" from "walked one root that had no
   // reachable children", and those differ by exactly this number.
@@ -544,6 +559,7 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder) {
     if (it == nodes_.end()) continue;
     paintNode(builder, it->second, 0, 0);
   }
+  if (scaled) ImpellerDisplayListBuilderRestore(builder);
   return painted_;
 }
 
