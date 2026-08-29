@@ -88,6 +88,18 @@ struct SceneNode {
   float svgFillOpacity{1.0f};
   bool svgFillEvenOdd{false};
 
+  // ⛔ SVG's transform is a 2D AFFINE OF SIX FLOATS, not the 16-float 4x4 the
+  // View `transform` prop carries. react-native-svg's extractTransform()
+  // returns COLUMN-MAJOR [a, b, c, d, tx, ty] (see its
+  // lib/extract/extractTransform.ts, which builds exactly
+  // [t[0], t[3], t[1], t[4], t[2], t[5]] from a parsed transform string), so
+  // mapping it as a 4x4 would silently scramble the axes rather than fail.
+  //
+  // This applies to EVERY RNSVG element -- Group, Path, and every shape --
+  // because they all inherit the same `matrix` prop.
+  bool hasSvgMatrix{false};
+  float svgMatrix[6]{1, 0, 0, 1, 0, 0};  // a, b, c, d, tx, ty
+
   std::vector<facebook::react::Tag> children;
   facebook::react::Tag parent{};
 };

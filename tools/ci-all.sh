@@ -173,4 +173,11 @@ bash tools/ci-svg.sh | grep -E "SVG_GATE_PASS|solid="
 echo "### gate 18: the HostApp mark's structure (17 even grey levels)"
 bash tools/ci-mark.sh | grep -E "MARK_GATE_PASS|distinct grey levels"
 
+# Guards a bug that SHIPPED on skia-platform: RNSVGGroupProps::matrix exists
+# and is never read, so <G transform> is silently dropped and art renders at
+# the wrong size. Asserts POSITION, not presence — a renderer ignoring the
+# transform still paints a perfectly good square, just in the wrong place.
+echo "### gate 19: <G transform> moves its children (translate/scale/rotate)"
+bash tools/ci-gtransform.sh | grep -E "GTRANSFORM_GATE_PASS|->"
+
 echo "ALL_GATES_PASS"

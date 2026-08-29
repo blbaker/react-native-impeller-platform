@@ -254,6 +254,37 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
   // and capture fill/fillRule. Group's `matrix` field is a documented known
   // gap (see docs/STATE.md P9-B2) — not consumed here.
   node.isSvgPath = false;
+  // ⛔ THE MATRIX IS READ FOR EVERY RNSVG COMPONENT, NOT JUST <Path>.
+  //
+  // `matrix` appears on Group, Path and every shape -- but each generated
+  // Props class is `final : public ViewProps` with NO shared RNSVG base, so
+  // there is nothing to dynamic_cast to once. Reading it only on Path is the
+  // exact half-fix that leaves <G transform> silently dropped: the bug that
+  // shipped on skia-platform and cost a long hunt there (content 4.87x
+  // oversized, no error anywhere).
+  //
+  // Six floats, column-major [a, b, c, d, tx, ty] from react-native-svg's
+  // extractTransform(). A different length is a prop shape we do not
+  // understand, so ignore it rather than read off the end.
+  node.hasSvgMatrix = false;
+  {
+    const std::vector<react::Float>* mtx = nullptr;
+    if (const auto* p = dynamic_cast<const react::RNSVGPathProps*>(view.props.get())) {
+      mtx = &p->matrix;
+    } else if (const auto* g = dynamic_cast<const react::RNSVGGroupProps*>(view.props.get())) {
+      mtx = &g->matrix;
+    }
+    if (mtx != nullptr && mtx->size() == 6) {
+      static constexpr float kIdent[6] = {1, 0, 0, 1, 0, 0};
+      bool identity = true;
+      for (int i = 0; i < 6; ++i) {
+        node.svgMatrix[i] = (float)(*mtx)[i];
+        if (node.svgMatrix[i] != kIdent[i]) identity = false;
+      }
+      // An identity matrix costs a save/restore pair per node for nothing.
+      node.hasSvgMatrix = !identity;
+    }
+  }
   if (node.componentName == "RNSVGPath") {
     if (const auto* pp =
             dynamic_cast<const react::RNSVGPathProps*>(view.props.get())) {
@@ -414,6 +445,38 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerDisplayListBuilderTransform(builder, &post);
   }
 
+  // ⛔ THE SVG MATRIX MUST WRAP THIS NODE *AND ITS CHILDREN*.
+  //
+  // <G transform> means "transform everything inside me" -- a group paints no
+  // ink of its own, so applying the matrix only around this node's own draw
+  // calls would be indistinguishable from dropping it entirely. The matching
+  // restore therefore sits after the child walk, next to the `transformed`
+  // one, NOT at the end of this node's own painting.
+  //
+  // Six floats, column-major 2D affine [a, b, c, d, tx, ty], expanded into
+  // Impeller's column-major 4x4:
+  //
+  //     | a  c  0  tx |          m[0]=a  m[4]=c  m[8]=0   m[12]=tx
+  //     | b  d  0  ty |    ->    m[1]=b  m[5]=d  m[9]=0   m[13]=ty
+  //     | 0  0  1  0  |          m[2]=0  m[6]=0  m[10]=1  m[14]=0
+  //     | 0  0  0  1  |          m[3]=0  m[7]=0  m[11]=0  m[15]=1
+  //
+  // Getting b and c the wrong way round transposes every rotation and skew
+  // while leaving translate and uniform scale looking perfect -- which is why
+  // the gate probes a scale, not just a translation.
+  const bool svgTransformed = node.hasSvgMatrix;
+  if (svgTransformed) {
+    const float a = node.svgMatrix[0], b = node.svgMatrix[1];
+    const float c = node.svgMatrix[2], d = node.svgMatrix[3];
+    const float tx = node.svgMatrix[4], ty = node.svgMatrix[5];
+    ImpellerMatrix sm = {{a, b, 0, 0,
+                          c, d, 0, 0,
+                          0, 0, 1, 0,
+                          tx, ty, 0, 1}};
+    ImpellerDisplayListBuilderSave(builder);
+    ImpellerDisplayListBuilderTransform(builder, &sm);
+  }
+
   ImpellerRoundingRadii radii = {};
   // Field order is TL, BL, TR, BR — not clockwise. node.borderRadii is stored
   // in that same order so the two cannot drift.
@@ -559,6 +622,11 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     }
   }
   if (clip) {
+    ImpellerDisplayListBuilderRestore(builder);
+  }
+  // Paired with the save above; must come AFTER the child walk so a group's
+  // transform applies to its subtree.
+  if (svgTransformed) {
     ImpellerDisplayListBuilderRestore(builder);
   }
   if (transformed) {
