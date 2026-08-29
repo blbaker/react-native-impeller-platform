@@ -152,6 +152,26 @@ if(RNI_WITH_RNSVG)
 endif()
 
 # ---------------------------------------------------------------------------
+# P10-A: the canvas draw-path bench (tools/ci-canvas.sh).
+#
+# A STANDALONE target, not part of rn-impeller: it needs no Hermes, no React,
+# no Fabric and no bundle -- only EGL and libimpeller. That keeps the question
+# it answers ("do Impeller's rect/texture primitives carry the game view's
+# measured op mix, and how fast") independent of the whole JS stack, so a
+# regression here is unambiguously a renderer regression.
+#
+# Linux-only for now: it uses surfaceless EGL directly, exactly as the P0
+# headless spike does.
+# ---------------------------------------------------------------------------
+if(NOT WIN32 AND NOT APPLE)
+  add_executable(canvas-bench spike/canvas_bench.cpp)
+  target_include_directories(canvas-bench PRIVATE "${IMPELLER_SDK}/include")
+  target_link_libraries(canvas-bench PRIVATE "${IMPELLER_LINK_LIB}" EGL GLESv2)
+  set_target_properties(canvas-bench PROPERTIES
+    BUILD_RPATH "${IMPELLER_SDK}/lib")
+endif()
+
+# ---------------------------------------------------------------------------
 # The engine host binary. Name and CLI contract are FROZEN by P1 -- the npm
 # package's resolver and run-impeller both depend on both.
 # ---------------------------------------------------------------------------

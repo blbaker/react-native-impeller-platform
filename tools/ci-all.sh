@@ -213,4 +213,15 @@ bash tools/ci-gradient.sh | grep -E "GRADIENT_GATE_PASS|linear|radial|dangling"
 echo "### gate 23: <Symbol>/<Use> -- one asset, N mounting sites"
 bash tools/ci-usesym.sh | grep -E "USESYM_GATE_PASS|control=|scaled_"
 
+# The canvas draw path: the game view's MEASURED op mix (fillRect, drawImage,
+# clearRect, save/restore/translate, globalAlpha) at its measured volume.
+#
+# ⚠️ This gate is a MATCHED PAIR and the negative half is the load-bearing one.
+# The sprite atlas is baked into an offscreen FBO and blitted back; with the
+# blit removed, the blit sites MUST fall back to background. Colourful
+# fillRects sit underneath those sites, so a positive-only gate would go green
+# on an engine that never blits at all.
+echo "### gate 24: canvas draw path -- offscreen atlas, blit, rect volume"
+bash tools/ci-canvas.sh | grep -E "CANVAS_GATE_PASS|blit site differs|CANVAS_BENCH steady|CANVAS_BENCH burst"
+
 echo "ALL_GATES_PASS"
