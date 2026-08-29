@@ -133,7 +133,9 @@ std::vector<std::string> FabricHost::knownComponentNames() {
   std::vector<std::string> names = {"View", "RootView", "Paragraph", "Text",
                                      "RawText"};
 #if RNI_WITH_RNSVG
-  names.insert(names.end(), {"RNSVGSvgView", "RNSVGGroup", "RNSVGPath"});
+  names.insert(names.end(), {"RNSVGSvgView", "RNSVGGroup", "RNSVGPath",
+                             "RNSVGRect", "RNSVGCircle", "RNSVGEllipse",
+                             "RNSVGLine"});
 #endif
   return names;
 }
@@ -168,6 +170,17 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
       react::concreteComponentDescriptorProvider<react::RNSVGGroupComponentDescriptor>());
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::RNSVGPathComponentDescriptor>());
+  // The basic shapes. Each is converted to path data in SceneGraph and painted
+  // by the SAME fill/stroke code as <Path>, so registering them costs a line
+  // here and nothing in the painter.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGRectComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGCircleComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGEllipseComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGLineComponentDescriptor>());
 #endif
   providerRegistry_ = providerRegistry;
 

@@ -92,6 +92,77 @@ bool svgFillFromDynamic(const folly::dynamic& v, float out[4]) {
 }
 #endif
 
+// Every RNSVG shape carries the SAME paint props (fill, fillOpacity, fillRule,
+// stroke, strokeOpacity, strokeWidth, linecap/linejoin/miterlimit) -- they are
+// declared per-class only because each generated Props is `final : public
+// ViewProps` with no shared SVG base to inherit from.
+//
+// ⛔ A TEMPLATE, NOT FIVE COPIES. Duplicating this block per shape is how one
+// component silently ends up reading strokeWidth as a number-only (invisible
+// stroke on a length string) or inheriting rnsvg's miterlimit default of 0
+// (every miter join collapses to a bevel) while its siblings stay correct.
+// Written once, every shape gets every fix.
+template <typename P>
+void readSvgPaintProps(SceneNode& node, const P* pp) {
+  node.svgHasFill = svgFillFromDynamic(pp->fill, node.svgFillColor);
+  node.svgFillOpacity = (float)pp->fillOpacity;
+  // fillRule: 0 = evenodd, 1 = nonzero.
+  node.svgFillEvenOdd = (pp->fillRule == 0);
+
+  node.svgHasStroke = svgFillFromDynamic(pp->stroke, node.svgStrokeColor);
+  node.svgStrokeOpacity = (float)pp->strokeOpacity;
+  // strokeWidth is folly::dynamic: a number OR a length string ("2", "2px").
+  node.svgStrokeWidth = 1.0f;
+  if (pp->strokeWidth.isNumber()) {
+    node.svgStrokeWidth = (float)pp->strokeWidth.asDouble();
+  } else if (pp->strokeWidth.isString()) {
+    try {
+      node.svgStrokeWidth = std::stof(pp->strokeWidth.asString());
+    } catch (const std::exception&) {
+      node.svgStrokeWidth = 1.0f;
+    }
+  }
+  node.svgStrokeLinecap = pp->strokeLinecap;
+  node.svgStrokeLinejoin = pp->strokeLinejoin;
+  // SVG's default miterlimit is 4; rnsvg's generated default is 0.
+  node.svgStrokeMiterlimit =
+      pp->strokeMiterlimit > 0.0 ? (float)pp->strokeMiterlimit : 4.0f;
+}
+
+// Shape geometry props are folly::dynamic because rnsvg accepts a number or a
+// length string. Same by-value rule as everywhere else in this file.
+float svgLength(const folly::dynamic& v, float fallback = 0.0f) {
+  if (v.isNumber()) return (float)v.asDouble();
+  if (v.isString()) {
+    try {
+      return std::stof(v.asString());
+    } catch (const std::exception&) {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+// Circle/Ellipse as four cubic arcs. kKappa is the standard circle-to-Bezier
+// constant 4*(sqrt(2)-1)/3: the control-point offset that makes a cubic match
+// a quarter arc to within ~0.02%.
+constexpr float kKappa = 0.5522847498f;
+
+std::string ellipseToPathData(float cx, float cy, float rx, float ry) {
+  if (rx <= 0.0f || ry <= 0.0f) return {};
+  char buf[512];
+  const float ox = rx * kKappa, oy = ry * kKappa;
+  std::snprintf(buf, sizeof(buf),
+                "M%g %g C%g %g %g %g %g %g C%g %g %g %g %g %g "
+                "C%g %g %g %g %g %g C%g %g %g %g %g %g Z",
+                cx - rx, cy,
+                cx - rx, cy - oy, cx - ox, cy - ry, cx, cy - ry,
+                cx + ox, cy - ry, cx + rx, cy - oy, cx + rx, cy,
+                cx + rx, cy + oy, cx + ox, cy + ry, cx, cy + ry,
+                cx - ox, cy + ry, cx - rx, cy + oy, cx - rx, cy);
+  return buf;
+}
+
 }  // namespace
 
 SceneGraph::SceneGraph(ImpellerTypographyContext typography)
@@ -285,49 +356,99 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.hasSvgMatrix = !identity;
     }
   }
+  // ⛔ EVERY SHAPE BECOMES A `d` STRING AND REUSES ONE PAINT PATH.
+  //
+  // Circle/Rect/Ellipse/Line differ from Path ONLY in geometry -- their paint
+  // props are identical (see readSvgPaintProps). Converting each to path data
+  // means fill-rule, per-path fill-opacity, stroke colour/width/caps/joins and
+  // the <G transform> matrix are all inherited automatically, and there is one
+  // painter to fix rather than five to keep in sync.
+  //
+  // node.isSvgPath therefore means "has path data to fill/stroke", not
+  // "is literally an <Path> element".
   if (node.componentName == "RNSVGPath") {
     if (const auto* pp =
             dynamic_cast<const react::RNSVGPathProps*>(view.props.get())) {
       node.isSvgPath = true;
       node.svgD = pp->d;
-      node.svgHasFill = svgFillFromDynamic(pp->fill, node.svgFillColor);
-      node.svgFillOpacity = (float)pp->fillOpacity;
-      // fillRule: 0 = evenodd, 1 = nonzero — same encoding
-      // react-native-svg's lib/extract/extractFill.js has always used, and
-      // the same reading skia-platform's SceneGraph.cpp uses for the same
-      // generated prop.
-      node.svgFillEvenOdd = (pp->fillRule == 0);
-
-      // Stroke, read with the SAME by-value discipline as fill: `stroke` is a
-      // brush object whose payload is a packed ARGB that exceeds INT32_MAX for
-      // any opaque colour (see svgFillFromDynamic).
-      node.svgHasStroke = svgFillFromDynamic(pp->stroke, node.svgStrokeColor);
-      node.svgStrokeOpacity = (float)pp->strokeOpacity;
-      // ⛔ strokeWidth is folly::dynamic, NOT a Float — react-native-svg allows
-      // a number OR a length string ("2", "2px"). Reading it as a number only
-      // would silently give width 0 (an invisible stroke) for the string form,
-      // so both are handled and anything else keeps the SVG default of 1.
-      node.svgStrokeWidth = 1.0f;
-      if (pp->strokeWidth.isNumber()) {
-        node.svgStrokeWidth = (float)pp->strokeWidth.asDouble();
-      } else if (pp->strokeWidth.isString()) {
-        try {
-          node.svgStrokeWidth = std::stof(pp->strokeWidth.asString());
-        } catch (const std::exception&) {
-          node.svgStrokeWidth = 1.0f;
+      readSvgPaintProps(node, pp);
+    }
+  } else if (node.componentName == "RNSVGRect") {
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGRectProps*>(view.props.get())) {
+      const float x = svgLength(pp->x), y = svgLength(pp->y);
+      const float w = svgLength(pp->width), h = svgLength(pp->height);
+      // SVG: if only one of rx/ry is given the other takes its value.
+      float rx = svgLength(pp->rx, -1.0f), ry = svgLength(pp->ry, -1.0f);
+      if (rx < 0.0f && ry >= 0.0f) rx = ry;
+      if (ry < 0.0f && rx >= 0.0f) ry = rx;
+      if (rx < 0.0f) rx = 0.0f;
+      if (ry < 0.0f) ry = 0.0f;
+      rx = std::min(rx, w * 0.5f);
+      ry = std::min(ry, h * 0.5f);
+      if (w > 0.0f && h > 0.0f) {
+        char buf[512];
+        if (rx > 0.0f && ry > 0.0f) {
+          const float ox = rx * kKappa, oy = ry * kKappa;
+          std::snprintf(buf, sizeof(buf),
+                        "M%g %g L%g %g C%g %g %g %g %g %g L%g %g "
+                        "C%g %g %g %g %g %g L%g %g C%g %g %g %g %g %g "
+                        "L%g %g C%g %g %g %g %g %g Z",
+                        x + rx, y, x + w - rx, y,
+                        x + w - rx + ox, y, x + w, y + ry - oy, x + w, y + ry,
+                        x + w, y + h - ry,
+                        x + w, y + h - ry + oy, x + w - rx + ox, y + h, x + w - rx, y + h,
+                        x + rx, y + h,
+                        x + rx - ox, y + h, x, y + h - ry + oy, x, y + h - ry,
+                        x, y + ry,
+                        x, y + ry - oy, x + rx - ox, y, x + rx, y);
+        } else {
+          std::snprintf(buf, sizeof(buf), "M%g %g L%g %g L%g %g L%g %g Z",
+                        x, y, x + w, y, x + w, y + h, x, y + h);
         }
+        node.isSvgPath = true;
+        node.svgD = buf;
+        readSvgPaintProps(node, pp);
       }
-      node.svgStrokeLinecap = pp->strokeLinecap;
-      node.svgStrokeLinejoin = pp->strokeLinejoin;
-      // SVG's default miterlimit is 4; rnsvg's generated default is 0, which
-      // would collapse every miter join to a bevel.
-      node.svgStrokeMiterlimit =
-          pp->strokeMiterlimit > 0.0 ? (float)pp->strokeMiterlimit : 4.0f;
-      // node.opacity already carries the resolved ViewProps opacity (set
-      // above from the same props object, since RNSVGPathProps derives
-      // ViewProps) — paintNode multiplies it with svgFillOpacity, per-path.
+    }
+  } else if (node.componentName == "RNSVGCircle") {
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGCircleProps*>(view.props.get())) {
+      const float r = svgLength(pp->r);
+      node.svgD = ellipseToPathData(svgLength(pp->cx), svgLength(pp->cy), r, r);
+      if (!node.svgD.empty()) {
+        node.isSvgPath = true;
+        readSvgPaintProps(node, pp);
+      }
+    }
+  } else if (node.componentName == "RNSVGEllipse") {
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGEllipseProps*>(view.props.get())) {
+      node.svgD = ellipseToPathData(svgLength(pp->cx), svgLength(pp->cy),
+                                    svgLength(pp->rx), svgLength(pp->ry));
+      if (!node.svgD.empty()) {
+        node.isSvgPath = true;
+        readSvgPaintProps(node, pp);
+      }
+    }
+  } else if (node.componentName == "RNSVGLine") {
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGLineProps*>(view.props.get())) {
+      char buf[128];
+      std::snprintf(buf, sizeof(buf), "M%g %g L%g %g",
+                    svgLength(pp->x1), svgLength(pp->y1),
+                    svgLength(pp->x2), svgLength(pp->y2));
+      node.isSvgPath = true;
+      node.svgD = buf;
+      readSvgPaintProps(node, pp);
+      // ⚠️ A <Line> is an OPEN path: it has no interior, so a fill can never
+      // show. rnsvg still defaults `fill` to black (SVG spec), which would
+      // make the fill pass draw nothing while looking like it should. Drop it
+      // so the stroke pass is unambiguously what paints.
+      node.svgHasFill = false;
     }
   }
+
 #endif
 }
 

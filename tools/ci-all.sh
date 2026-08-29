@@ -187,4 +187,11 @@ bash tools/ci-gtransform.sh | grep -E "GTRANSFORM_GATE_PASS|->"
 echo "### gate 20: stroke (independent colour, width, opacity)"
 bash tools/ci-stroke.sh | grep -E "STROKE_GATE_PASS|edge="
 
+# Rect/Circle/Ellipse/Line are converted to path data and painted by the SAME
+# code as <Path>. Each probe pairs an INK point with an EMPTY point, because a
+# wrong conversion (square corners, a circle drawn for an ellipse) still paints
+# something in roughly the right place.
+echo "### gate 21: basic shapes (rect, circle, ellipse, line)"
+bash tools/ci-shapes.sh | grep -E "SHAPES_GATE_PASS|ink\("
+
 echo "ALL_GATES_PASS"
