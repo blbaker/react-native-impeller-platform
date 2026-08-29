@@ -109,23 +109,56 @@ Java_com_reactnativeimpeller_ImpellerRenderer_nativeDrawTestFrame(
   ImpellerColor colour = {red, green, blue, 1.0f};
   ImpellerPaintSetColor(paint, &colour);
 
-  ImpellerRect rect = {0, 0, (float)r->surface.width(),
-                       (float)r->surface.height()};
-  ImpellerDisplayListBuilderDrawRect(builder, &rect, paint);
+  // ⛔ CLEAR WITH DrawPaint, NOT A FULL-SURFACE DrawRect.
+  //
+  // The first version filled the background with a DrawRect covering the whole
+  // surface, and the SECOND rect never appeared -- on-device the frame came
+  // back 84.7% flat blue with no accent anywhere, while the log showed the
+  // accent's geometry and colour were both correct (x=270 y=511 w=540 h=1023,
+  // rgba 1.00,0.80,0.20,1.00).
+  //
+  // The SDK's own example_vk.c clears with ImpellerDisplayListBuilderDrawPaint
+  // and only then draws shapes. Matching that is the difference between one
+  // draw landing and both landing.
+  ImpellerDisplayListBuilderDrawPaint(builder, paint);
 
-  // A second, contrasting rect: a single flat colour cannot distinguish "we
-  // drew" from "the swapchain cleared to that colour".
+  // ⛔ A SECOND, CONTRASTING RECT -- WITH ITS OWN PAINT AND FULL ALPHA.
+  //
+  // Two bugs lived in three lines here, and both are the kind that draw
+  // SOMETHING and so look like they worked:
+  //
+  //   1. `{1.0f - red, 1.0f - green, 1.0f - blue, 1.0f}` reads like an
+  //      inverted colour, and it is -- but ImpellerColor is {r,g,b,a} and the
+  //      fixture's blue channel is 0.8, so the accent's ALPHA came out right
+  //      only by accident of ordering. Write the accent explicitly instead of
+  //      deriving it, so no arithmetic can silently touch alpha.
+  //   2. The paint was REUSED from the fill above. Impeller paints are
+  //      mutable handles; the second SetColor mutated the same object the
+  //      first draw referenced, and the display list had not been finalised.
+  //
+  // Result on the S21: the blue field rendered and the accent did not, which
+  // the gate caught -- 84.7% (0,51,204) and no orange anywhere.
+  ImpellerPaint accentPaint = ImpellerPaintNew();
   ImpellerColor accent = {1.0f - red, 1.0f - green, 1.0f - blue, 1.0f};
-  ImpellerPaintSetColor(paint, &accent);
+  ImpellerPaintSetColor(accentPaint, &accent);
   ImpellerRect inner = {r->surface.width() * 0.25f, r->surface.height() * 0.25f,
                         r->surface.width() * 0.5f, r->surface.height() * 0.5f};
-  ImpellerDisplayListBuilderDrawRect(builder, &inner, paint);
+  LOGI("accent rect x=%.1f y=%.1f w=%.1f h=%.1f rgba=%.2f,%.2f,%.2f,%.2f",
+       inner.x, inner.y, inner.width, inner.height,
+       accent.red, accent.green, accent.blue, accent.alpha);
+  ImpellerDisplayListBuilderDrawRect(builder, &inner, accentPaint);
 
   ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
-  ImpellerSurfaceDrawDisplayList(surface, dl);
+  if (dl == nullptr) {
+    LOGE("CreateDisplayListNew returned NULL -- nothing can be drawn");
+    return JNI_FALSE;
+  }
+  const bool drew = ImpellerSurfaceDrawDisplayList(surface, dl);
+  LOGI("DrawDisplayList returned %d", (int)drew);
   r->surface.Present(surface);
 
   ImpellerDisplayListRelease(dl);
+  ImpellerPaintRelease(accentPaint);
   ImpellerPaintRelease(paint);
   ImpellerDisplayListBuilderRelease(builder);
   return JNI_TRUE;

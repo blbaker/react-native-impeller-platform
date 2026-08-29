@@ -21,3 +21,5 @@ engine/third_party/glfw/
 engine/third_party/x11-sysroot/
 engine/third_party/impeller-sdk-android/
 engine/build-android-*/
+probe/build-out/
+probe/android/src/main/jniLibs/

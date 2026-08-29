@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  P10-C device probe. THROWAWAY host app, NOT the deliverable.
+
+  This manifest declares the launcher Activity that the LIBRARY must never
+  have. It lives in probe/, is excluded from the AAR, and exists only so the
+  render path can be exercised on real hardware the same way HostApp v4's own app
+  will exercise it.
+
+  The `package` attribute is REQUIRED because this APK is built with aapt2
+  directly. The Android Gradle Plugin normally injects it from `namespace`;
+  with no Gradle in the loop, aapt2 refuses the manifest without it.
+
+  NOTE for future editors: a double hyphen may not appear inside an XML
+  comment, and neither may a literal tag. Both make the whole document
+  not well formed, and aapt2 reports only "invalid token" with a line number.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.reactnativeimpeller.probe">
+
+    <application
+        android:label="rn-impeller probe"
+        android:hasCode="true">
+        <activity
+            android:name="com.reactnativeimpeller.probe.ProbeActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
