@@ -12,6 +12,16 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(${CMAKE_SOURCE_DIR}/cmake/CompileFlags.cmake)
 
 # ---------------------------------------------------------------------------
+# P9-A: windowed WSI. Default ON on Linux (where tools/window-spike.sh proved
+# the chain), OFF elsewhere until a platform gets its own GLFW build.
+# ---------------------------------------------------------------------------
+if(WIN32 OR APPLE)
+  option(RNI_WITH_WINDOW "Build GlfwSurface / --window support" OFF)
+else()
+  option(RNI_WITH_WINDOW "Build GlfwSurface / --window support" ON)
+endif()
+
+# ---------------------------------------------------------------------------
 # MSVC-wide definitions (P5). These are DIRECTORY-scoped on purpose: they must
 # reach the FetchContent'd dependencies (folly, glog) as well as our targets,
 # and those add_library() calls are made inside included .cmake files we do not
@@ -142,6 +152,7 @@ add_executable(rn-impeller
   # at all (Mesa surfaceless EGL vs ANGLE-over-D3D11 loaded by LoadLibrary).
   $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurface.cpp>
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/host/WinGLSurface.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurface.cpp>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   modules/PlatformModules.cpp
@@ -218,6 +229,28 @@ target_sources(rn-impeller PRIVATE
   "${REACT_COMMON}/react/nativemodule/devtoolsruntimesettings/DevToolsRuntimeSettingsModule.cpp"
   "${REACT_COMMON}/devtoolsruntimesettings/DevToolsRuntimeSettings.cpp"
 )
+
+# ---------------------------------------------------------------------------
+# GLFW (RNI_WITH_WINDOW): consumed from engine/third_party/glfw/install, built
+# from source by tools/glfw-fetch.sh (never re-implemented here — this box has
+# no non-interactive sudo, so libglfw3-dev cannot be apt-installed). The
+# x11-sysroot -L/-l set, including -lXinerama, matches tools/window-spike.sh
+# exactly: the system image ships libXinerama.so.1 with no linkable -dev
+# symlink, and glfw-fetch.sh stages one into a repo-local sysroot.
+# ---------------------------------------------------------------------------
+if(RNI_WITH_WINDOW)
+  set(GLFW_DIR "${CMAKE_SOURCE_DIR}/third_party/glfw/install")
+  if(NOT EXISTS "${GLFW_DIR}/lib/libglfw3.a")
+    message(FATAL_ERROR "GLFW not found at ${GLFW_DIR}. Run: bash tools/glfw-fetch.sh")
+  endif()
+  set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
+  target_compile_definitions(rn-impeller PRIVATE RNI_WITH_WINDOW=1)
+  target_include_directories(rn-impeller PRIVATE "${GLFW_DIR}/include")
+  target_link_libraries(rn-impeller PRIVATE
+    "${GLFW_DIR}/lib/libglfw3.a"
+    "-L${X11_SYSROOT}/usr/lib/x86_64-linux-gnu"
+    X11 Xrandr Xcursor Xi Xinerama m pthread dl)
+endif()
 
 rni_compile_flags(rn-impeller EXCEPTIONS RTTI NO_DEPRECATED FORCE_INCLUDE cstdint)
 

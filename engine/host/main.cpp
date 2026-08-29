@@ -48,6 +48,11 @@
 #else
 #include "host/HeadlessSurface.h"
 #endif
+#if RNI_WITH_WINDOW
+#include "host/GlfwSurface.h"
+#include <chrono>
+#include <thread>
+#endif
 #include "impeller.h"
 #include "runtime/FeatureFlags.h"
 #include "runtime/ReactHost.h"
@@ -92,6 +97,7 @@ void Usage() {
           "                   [--scale N]  (device pixels per point; default 1)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--initial-url URL]\n"
+          "                   [--window] [--frames N] [--screenshot-after MS]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
           "       rn-impeller --test-openurl   (URL predicate self-test)\n");
 }
@@ -229,6 +235,104 @@ int CountDistinctColors(const std::vector<rni::Px>& px) {
 
 }  // namespace
 
+#if RNI_WITH_WINDOW
+// The windowed repaint loop.
+//
+// ⛔ WHY THIS REPAINTS UNCONDITIONALLY EVERY FRAME, RATHER THAN ONLY WHEN
+// FABRIC HAS A PENDING MUTATION: `FabricHost.cpp:189` passes `nullptr` for
+// the animation delegate (P9-C, not this phase), so there is currently no
+// signal that would tell this loop "something changed, repaint" versus
+// "nothing changed, skip". Two ways to close that gap: (a) drive repaints
+// from vsync (what this does — call paintFrame() every time glfwSwapBuffers
+// would run anyway) or (b) drive them from Fabric mutation notifications
+// once P9-C wires a real animation delegate. Choosing (a) here is NOT
+// picking that architecture: an unconditional per-frame repaint is exactly
+// as compatible with a future mutation-driven skip-if-unchanged optimisation
+// as it is with staying vsync-driven forever, so nothing about P9-C is
+// foreclosed. See docs/STATE.md "Open questions" if that changes.
+int RunWindowed(const std::string& bundlePath, const std::string& appName,
+                std::string bundle, size_t nodeReportOnly, size_t bundleSize,
+                const std::string& colorScheme, const std::string& initialUrl,
+                int width, int height, float pointScale, bool logMutations,
+                int frames, int screenshotAfterMs,
+                const std::string& screenshotPath) {
+  (void)nodeReportOnly;
+  (void)bundleSize;
+  rni::GlfwSurface surface;
+  std::string error;
+  if (!surface.init(width, height, &error)) {
+    fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
+    return 1;
+  }
+
+  rni::SceneGraph sceneGraph(surface.typography());
+  rni::ReactHost host;
+  host.setKnownComponents(rni::FabricHost::knownComponentNames());
+  host.displayMetrics()->set((float)width / pointScale, (float)height / pointScale,
+                             pointScale);
+  host.appearance()->set(colorScheme);
+  *host.initialUrl() = initialUrl;
+
+  rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
+                         logMutations, host.displayMetrics());
+
+  host.runScript(std::move(bundle), "file://" + bundlePath);
+  host.waitForJsIdle(10000);
+  fabric.startSurface(appName, 1, (float)width, (float)height, pointScale);
+  host.waitForJsIdle(10000);
+
+  printf("rn-impeller: scene_nodes=%zu\n", sceneGraph.nodeCount());
+  fflush(stdout);
+
+  auto paintFrame = [&]() -> int {
+    ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
+    int painted = sceneGraph.paint(builder, pointScale);
+    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
+    if (dl) {
+      surface.drawDisplayList(dl);
+      ImpellerDisplayListRelease(dl);
+    }
+    ImpellerDisplayListBuilderRelease(builder);
+    surface.present();
+    return painted;
+  };
+
+  auto start = std::chrono::steady_clock::now();
+  bool capturedTimed = false;
+  int frameIndex = 0;
+  while (!surface.shouldClose()) {
+    surface.pollEvents();
+    int painted = paintFrame();
+    ++frameIndex;
+    if (frameIndex == 1) printf("rn-impeller: painted_nodes=%d\n", painted);
+
+    if (!screenshotPath.empty() && screenshotAfterMs >= 0 && !capturedTimed) {
+      auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - start)
+                           .count();
+      if (elapsedMs >= screenshotAfterMs) {
+        std::vector<rni::Px> px;
+        if (surface.readPixels(&px)) {
+          if (rni::GlfwSurface::writePpm(screenshotPath, px, surface.width(),
+                                         surface.height())) {
+            printf("rn-impeller: screenshot=%s frame=%d elapsed_ms=%lld\n",
+                   screenshotPath.c_str(), frameIndex, (long long)elapsedMs);
+            fflush(stdout);
+          }
+        }
+        capturedTimed = true;
+      }
+    }
+
+    if (frames > 0 && frameIndex >= frames) break;
+  }
+
+  printf("RN_IMPELLER_WINDOW_OK app=%s frames=%d\n", appName.c_str(), frameIndex);
+  fflush(stdout);
+  return 0;
+}
+#endif  // RNI_WITH_WINDOW
+
 int main(int argc, char** argv) {
   // MUST be first: ReactNativeFeatureFlags::override() throws once any flag has
   // been read, and plenty of construction paths read one.
@@ -242,6 +346,9 @@ int main(int argc, char** argv) {
   bool logMutations = false;
   bool listModules = false;
   bool testOpenUrl = false;
+  bool windowMode = false;
+  int frames = 0;              // 0 = unbounded, run until window closes
+  int screenshotAfterMs = -1;  // -1 = no timed capture
   int width = 400, height = 300;
   // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
   // The surface is allocated at width x height PIXELS; layout then happens in
@@ -275,6 +382,9 @@ int main(int argc, char** argv) {
     else if (a == "--app-name") appName = next("--app-name");
     else if (a == "--screenshot") screenshot = next("--screenshot");
     else if (a == "--headless") headless = true;
+    else if (a == "--window") windowMode = true;
+    else if (a == "--frames") frames = atoi(next("--frames").c_str());
+    else if (a == "--screenshot-after") screenshotAfterMs = atoi(next("--screenshot-after").c_str());
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
@@ -357,12 +467,25 @@ int main(int argc, char** argv) {
   printf("rn-impeller: headless=%s\n", headless ? "yes" : "no");
   fflush(stdout);
 
-  if (!headless) {
-    // Windowed WSI is a later phase. Say so rather than opening nothing and
-    // exiting zero.
+  if (windowMode) {
+#if RNI_WITH_WINDOW
+    return RunWindowed(bundlePath, appName, std::move(bundle), 0, bundleSize,
+                       colorScheme, initialUrl, width, height, pointScale,
+                       logMutations, frames, screenshotAfterMs, screenshot);
+#else
     fprintf(stderr,
-            "rn-impeller: windowed mode is not implemented yet. "
-            "Re-run with --headless.\n");
+            "rn-impeller: built without windowed support "
+            "(RNI_WITH_WINDOW=OFF). Re-run with --headless.\n");
+    return 3;
+#endif
+  }
+
+  if (!headless) {
+    // Neither --headless nor --window was passed. Say so rather than
+    // opening nothing and exiting zero.
+    fprintf(stderr,
+            "rn-impeller: neither --headless nor --window given. "
+            "Re-run with one of them.\n");
     return 3;
   }
 
