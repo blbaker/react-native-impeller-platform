@@ -98,6 +98,7 @@ void Usage() {
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
+          "                   [--screenshot-first <file.ppm>]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
           "       rn-impeller --test-openurl   (URL predicate self-test)\n");
 }
@@ -255,7 +256,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 const std::string& colorScheme, const std::string& initialUrl,
                 int width, int height, float pointScale, bool logMutations,
                 int frames, int screenshotAfterMs,
-                const std::string& screenshotPath) {
+                const std::string& screenshotPath,
+                const std::string& screenshotFirstPath) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -299,27 +301,50 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
 
   auto start = std::chrono::steady_clock::now();
   bool capturedTimed = false;
+  bool capturedFirst = false;
   int frameIndex = 0;
+
+  // Reads the framebuffer and writes a PPM. Shared by the frame-0 and the
+  // timed capture so the two images are produced by literally the same code
+  // path -- if they differed in how they were read back, a difference between
+  // them would not prove anything about repainting.
+  auto capture = [&](const std::string& path, const char* label) {
+    if (path.empty()) return;
+    std::vector<rni::Px> px;
+    if (!surface.readPixels(&px)) return;
+    if (!rni::GlfwSurface::writePpm(path, px, surface.width(), surface.height()))
+      return;
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - start)
+                  .count();
+    printf("rn-impeller: %s=%s frame=%d elapsed_ms=%lld\n", label, path.c_str(),
+           frameIndex, (long long)ms);
+    fflush(stdout);
+  };
+
   while (!surface.shouldClose()) {
     surface.pollEvents();
     int painted = paintFrame();
     ++frameIndex;
     if (frameIndex == 1) printf("rn-impeller: painted_nodes=%d\n", painted);
 
+    // ⛔ The frame-0 capture is what makes an animation gate possible at all.
+    // A single timed screenshot proves only that SOMETHING was drawn; it
+    // cannot distinguish a live repaint loop from a static engine redrawing
+    // identical pixels forever. Two captures from ONE run, compared, can.
+    // Taken AFTER the first paint so it is a real rendered frame rather than
+    // an uninitialised buffer.
+    if (!capturedFirst && frameIndex == 1) {
+      capture(screenshotFirstPath, "screenshot_first");
+      capturedFirst = true;
+    }
+
     if (!screenshotPath.empty() && screenshotAfterMs >= 0 && !capturedTimed) {
       auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - start)
                            .count();
       if (elapsedMs >= screenshotAfterMs) {
-        std::vector<rni::Px> px;
-        if (surface.readPixels(&px)) {
-          if (rni::GlfwSurface::writePpm(screenshotPath, px, surface.width(),
-                                         surface.height())) {
-            printf("rn-impeller: screenshot=%s frame=%d elapsed_ms=%lld\n",
-                   screenshotPath.c_str(), frameIndex, (long long)elapsedMs);
-            fflush(stdout);
-          }
-        }
+        capture(screenshotPath, "screenshot");
         capturedTimed = true;
       }
     }
@@ -349,6 +374,7 @@ int main(int argc, char** argv) {
   bool windowMode = false;
   int frames = 0;              // 0 = unbounded, run until window closes
   int screenshotAfterMs = -1;  // -1 = no timed capture
+  std::string screenshotFirst;  // empty = no frame-0 capture
   int width = 400, height = 300;
   // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
   // The surface is allocated at width x height PIXELS; layout then happens in
@@ -385,6 +411,10 @@ int main(int argc, char** argv) {
     else if (a == "--window") windowMode = true;
     else if (a == "--frames") frames = atoi(next("--frames").c_str());
     else if (a == "--screenshot-after") screenshotAfterMs = atoi(next("--screenshot-after").c_str());
+    // Frame-0 capture. Pairs with --screenshot/--screenshot-after so ONE run
+    // yields two frames to compare; see tools/ci-animate.sh for why a single
+    // capture cannot prove the repaint loop is alive.
+    else if (a == "--screenshot-first") screenshotFirst = next("--screenshot-first");
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
@@ -471,7 +501,8 @@ int main(int argc, char** argv) {
 #if RNI_WITH_WINDOW
     return RunWindowed(bundlePath, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl, width, height, pointScale,
-                       logMutations, frames, screenshotAfterMs, screenshot);
+                       logMutations, frames, screenshotAfterMs, screenshot,
+                       screenshotFirst);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "
