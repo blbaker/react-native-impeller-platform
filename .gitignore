@@ -17,3 +17,5 @@ engine/third_party/hermes-build/
 # Fetched binary (pinned + sha256-verified by tools/angle-fetch.sh), not source.
 engine/third_party/angle-win-x64/
 engine/third_party/angle-darwin-arm64/
+engine/third_party/glfw/
+engine/third_party/x11-sysroot/
