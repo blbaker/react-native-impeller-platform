@@ -136,4 +136,41 @@ bash tools/ci-registry.sh | grep -E "registry up|published |installed engine|for
 echo "### gate 14: retina (points vs pixels)"
 bash tools/retina-check.sh | grep -E "^\[fabric\]|distinct colours|RETINA_OK"
 
+# ---------------------------------------------------------------------------
+# P9 gates. All three assert on PIXELS, never on clean logs — this phase's
+# governing failure mode is silent by construction: an unregistered Fabric
+# component mounts, counts as painted, and draws nothing.
+#
+# ⚠️ These need a display (DISPLAY=:0) and must NOT have SDL_VIDEODRIVER set.
+# Skipped rather than failed where there is none, so a headless CI box reports
+# honestly instead of going red for a missing X server.
+# ---------------------------------------------------------------------------
+if [ -n "${DISPLAY:-}" ]; then
+  echo "### gate 15: windowed WSI (a real window, N frames, valid capture)"
+  bash tools/ci-window.sh | grep -E "WINDOW_GATE_PASS|OK:"
+
+  # ⛔ NOT redundant with gate 15. That one passes on an engine that paints
+  # frame 0 and redraws IDENTICAL pixels forever — indistinguishable from the
+  # old one-shot for anyone watching a loading animation. Only two captures
+  # from ONE run, compared as pixels, can tell them apart.
+  echo "### gate 16: repaint loop draws NEW content (matched pair)"
+  bash tools/ci-animate.sh | grep -E "ANIMATE_GATE_PASS|px changed"
+else
+  echo "### gates 15-16: SKIPPED (no DISPLAY; windowed gates need an X server)"
+fi
+
+# Headless, so it always runs. Matched TRIPLE: solid paints, fillOpacity=0
+# paints nothing, and two paths differing ONLY in opacity differ from each
+# other. The third is the one that catches a renderer that treats fill-opacity
+# as all-or-nothing.
+echo "### gate 17: SVG paths paint, with PER-PATH fill-opacity"
+bash tools/ci-svg.sh | grep -E "SVG_GATE_PASS|solid="
+
+# The product-shaped acceptance: 17 filled paths in one <Svg> inside a <G>,
+# one colour, differing only by fill-opacity — the HostApp mark's structure. The
+# assertion is a COUNT of distinct alpha levels, because "did it paint" and
+# "is it grey" both pass on the flat disc a global-opacity renderer produces.
+echo "### gate 18: the HostApp mark's structure (17 even grey levels)"
+bash tools/ci-mark.sh | grep -E "MARK_GATE_PASS|distinct grey levels"
+
 echo "ALL_GATES_PASS"
