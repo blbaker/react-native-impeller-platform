@@ -194,4 +194,11 @@ bash tools/ci-stroke.sh | grep -E "STROKE_GATE_PASS|edge="
 echo "### gate 21: basic shapes (rect, circle, ellipse, line)"
 bash tools/ci-shapes.sh | grep -E "SHAPES_GATE_PASS|ink\("
 
+# A gradient fill is a REFERENCE (url(#id)), not a colour: the def lives in
+# <Defs>, which never paints, so the engine resolves it from a registry at
+# paint time. Asserts ramp SHAPE (ends differ, midpoint between them), not
+# just "something painted" -- and that a dangling ref paints NOTHING.
+echo "### gate 22: gradient fills via url(#id)"
+bash tools/ci-gradient.sh | grep -E "GRADIENT_GATE_PASS|linear|radial|dangling"
+
 echo "ALL_GATES_PASS"

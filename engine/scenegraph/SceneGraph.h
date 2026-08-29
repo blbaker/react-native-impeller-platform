@@ -110,6 +110,28 @@ struct SceneNode {
   bool hasSvgMatrix{false};
   float svgMatrix[6]{1, 0, 0, 1, 0, 0};  // a, b, c, d, tx, ty
 
+  // ⛔ A GRADIENT FILL IS A REFERENCE, NOT A COLOUR.
+  //
+  // extractBrush() emits {type: 0, payload} for a plain colour but
+  // {type: 1, brushRef: "<id>"} for `fill="url(#id)"`. The <LinearGradient>
+  // itself is a SEPARATE node elsewhere in the tree (usually inside <Defs>,
+  // which paints nothing), so resolving it means a registry keyed by the def's
+  // `name` prop -- it cannot be read off the shape's own props.
+  bool svgFillIsRef{false};
+  std::string svgFillRef;
+  bool svgStrokeIsRef{false};
+  std::string svgStrokeRef;
+
+  // Set on the <LinearGradient>/<RadialGradient> def node itself.
+  bool isSvgGradient{false};
+  bool svgGradientRadial{false};
+  std::string svgGradientName;
+  // Flat [offset, argb, offset, argb, ...] exactly as rnsvg packs it.
+  std::vector<float> svgGradientStops;
+  // Linear: x1,y1,x2,y2. Radial: fx,fy,rx,ry (cx/cy carried in [4],[5]).
+  float svgGradientCoords[6]{0, 0, 1, 0, 0, 0};
+  int svgGradientUnits{0};  // 0 = objectBoundingBox, 1 = userSpaceOnUse
+
   std::vector<facebook::react::Tag> children;
   facebook::react::Tag parent{};
 };
@@ -165,6 +187,14 @@ class SceneGraph {
                     bool rounded);
 
   std::mutex mutex_;
+  // Gradient defs by name, rebuilt at the start of every paint. Held as a
+  // pointer to the owning node so the stops/coords are never copied.
+  std::unordered_map<std::string, const SceneNode*> gradients_;
+  // Builds a linear or radial ImpellerColorSource for `def`, resolved against
+  // the referencing shape's box (x, y, w, h) for objectBoundingBox units.
+  // Caller owns the result and must Release it.
+  ImpellerColorSource makeGradientSource(const SceneNode* def, float x, float y,
+                                         float w, float h, float alpha) const;
   int painted_{0};  // reset per paint(); incremented in paintNode()
   std::unordered_map<facebook::react::Tag, SceneNode> nodes_;
   std::vector<facebook::react::Tag> roots_;

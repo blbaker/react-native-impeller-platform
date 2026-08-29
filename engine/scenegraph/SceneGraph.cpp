@@ -102,14 +102,42 @@ bool svgFillFromDynamic(const folly::dynamic& v, float out[4]) {
 // stroke on a length string) or inheriting rnsvg's miterlimit default of 0
 // (every miter join collapses to a bevel) while its siblings stay correct.
 // Written once, every shape gets every fix.
+// Reads a brush that may be a plain colour OR a url(#id) reference.
+// Returns true when `out` holds a usable colour; sets *ref when the brush is a
+// reference instead (type 1), which the caller resolves against the gradient
+// registry at paint time.
+bool svgBrushFromDynamic(const folly::dynamic& v, float out[4], bool* isRef,
+                         std::string* ref) {
+  *isRef = false;
+  ref->clear();
+  if (!v.isObject()) return false;
+  auto* type = v.get_ptr("type");
+  if (type == nullptr || !type->isNumber()) return false;
+  const int t = (int)type->asDouble();
+  if (t == 1) {
+    // url(#id) -- the gradient/pattern lives elsewhere in the tree.
+    auto* br = v.get_ptr("brushRef");
+    if (br != nullptr && br->isString()) {
+      *isRef = true;
+      *ref = br->asString();
+    }
+    return false;
+  }
+  if (t != 0) return false;  // currentColor / context-fill / context-stroke
+  return svgFillFromDynamic(v, out);
+}
+
 template <typename P>
 void readSvgPaintProps(SceneNode& node, const P* pp) {
-  node.svgHasFill = svgFillFromDynamic(pp->fill, node.svgFillColor);
+  node.svgHasFill = svgBrushFromDynamic(pp->fill, node.svgFillColor,
+                                        &node.svgFillIsRef, &node.svgFillRef);
   node.svgFillOpacity = (float)pp->fillOpacity;
   // fillRule: 0 = evenodd, 1 = nonzero.
   node.svgFillEvenOdd = (pp->fillRule == 0);
 
-  node.svgHasStroke = svgFillFromDynamic(pp->stroke, node.svgStrokeColor);
+  node.svgHasStroke = svgBrushFromDynamic(pp->stroke, node.svgStrokeColor,
+                                          &node.svgStrokeIsRef,
+                                          &node.svgStrokeRef);
   node.svgStrokeOpacity = (float)pp->strokeOpacity;
   // strokeWidth is folly::dynamic: a number OR a length string ("2", "2px").
   node.svgStrokeWidth = 1.0f;
@@ -447,6 +475,37 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       // so the stroke pass is unambiguously what paints.
       node.svgHasFill = false;
     }
+  } else if (node.componentName == "RNSVGLinearGradient" ||
+             node.componentName == "RNSVGRadialGradient") {
+    // ⛔ A GRADIENT DEF PAINTS NOTHING ITSELF. It is a definition consumed by
+    // whichever shape references it with fill="url(#id)" -- and it usually
+    // sits inside <Defs>, which is not even in the paint order. So this branch
+    // only RECORDS it; SceneGraph::paint resolves references against the
+    // registry built from these nodes.
+    node.isSvgGradient = true;
+    node.svgGradientRadial = (node.componentName == "RNSVGRadialGradient");
+    if (const auto* lg = dynamic_cast<const react::RNSVGLinearGradientProps*>(
+            view.props.get())) {
+      node.svgGradientName = lg->name;
+      node.svgGradientStops.assign(lg->gradient.begin(), lg->gradient.end());
+      node.svgGradientCoords[0] = svgLength(lg->x1);
+      node.svgGradientCoords[1] = svgLength(lg->y1);
+      node.svgGradientCoords[2] = svgLength(lg->x2, 1.0f);
+      node.svgGradientCoords[3] = svgLength(lg->y2);
+      node.svgGradientUnits = lg->gradientUnits;
+    } else if (const auto* rg =
+                   dynamic_cast<const react::RNSVGRadialGradientProps*>(
+                       view.props.get())) {
+      node.svgGradientName = rg->name;
+      node.svgGradientStops.assign(rg->gradient.begin(), rg->gradient.end());
+      node.svgGradientCoords[0] = svgLength(rg->fx, 0.5f);
+      node.svgGradientCoords[1] = svgLength(rg->fy, 0.5f);
+      node.svgGradientCoords[2] = svgLength(rg->rx, 0.5f);
+      node.svgGradientCoords[3] = svgLength(rg->ry, 0.5f);
+      node.svgGradientCoords[4] = svgLength(rg->cx, 0.5f);
+      node.svgGradientCoords[5] = svgLength(rg->cy, 0.5f);
+      node.svgGradientUnits = rg->gradientUnits;
+    }
   }
 
 #endif
@@ -695,7 +754,16 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // ordinary in real artwork. Gating the whole block on svgHasFill would make
   // every stroke-only element paint nothing, silently, which is the same class
   // of failure as the dropped brush that shipped in P9-B2.
-  if (node.isSvgPath && (node.svgHasFill || node.svgHasStroke) &&
+  // ⛔ THE GUARD MUST INCLUDE REFERENCE BRUSHES.
+  //
+  // svgHasFill/svgHasStroke mean "resolved to a literal colour", and a
+  // url(#id) brush resolves to NEITHER -- it is a reference looked up at paint
+  // time. Testing only the colour flags skips the whole block for every
+  // gradient-filled shape: parsed correctly, registry built correctly, and
+  // nothing drawn. Exactly the silent shape this phase keeps producing.
+  if (node.isSvgPath &&
+      (node.svgHasFill || node.svgHasStroke || node.svgFillIsRef ||
+       node.svgStrokeIsRef) &&
       !node.svgD.empty()) {
     ImpellerPathBuilder pb = ImpellerPathBuilderNew();
     if (pb != nullptr) {
@@ -722,6 +790,39 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
             ImpellerPaintSetColor(svgPaint, &fc);
             ImpellerDisplayListBuilderDrawPath(builder, path, svgPaint);
             ImpellerPaintRelease(svgPaint);
+          } else if (node.svgFillIsRef && fillAlpha > 0.0f) {
+            // fill="url(#id)" — resolve against the gradient registry built
+            // from the def nodes. A miss paints NOTHING rather than a guessed
+            // colour: a wrong colour is a bug that looks like a design choice.
+            auto git = gradients_.find(node.svgFillRef);
+            if (git != gradients_.end()) {
+              // ⛔ objectBoundingBox UNITS MEAN THE SHAPE'S BOX, NOT THE NODE'S
+              // LAYOUT FRAME.
+              //
+              // Every RNSVG node's layout frame is the whole SVG surface
+              // (measured: `node_frame=RNSVGRect,8,0,0,400,300` for a 200x80
+              // rect), because rnsvg does its own layout in SVG user space.
+              // Using the frame stretched every gradient across the entire
+              // canvas -- the ramp still rendered, just badly wrong: a
+              // red->blue gradient reached only (118,0,137) at the shape's
+              // right edge instead of pure blue, and a white-centred radial
+              // read (66,66,66) at its centre. Ask the PATH for its bounds.
+              ImpellerRect b = {0, 0, 0, 0};
+              ImpellerPathGetBounds(path, &b);
+              ImpellerColorSource src = makeGradientSource(
+                  git->second, b.x, b.y, b.width, b.height, fillAlpha);
+              if (src != nullptr) {
+                // ⛔ Its OWN paint. ImpellerPaintSetColorSource is declared
+                // IMPELLER_NONNULL, so a colour source can never be CLEARED
+                // once set — a shared paint would gradient-fill everything
+                // drawn after it. Same trap the View gradient path documents.
+                ImpellerPaint gp = ImpellerPaintNew();
+                ImpellerPaintSetColorSource(gp, src);
+                ImpellerDisplayListBuilderDrawPath(builder, path, gp);
+                ImpellerPaintRelease(gp);
+                ImpellerColorSourceRelease(src);
+              }
+            }
           }
 
           // ⛔ STROKE IS A SECOND DRAW, NOT kImpellerDrawStyleStrokeAndFill.
@@ -914,9 +1015,87 @@ void SceneGraph::paintBorders(ImpellerDisplayListBuilder builder,
   }
 }
 
+ImpellerColorSource SceneGraph::makeGradientSource(const SceneNode* def,
+                                                   float x, float y, float w,
+                                                   float h, float alpha) const {
+  if (def == nullptr) return nullptr;
+  const auto& g = def->svgGradientStops;
+  // Flat [offset, argb, offset, argb, ...]; anything else is a shape we do not
+  // understand and must not guess at.
+  if (g.size() < 4 || (g.size() % 2) != 0) return nullptr;
+
+  const size_t n = g.size() / 2;
+  std::vector<ImpellerColor> colors(n);
+  std::vector<float> stops(n);
+  for (size_t i = 0; i < n; ++i) {
+    stops[i] = g[i * 2];
+    // ⛔ THE STOP COLOUR ARRIVES AS A **NEGATIVE** FLOAT, AND THAT IS NOT THE
+    // SAME AS THE FILL BRUSH'S PAYLOAD.
+    //
+    // Measured at runtime: red = -65536.0, blue = -16776961.0,
+    // white = -1.0 -- i.e. the packed ARGB reinterpreted as a SIGNED int32,
+    // because rnsvg pushes processColor()'s signed result straight into the
+    // same numeric vector as the offsets. The fill brush's `payload`, which
+    // crosses as JSON, arrives POSITIVE (4294901760) instead.
+    //
+    // So the two colour paths in this file have different signs for the same
+    // colour, and int64 here is not load-bearing the way it is for `payload`
+    // (an int32 cast gives an identical result for negative values -- verified
+    // as an equivalent mutant). It stays int64 so BOTH representations decode
+    // correctly if rnsvg ever changes which one it sends.
+    const auto argb = static_cast<uint32_t>(static_cast<int64_t>(g[i * 2 + 1]));
+    float c[4];
+    c[3] = (float)((argb >> 24) & 0xFF) / 255.0f;
+    c[0] = (float)((argb >> 16) & 0xFF) / 255.0f;
+    c[1] = (float)((argb >> 8) & 0xFF) / 255.0f;
+    c[2] = (float)(argb & 0xFF) / 255.0f;
+    colors[i] = impellerColor(c, c[3] * alpha);
+  }
+
+  // gradientUnits: 0 = objectBoundingBox (coords are 0..1 fractions of the
+  // referencing shape's box), 1 = userSpaceOnUse (absolute user units).
+  const bool bbox = (def->svgGradientUnits == 0);
+  auto mapX = [&](float v) { return bbox ? x + v * w : x + v; };
+  auto mapY = [&](float v) { return bbox ? y + v * h : y + v; };
+
+  if (!def->svgGradientRadial) {
+    ImpellerPoint p0 = {mapX(def->svgGradientCoords[0]),
+                        mapY(def->svgGradientCoords[1])};
+    ImpellerPoint p1 = {mapX(def->svgGradientCoords[2]),
+                        mapY(def->svgGradientCoords[3])};
+    return ImpellerColorSourceCreateLinearGradientNew(
+        &p0, &p1, (uint32_t)n, colors.data(), stops.data(),
+        kImpellerTileModeClamp, nullptr);
+  }
+
+  // ⚠️ Impeller's radial gradient is CIRCULAR -- one radius, no focal point.
+  // SVG's is an ellipse (rx, ry) with an optional focus. Using the mean radius
+  // is a documented approximation, NOT parity: an SVG radial with rx != ry
+  // renders as a circle here. Recorded in docs/STATE.md rather than silently
+  // shipped as if correct.
+  ImpellerPoint centre = {mapX(def->svgGradientCoords[4]),
+                          mapY(def->svgGradientCoords[5])};
+  const float rx = bbox ? def->svgGradientCoords[2] * w : def->svgGradientCoords[2];
+  const float ry = bbox ? def->svgGradientCoords[3] * h : def->svgGradientCoords[3];
+  const float radius = (rx + ry) * 0.5f;
+  if (radius <= 0.0f) return nullptr;
+  return ImpellerColorSourceCreateRadialGradientNew(
+      &centre, radius, (uint32_t)n, colors.data(), stops.data(),
+      kImpellerTileModeClamp, nullptr);
+}
+
 int SceneGraph::paint(ImpellerDisplayListBuilder builder,
                       float pointScaleFactor) {
   std::lock_guard<std::mutex> lock(mutex_);
+  // Rebuild the gradient registry before walking the tree: a def may be
+  // declared anywhere (usually inside <Defs>, which never paints), so it
+  // cannot be resolved during the walk itself.
+  gradients_.clear();
+  for (const auto& [tag, n] : nodes_) {
+    if (n.isSvgGradient && !n.svgGradientName.empty()) {
+      gradients_[n.svgGradientName] = &n;
+    }
+  }
   // ⛔ SCALE ONCE, AT THE ROOT — NOT PER NODE.
   // The tree's frames are in points. Applying the device scale as a single
   // root transform means every child, every stroke width and every glyph run

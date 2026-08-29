@@ -135,7 +135,8 @@ std::vector<std::string> FabricHost::knownComponentNames() {
 #if RNI_WITH_RNSVG
   names.insert(names.end(), {"RNSVGSvgView", "RNSVGGroup", "RNSVGPath",
                              "RNSVGRect", "RNSVGCircle", "RNSVGEllipse",
-                             "RNSVGLine"});
+                             "RNSVGLine", "RNSVGDefs", "RNSVGLinearGradient",
+                             "RNSVGRadialGradient"});
 #endif
   return names;
 }
@@ -181,6 +182,15 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
       react::concreteComponentDescriptorProvider<react::RNSVGEllipseComponentDescriptor>());
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::RNSVGLineComponentDescriptor>());
+  // <Defs> paints nothing -- it is a container for definitions -- but it MUST
+  // be registered or its gradient children never mount and every url(#id)
+  // reference silently resolves to nothing.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGDefsComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGLinearGradientComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGRadialGradientComponentDescriptor>());
 #endif
   providerRegistry_ = providerRegistry;
 
