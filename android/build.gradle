@@ -1,0 +1,55 @@
+// The Android library module for react-native-impeller.
+//
+// ⛔ `com.android.library`, NEVER `com.android.application`.
+//
+// This produces an AAR that a host app consumes. It has no Activity, no
+// launcher intent and no APK of its own -- HostApp v4's Expo/React Native project
+// owns all of that. If this file ever grows an `applicationId`, someone has
+// misunderstood the deliverable.
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.reactnativeimpeller'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 24
+        targetSdk 34
+
+        // ⚠️ arm64-v8a only FOR NOW -- a scope choice, not a platform limit.
+        //
+        // Measured at our pinned SHA: android-arm64 200, android-x64 200,
+        // android-arm 200 (that is the 32-bit build; the name
+        // "android-armeabi-v7a" is a 404, which is easy to mistake for
+        // "32-bit is unsupported"). So armeabi-v7a and x86_64 are both
+        // available whenever they are wanted -- x86_64 in particular is what
+        // an emulator needs. Each extra ABI is another ~7 MB of stripped
+        // libimpeller.so in the AAR.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    // The native library is cross-compiled by tools/android-build.sh rather
+    // than by externalNativeBuild. That keeps the CMake invocation identical
+    // whether it runs from Gradle or from CI, and means a host app consuming
+    // the AAR never needs the NDK.
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
