@@ -297,6 +297,32 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       // the same reading skia-platform's SceneGraph.cpp uses for the same
       // generated prop.
       node.svgFillEvenOdd = (pp->fillRule == 0);
+
+      // Stroke, read with the SAME by-value discipline as fill: `stroke` is a
+      // brush object whose payload is a packed ARGB that exceeds INT32_MAX for
+      // any opaque colour (see svgFillFromDynamic).
+      node.svgHasStroke = svgFillFromDynamic(pp->stroke, node.svgStrokeColor);
+      node.svgStrokeOpacity = (float)pp->strokeOpacity;
+      // ⛔ strokeWidth is folly::dynamic, NOT a Float — react-native-svg allows
+      // a number OR a length string ("2", "2px"). Reading it as a number only
+      // would silently give width 0 (an invisible stroke) for the string form,
+      // so both are handled and anything else keeps the SVG default of 1.
+      node.svgStrokeWidth = 1.0f;
+      if (pp->strokeWidth.isNumber()) {
+        node.svgStrokeWidth = (float)pp->strokeWidth.asDouble();
+      } else if (pp->strokeWidth.isString()) {
+        try {
+          node.svgStrokeWidth = std::stof(pp->strokeWidth.asString());
+        } catch (const std::exception&) {
+          node.svgStrokeWidth = 1.0f;
+        }
+      }
+      node.svgStrokeLinecap = pp->strokeLinecap;
+      node.svgStrokeLinejoin = pp->strokeLinejoin;
+      // SVG's default miterlimit is 4; rnsvg's generated default is 0, which
+      // would collapse every miter join to a bevel.
+      node.svgStrokeMiterlimit =
+          pp->strokeMiterlimit > 0.0 ? (float)pp->strokeMiterlimit : 4.0f;
       // node.opacity already carries the resolved ViewProps opacity (set
       // above from the same props object, since RNSVGPathProps derives
       // ViewProps) — paintNode multiplies it with svgFillOpacity, per-path.
@@ -542,7 +568,14 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // is the HostApp mark's product requirement (17 paths, grey ramp IS the
   // per-path fillOpacity), not a rounding nicety — do not fold it into a
   // single shared paint the way plain Views share `paint` above.
-  if (node.isSvgPath && node.svgHasFill && !node.svgD.empty()) {
+  // ⛔ THE GUARD IS fill-OR-stroke, NOT fill.
+  //
+  // An SVG element may have a stroke and NO fill -- an outlined shape is
+  // ordinary in real artwork. Gating the whole block on svgHasFill would make
+  // every stroke-only element paint nothing, silently, which is the same class
+  // of failure as the dropped brush that shipped in P9-B2.
+  if (node.isSvgPath && (node.svgHasFill || node.svgHasStroke) &&
+      !node.svgD.empty()) {
     ImpellerPathBuilder pb = ImpellerPathBuilderNew();
     if (pb != nullptr) {
       if (ParseSvgPathToBuilder(node.svgD, pb)) {
@@ -551,23 +584,57 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                                                : kImpellerFillTypeNonZero;
         ImpellerPath path = ImpellerPathBuilderTakePathNew(pb, fillType);
         if (path != nullptr) {
-          const float alpha = std::clamp(node.svgFillOpacity, 0.0f, 1.0f) *
-                              std::clamp(node.opacity, 0.0f, 1.0f);
-          if (alpha > 0.0f) {
-            ImpellerColor fc = impellerColor(node.svgFillColor, alpha);
+          const float nodeAlpha = std::clamp(node.opacity, 0.0f, 1.0f);
+          const float fillAlpha =
+              std::clamp(node.svgFillOpacity, 0.0f, 1.0f) * nodeAlpha;
+          const float strokeAlpha =
+              std::clamp(node.svgStrokeOpacity, 0.0f, 1.0f) * nodeAlpha;
+
+          // The `d` coordinates are in the SVG's own local space; translate
+          // once so both passes land at the node's painted origin.
+          ImpellerDisplayListBuilderSave(builder);
+          ImpellerDisplayListBuilderTranslate(builder, x, y);
+
+          if (node.svgHasFill && fillAlpha > 0.0f) {
+            ImpellerColor fc = impellerColor(node.svgFillColor, fillAlpha);
             ImpellerPaint svgPaint = ImpellerPaintNew();
             ImpellerPaintSetColor(svgPaint, &fc);
-            // RNSVGPath's `d` coordinates are in the SVG's own local space,
-            // which for tier 1 (no <G transform> consumption — see
-            // docs/STATE.md P9-B2 known gap) coincides with the node's
-            // layout frame origin; translate so the path lands at (x, y)
-            // rather than at the surface origin.
-            ImpellerDisplayListBuilderSave(builder);
-            ImpellerDisplayListBuilderTranslate(builder, x, y);
             ImpellerDisplayListBuilderDrawPath(builder, path, svgPaint);
-            ImpellerDisplayListBuilderRestore(builder);
             ImpellerPaintRelease(svgPaint);
           }
+
+          // ⛔ STROKE IS A SECOND DRAW, NOT kImpellerDrawStyleStrokeAndFill.
+          //
+          // SVG gives fill and stroke INDEPENDENT colours and opacities, and a
+          // single paint carries only one colour. StrokeAndFill would force
+          // the stroke to be the fill's colour -- which looks plausible on a
+          // shape whose fill and stroke happen to match and is wrong
+          // everywhere else. Draw order is fill-then-stroke, as SVG specifies.
+          if (node.svgHasStroke && strokeAlpha > 0.0f &&
+              node.svgStrokeWidth > 0.0f) {
+            ImpellerColor sc = impellerColor(node.svgStrokeColor, strokeAlpha);
+            ImpellerPaint strokePaint = ImpellerPaintNew();
+            ImpellerPaintSetColor(strokePaint, &sc);
+            ImpellerPaintSetDrawStyle(strokePaint, kImpellerDrawStyleStroke);
+            ImpellerPaintSetStrokeWidth(strokePaint, node.svgStrokeWidth);
+            // rnsvg encodes cap/join as ints in SVG's own order.
+            ImpellerPaintSetStrokeCap(
+                strokePaint, node.svgStrokeLinecap == 1 ? kImpellerStrokeCapRound
+                             : node.svgStrokeLinecap == 2
+                                 ? kImpellerStrokeCapSquare
+                                 : kImpellerStrokeCapButt);
+            ImpellerPaintSetStrokeJoin(
+                strokePaint, node.svgStrokeLinejoin == 1
+                                 ? kImpellerStrokeJoinRound
+                             : node.svgStrokeLinejoin == 2
+                                 ? kImpellerStrokeJoinBevel
+                                 : kImpellerStrokeJoinMiter);
+            ImpellerPaintSetStrokeMiter(strokePaint, node.svgStrokeMiterlimit);
+            ImpellerDisplayListBuilderDrawPath(builder, path, strokePaint);
+            ImpellerPaintRelease(strokePaint);
+          }
+
+          ImpellerDisplayListBuilderRestore(builder);
           ImpellerPathRelease(path);
         }
       }

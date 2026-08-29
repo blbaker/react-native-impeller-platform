@@ -180,4 +180,11 @@ bash tools/ci-mark.sh | grep -E "MARK_GATE_PASS|distinct grey levels"
 echo "### gate 19: <G transform> moves its children (translate/scale/rotate)"
 bash tools/ci-gtransform.sh | grep -E "GTRANSFORM_GATE_PASS|->"
 
+# Fill and stroke are INDEPENDENT in SVG (own colours, own opacities), so a
+# single StrokeAndFill paint would draw the outline in the fill's colour --
+# invisible on any shape whose two colours match. Probes a stroke-only shape
+# (fill="none"), differing colours, width, and strokeOpacity.
+echo "### gate 20: stroke (independent colour, width, opacity)"
+bash tools/ci-stroke.sh | grep -E "STROKE_GATE_PASS|edge="
+
 echo "ALL_GATES_PASS"

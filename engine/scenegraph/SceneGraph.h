@@ -88,6 +88,16 @@ struct SceneNode {
   float svgFillOpacity{1.0f};
   bool svgFillEvenOdd{false};
 
+  // Stroke. Independent of fill: an SVG element may have either, both, or
+  // neither, and a stroked-only shape with no fill is ordinary in real art.
+  bool svgHasStroke{false};
+  float svgStrokeColor[4]{0, 0, 0, 1};
+  float svgStrokeOpacity{1.0f};
+  float svgStrokeWidth{1.0f};
+  int svgStrokeLinecap{0};   // 0 butt, 1 round, 2 square  (rnsvg encoding)
+  int svgStrokeLinejoin{0};  // 0 miter, 1 round, 2 bevel  (rnsvg encoding)
+  float svgStrokeMiterlimit{4.0f};
+
   // ⛔ SVG's transform is a 2D AFFINE OF SIX FLOATS, not the 16-float 4x4 the
   // View `transform` prop carries. react-native-svg's extractTransform()
   // returns COLUMN-MAJOR [a, b, c, d, tx, ty] (see its
