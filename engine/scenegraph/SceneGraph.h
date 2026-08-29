@@ -122,6 +122,39 @@ struct SceneNode {
   bool svgStrokeIsRef{false};
   std::string svgStrokeRef;
 
+  // ⛔ A DEFINITION SUBTREE IS NOT IN THE PAINT ORDER.
+  //
+  // <Defs> and <Symbol> are containers whose children are DECLARED, not drawn.
+  // The painter recurses into every child unconditionally, so without this flag
+  // a <Symbol> full of <Path>s paints ONCE at the defs block's own position --
+  // not "nothing", which is what an unregistered component looks like, but a
+  // stray mark in the wrong place. Measured 2026-08-28 with
+  // fixtures/p9-usesym: the symbol's green path painted at its own coordinates
+  // while the <Use> site stayed background. That reads as a CSS/layout bug and
+  // is not one, which is exactly the expensive kind.
+  //
+  // Set on <Defs>, <Symbol>, <ClipPath> and <Mask> -- every rnsvg container
+  // that defines rather than draws. Marking one of these that DOES paint would
+  // make art vanish, so the list is deliberately short and explicit.
+  bool isSvgDefinition{false};
+
+  // <Symbol>: its own viewBox, needed to scale the instance at each <Use>.
+  // minX, minY, vbWidth, vbHeight.
+  float svgSymbolViewBox[4]{0, 0, 0, 0};
+  // <Symbol id> / any element's `name` -- the key a <Use href="#id"> resolves
+  // against. Kept separate from svgGradientName because a symbol and a gradient
+  // can share neither storage nor lifetime rules.
+  std::string svgDefName;
+
+  // <Use>: the href WITHOUT the leading '#', plus the instance box. An empty
+  // reference, or one that resolves to nothing, must paint nothing rather than
+  // fall through to some default -- a dangling url(#id) is a real authoring
+  // state, not an error.
+  bool isSvgUse{false};
+  std::string svgUseHref;
+  float svgUseBox[4]{0, 0, 0, 0};  // x, y, width, height
+  bool svgUseHasSize{false};
+
   // Set on the <LinearGradient>/<RadialGradient> def node itself.
   bool isSvgGradient{false};
   bool svgGradientRadial{false};
@@ -190,6 +223,14 @@ class SceneGraph {
   // Gradient defs by name, rebuilt at the start of every paint. Held as a
   // pointer to the owning node so the stops/coords are never copied.
   std::unordered_map<std::string, const SceneNode*> gradients_;
+  // <Symbol>/<Defs>-child definitions by name, rebuilt at the start of every
+  // paint for the same reason gradients_ is: a <Use> may precede its target in
+  // document order, so it cannot be resolved during the walk.
+  std::unordered_map<std::string, const SceneNode*> svgDefs_;
+  // Guards against a <Use href> chain that reaches itself. A self-referencing
+  // symbol is invalid SVG but perfectly expressible, and the naive recursion
+  // is an infinite loop inside the render thread -- a hang, not an error.
+  int svgUseDepth_{0};
   // Builds a linear or radial ImpellerColorSource for `def`, resolved against
   // the referencing shape's box (x, y, w, h) for objectBoundingBox units.
   // Caller owns the result and must Release it.

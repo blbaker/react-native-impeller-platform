@@ -176,6 +176,13 @@ float svgLength(const folly::dynamic& v, float fallback = 0.0f) {
 // a quarter arc to within ~0.02%.
 constexpr float kKappa = 0.5522847498f;
 
+// <Use> nesting limit. A symbol whose subtree contains a <Use> back to itself
+// is invalid SVG but trivially expressible, and the naive recursion is an
+// infinite loop on the render thread -- a HANG, which in a headless gate reads
+// as a timeout with no output rather than as bad art. Six is deeper than any
+// real icon set and shallow enough to be free.
+constexpr int kMaxUseDepth = 6;
+
 std::string ellipseToPathData(float cx, float cy, float rx, float ry) {
   if (rx <= 0.0f || ry <= 0.0f) return {};
   char buf[512];
@@ -475,6 +482,51 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       // so the stroke pass is unambiguously what paints.
       node.svgHasFill = false;
     }
+  } else if (node.componentName == "RNSVGDefs" ||
+             node.componentName == "RNSVGClipPath" ||
+             node.componentName == "RNSVGMask") {
+    // Containers that DECLARE. See SceneNode::isSvgDefinition -- without this
+    // the painter walks straight into their children and draws the definition
+    // at its own coordinates.
+    node.isSvgDefinition = true;
+  } else if (node.componentName == "RNSVGSymbol") {
+    node.isSvgDefinition = true;
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGSymbolProps*>(view.props.get())) {
+      node.svgDefName = pp->name;
+      node.svgSymbolViewBox[0] = (float)pp->minX;
+      node.svgSymbolViewBox[1] = (float)pp->minY;
+      node.svgSymbolViewBox[2] = (float)pp->vbWidth;
+      node.svgSymbolViewBox[3] = (float)pp->vbHeight;
+    }
+  } else if (node.componentName == "RNSVGUse") {
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGUseProps*>(view.props.get())) {
+      node.isSvgUse = true;
+      // ⚠️ `href` ARRIVES ALREADY STRIPPED OF ITS '#'. I asserted the opposite
+      // and was wrong; the mutation run caught it. elements/Use.js matches
+      // `href` against idPattern = /#([^)]+)'?\)?$/ and forwards CAPTURE GROUP
+      // 1, so "#hostapp-sig" reaches C++ as "hostapp-sig". (A gradient's brushRef is
+      // stripped the same way, by extractBrush -- the two are consistent, which
+      // is the opposite of what the comment here used to claim.)
+      //
+      // The defensive strip below is therefore a no-op today and is kept only
+      // because xlinkHref and a future non-JS caller could bypass that path. It
+      // is NOT load-bearing, and mutation-verify-usesym.sh deliberately does not
+      // pretend it is: a mutant removing it SURVIVES, correctly.
+      node.svgUseHref = pp->href;
+      if (!node.svgUseHref.empty() && node.svgUseHref[0] == '#') {
+        node.svgUseHref.erase(0, 1);
+      }
+      node.svgUseBox[0] = svgLength(pp->x);
+      node.svgUseBox[1] = svgLength(pp->y);
+      node.svgUseBox[2] = svgLength(pp->width, -1.0f);
+      node.svgUseBox[3] = svgLength(pp->height, -1.0f);
+      node.svgUseHasSize = node.svgUseBox[2] > 0.0f && node.svgUseBox[3] > 0.0f;
+      // A <Use> carries the full renderable prop set and its fill/stroke
+      // CASCADE into the instance, so read them like any other shape.
+      readSvgPaintProps(node, pp);
+    }
   } else if (node.componentName == "RNSVGLinearGradient" ||
              node.componentName == "RNSVGRadialGradient") {
     // ⛔ A GRADIENT DEF PAINTS NOTHING ITSELF. It is a definition consumed by
@@ -627,6 +679,19 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   const float h = (float)frame.size.height;
 
   ++painted_;
+
+  // ⛔ A DEFINITION SUBTREE PAINTS NOTHING -- AND NEITHER DO ITS CHILDREN.
+  //
+  // This return is BEFORE the child walk on purpose. <Defs> and <Symbol> hold
+  // ordinary <Path> nodes that are perfectly paintable, so recursing would draw
+  // the definition at its own coordinates: measured green ink at the symbol's
+  // own (140,20) with the <Use> site left blank (fixtures/p9-usesym).
+  //
+  // Note this is NOT the same as skipping an unregistered component. An
+  // unregistered <Symbol> arrives as plain ViewProps, mounts, and its children
+  // still paint -- which is why registering Symbol WITHOUT this early return
+  // would have changed nothing about the bug.
+  if (node.isSvgDefinition) return;
   ImpellerPaint paint = ImpellerPaintNew();
   ImpellerRect rect = {x, y, w, h};  // {x,y,w,h}, NOT LTRB
 
@@ -910,6 +975,52 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       paintNode(builder, it->second, x, y);
     }
   }
+
+  // <Use href="#id"> -- paint the referenced definition's subtree HERE.
+  //
+  // This is what makes symbol+use work at all: the definition is skipped at its
+  // own site (isSvgDefinition above) and re-entered from each instance, so N
+  // <Use> refs to one <Symbol> produce N drawings of ONE asset. The alternative
+  // -- inlining the paths at every mounting site in the source -- duplicates
+  // the artwork N times and loses the single-source guarantee that makes a
+  // content hash of the symbol block meaningful.
+  //
+  // ⚠️ A DANGLING href PAINTS NOTHING, DELIBERATELY. `url(#missing)` is a real
+  // authoring state; falling back to a default fill would silently invent art.
+  if (node.isSvgUse && !node.svgUseHref.empty() && svgUseDepth_ < kMaxUseDepth) {
+    auto def = svgDefs_.find(node.svgUseHref);
+    if (def != svgDefs_.end() && def->second != nullptr) {
+      const SceneNode& target = *def->second;
+      ImpellerDisplayListBuilderSave(builder);
+      // Instance placement. x/y translate the instance; when BOTH width and
+      // height are given AND the symbol declares a viewBox, the instance is
+      // also scaled to fit -- that is the whole point of <symbol viewBox> and
+      // dropping it makes every <Use> paint at the symbol's authoring size,
+      // which looks like "the logo is the wrong size" rather than a bug.
+      float sx = 1.0f, sy = 1.0f;
+      if (node.svgUseHasSize && target.svgSymbolViewBox[2] > 0.0f &&
+          target.svgSymbolViewBox[3] > 0.0f) {
+        sx = node.svgUseBox[2] / target.svgSymbolViewBox[2];
+        sy = node.svgUseBox[3] / target.svgSymbolViewBox[3];
+      }
+      const float tx = node.svgUseBox[0] - target.svgSymbolViewBox[0] * sx;
+      const float ty = node.svgUseBox[1] - target.svgSymbolViewBox[1] * sy;
+      ImpellerMatrix um = {{sx, 0, 0, 0,
+                            0, sy, 0, 0,
+                            0, 0, 1, 0,
+                            tx, ty, 0, 1}};
+      ImpellerDisplayListBuilderTransform(builder, &um);
+      ++svgUseDepth_;
+      // The TARGET's own children, not the target: the <Symbol> node itself is
+      // a definition container and would bounce straight off the early return.
+      for (auto defChild : target.children) {
+        auto ct = nodes_.find(defChild);
+        if (ct != nodes_.end()) paintNode(builder, ct->second, x, y);
+      }
+      --svgUseDepth_;
+      ImpellerDisplayListBuilderRestore(builder);
+    }
+  }
   if (clip) {
     ImpellerDisplayListBuilderRestore(builder);
   }
@@ -1091,11 +1202,18 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder,
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
   gradients_.clear();
+  svgDefs_.clear();
   for (const auto& [tag, n] : nodes_) {
     if (n.isSvgGradient && !n.svgGradientName.empty()) {
       gradients_[n.svgGradientName] = &n;
     }
+    // Symbol definitions, keyed by id, for <Use href="#id">. Same rebuild-per-
+    // frame rule as gradients: a <Use> can appear before its <Symbol>.
+    if (n.isSvgDefinition && !n.svgDefName.empty()) {
+      svgDefs_[n.svgDefName] = &n;
+    }
   }
+  svgUseDepth_ = 0;
   // ⛔ SCALE ONCE, AT THE ROOT — NOT PER NODE.
   // The tree's frames are in points. Applying the device scale as a single
   // root transform means every child, every stroke width and every glyph run

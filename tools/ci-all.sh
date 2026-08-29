@@ -201,4 +201,16 @@ bash tools/ci-shapes.sh | grep -E "SHAPES_GATE_PASS|ink\("
 echo "### gate 22: gradient fills via url(#id)"
 bash tools/ci-gradient.sh | grep -E "GRADIENT_GATE_PASS|linear|radial|dangling"
 
+# <Symbol> + <Use>: ONE asset, N mounting sites.
+#
+# ⚠️ The bug here was NOT "paints nothing". Unregistered, <Symbol> mounted and
+# drew nothing itself, but its registered <Path> children were still walked, so
+# the definition painted ONCE at the defs block's own coordinates -- a stray
+# mark in the wrong place, clean log, screen otherwise complete. The gate
+# asserts BOTH halves in one frame (definition site BARE, use sites INKED)
+# because either alone is green for the wrong reason, plus a scaled instance
+# (40x40 of an 80x80 symbol) so dropping the viewBox scale cannot be a no-op.
+echo "### gate 23: <Symbol>/<Use> -- one asset, N mounting sites"
+bash tools/ci-usesym.sh | grep -E "USESYM_GATE_PASS|control=|scaled_"
+
 echo "ALL_GATES_PASS"

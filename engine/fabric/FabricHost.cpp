@@ -187,6 +187,20 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
   // reference silently resolves to nothing.
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::RNSVGDefsComponentDescriptor>());
+  // <Symbol> + <Use>: one asset, N mounting sites.
+  //
+  // ⚠️ REGISTERING THESE IS NOT WHAT FIXED THEM, AND THAT IS THE LESSON.
+  // Unregistered, <Symbol> mounted with plain ViewProps and painted nothing OF
+  // ITS OWN -- but its <Path> children were registered, so the painter walked
+  // into them and drew the DEFINITION at the defs block's own coordinates. The
+  // symptom was not a missing logo, it was a stray logo somewhere nobody was
+  // probing. Registration lets us READ href/viewBox; SceneGraph's
+  // isSvgDefinition early-return is what stops the leak. Both are required and
+  // either alone is worse than neither.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGSymbolComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGUseComponentDescriptor>());
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::RNSVGLinearGradientComponentDescriptor>());
   providerRegistry->add(
