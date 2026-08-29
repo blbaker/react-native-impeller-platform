@@ -75,6 +75,19 @@ struct SceneNode {
   // clamped label measures one line and paints three.
   int maxLines{0};
 
+  // RNSVGPath (P9-B2). `d` is re-parsed into geometry only when it changes —
+  // see SvgPath.h. fillOpacity is kept SEPARATE from node.opacity (which
+  // already holds the resolved ViewProps opacity for this node): the paint
+  // path multiplies clamp(fillOpacity) * clamp(opacity), because the HostApp
+  // mark's grey ramp is fillOpacity varying PER PATH while opacity is the
+  // ordinary View cascade.
+  bool isSvgPath{false};
+  std::string svgD;
+  bool svgHasFill{false};
+  float svgFillColor[4]{0, 0, 0, 1};
+  float svgFillOpacity{1.0f};
+  bool svgFillEvenOdd{false};
+
   std::vector<facebook::react::Tag> children;
   facebook::react::Tag parent{};
 };

@@ -19,6 +19,17 @@
 #include <react/runtime/ReactInstance.h>
 #include <react/utils/ContextContainer.h>
 
+#if RNI_WITH_RNSVG
+// Two ComponentDescriptor headers: the vendor's own (Group/Path/... — hand-
+// written `using` aliases in common/cpp/) and ours (SvgView — codegen output,
+// since react-native-svg's Svg.js resolves to the platform-suffixed
+// RNSVGSvgView/RNSVGSvgViewAndroid names that only the codegen emits).
+// See engine/cmake/RnSvg.cmake's header comment on the vendor-owns-contract
+// / we-own-pixels split.
+#include "RNSVGComponentDescriptors.h"
+#include <react/renderer/components/rnsvg/ComponentDescriptors.h>
+#endif
+
 #include <atomic>
 #include <cstdio>
 
@@ -119,7 +130,12 @@ std::vector<std::string> FabricHost::knownComponentNames() {
   // MUST match the provider registry below. A component in one list and not
   // the other fails in a way that looks exactly like "the engine does not
   // have it": RN takes a fallback path, nothing mounts, nothing logs.
-  return {"View", "RootView", "Paragraph", "Text", "RawText"};
+  std::vector<std::string> names = {"View", "RootView", "Paragraph", "Text",
+                                     "RawText"};
+#if RNI_WITH_RNSVG
+  names.insert(names.end(), {"RNSVGSvgView", "RNSVGGroup", "RNSVGPath"});
+#endif
+  return names;
 }
 
 FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
@@ -142,6 +158,17 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
       react::concreteComponentDescriptorProvider<react::TextComponentDescriptor>());
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::RawTextComponentDescriptor>());
+#if RNI_WITH_RNSVG
+  // RNSVGSvgView's ComponentDescriptor is OUR codegen output (react-native-svg's
+  // Svg.js resolves to the platform-suffixed name, which only the codegen
+  // emits); Group/Path use the vendor's own hand-written `using` aliases.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGSvgViewComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGGroupComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::RNSVGPathComponentDescriptor>());
+#endif
   providerRegistry_ = providerRegistry;
 
   auto contextContainer = std::make_shared<react::ContextContainer>();

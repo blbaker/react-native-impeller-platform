@@ -6,6 +6,11 @@
 #include <react/renderer/graphics/LinearGradient.h>
 #include <react/renderer/graphics/Transform.h>
 
+#if RNI_WITH_RNSVG
+#include <react/renderer/components/rnsvg/Props.h>
+#include "svg/SvgPath.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -34,6 +39,58 @@ ImpellerColor impellerColor(const float rgba[4], float opacity) {
   c.color_space = kImpellerColorSpaceSRGB;
   return c;
 }
+
+#if RNI_WITH_RNSVG
+// RNSVGPathProps::fill is folly::dynamic, not a real Props type — react-
+// native-svg's extractFill.js hands the native side `{type, payload}`:
+//   type 0 -> plain colour; `payload` is processColor()'s packed ARGB int32.
+//   type 1 -> url(#id) gradient/pattern reference (`brushRef`); unsupported
+//             here, matches skia-platform's tier-1 scope.
+//   type 2 -> currentColor (inherited); unsupported at this tier.
+//   fill=\"none\" (or a value processColor() rejects) -> payload absent.
+// Returns false (no fill) rather than guessing, per D-honesty: an
+// unsupported brush kind should paint NOTHING, not a wrong colour nothing
+// could catch.
+bool svgFillFromDynamic(const folly::dynamic& v, float out[4]) {
+  if (!v.isObject()) return false;
+  // ⛔ NEITHER FIELD IS RELIABLY AN INT. Measured, both arrive as DOUBLES:
+  //   type_isInt=0  payload_isInt=0  payload_isDouble=1
+  // These props cross into C++ as folly::dynamic decoded from JSON, and JSON
+  // has one number type. folly picks int64 or double per value, so an
+  // isInt()-only guard is a coin flip on the encoder's choice -- and it
+  // rejected EVERY fill here, at the `type` check, before payload was even
+  // reached. Read numerics by VALUE, never by storage class.
+  auto* type = v.get_ptr("type");
+  if (type == nullptr || !type->isNumber()) return false;
+  if (type->asDouble() != 0.0) return false;  // gradient ref / currentColor: not tier 1
+  auto* payload = v.get_ptr("payload");
+  if (payload == nullptr) return false;  // "none"
+  // ⛔ THE PAYLOAD DOES NOT FIT IN A SIGNED INT, AND folly SAYS SO BY TYPE.
+  //
+  // processColor() packs ARGB with the alpha in the TOP byte, so any opaque
+  // colour is >= 0x80000000. Serialised through JSON that arrives as
+  // 4294901760 (0xFFFF0000, opaque red) -- larger than INT32_MAX, so folly
+  // stores it as a DOUBLE and `isInt()` is FALSE.
+  //
+  // The original guard was `if (!payload->isInt()) return false;`, which
+  // therefore rejected every opaque colour and returned "no fill". Combined
+  // with the paint guard's `&& node.svgHasFill`, the path was skipped
+  // entirely: nothing drawn, no error, and painted_nodes STILL counted it
+  // because that counter increments on node entry. Exactly the silent
+  // failure docs/P9-SCOPE.md warns about -- and it was invisible until a gate
+  // probed actual pixels.
+  //
+  // Semi-transparent fills (alpha < 0x80) DO land in int range, so a test
+  // using only those would have passed while every solid colour failed.
+  if (!payload->isNumber()) return false;  // unresolved brush
+  const auto argb = static_cast<uint32_t>(static_cast<int64_t>(payload->asDouble()));
+  out[3] = (float)((argb >> 24) & 0xFF) / 255.0f;
+  out[0] = (float)((argb >> 16) & 0xFF) / 255.0f;
+  out[1] = (float)((argb >> 8) & 0xFF) / 255.0f;
+  out[2] = (float)(argb & 0xFF) / 255.0f;
+  return true;
+}
+#endif
 
 }  // namespace
 
@@ -190,6 +247,31 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       }
     }
   }
+
+#if RNI_WITH_RNSVG
+  // RNSVGPath: parse `d` into geometry (re-parsing only on change — the SVG
+  // path parser is the expensive step and props re-snapshot on every commit)
+  // and capture fill/fillRule. Group's `matrix` field is a documented known
+  // gap (see docs/STATE.md P9-B2) — not consumed here.
+  node.isSvgPath = false;
+  if (node.componentName == "RNSVGPath") {
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGPathProps*>(view.props.get())) {
+      node.isSvgPath = true;
+      node.svgD = pp->d;
+      node.svgHasFill = svgFillFromDynamic(pp->fill, node.svgFillColor);
+      node.svgFillOpacity = (float)pp->fillOpacity;
+      // fillRule: 0 = evenodd, 1 = nonzero — same encoding
+      // react-native-svg's lib/extract/extractFill.js has always used, and
+      // the same reading skia-platform's SceneGraph.cpp uses for the same
+      // generated prop.
+      node.svgFillEvenOdd = (pp->fillRule == 0);
+      // node.opacity already carries the resolved ViewProps opacity (set
+      // above from the same props object, since RNSVGPathProps derives
+      // ViewProps) — paintNode multiplies it with svgFillOpacity, per-path.
+    }
+  }
+#endif
 }
 
 void SceneGraph::applyMutations(
@@ -387,6 +469,49 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
 
   paintBorders(builder, node, x, y, w, h, radii, rounded);
+
+#if RNI_WITH_RNSVG
+  // RNSVGPath: parse `d` fresh into an ImpellerPathBuilder every paint (no
+  // cross-frame geometry cache exists in this SceneGraph, unlike gradients/
+  // borders which are pure ImpellerColor/Rect values) and fill it.
+  //
+  // ⛔ EFFECTIVE ALPHA IS clamp(fillOpacity) * clamp(opacity), PER PATH. This
+  // is the HostApp mark's product requirement (17 paths, grey ramp IS the
+  // per-path fillOpacity), not a rounding nicety — do not fold it into a
+  // single shared paint the way plain Views share `paint` above.
+  if (node.isSvgPath && node.svgHasFill && !node.svgD.empty()) {
+    ImpellerPathBuilder pb = ImpellerPathBuilderNew();
+    if (pb != nullptr) {
+      if (ParseSvgPathToBuilder(node.svgD, pb)) {
+        const ImpellerFillType fillType = node.svgFillEvenOdd
+                                               ? kImpellerFillTypeOdd
+                                               : kImpellerFillTypeNonZero;
+        ImpellerPath path = ImpellerPathBuilderTakePathNew(pb, fillType);
+        if (path != nullptr) {
+          const float alpha = std::clamp(node.svgFillOpacity, 0.0f, 1.0f) *
+                              std::clamp(node.opacity, 0.0f, 1.0f);
+          if (alpha > 0.0f) {
+            ImpellerColor fc = impellerColor(node.svgFillColor, alpha);
+            ImpellerPaint svgPaint = ImpellerPaintNew();
+            ImpellerPaintSetColor(svgPaint, &fc);
+            // RNSVGPath's `d` coordinates are in the SVG's own local space,
+            // which for tier 1 (no <G transform> consumption — see
+            // docs/STATE.md P9-B2 known gap) coincides with the node's
+            // layout frame origin; translate so the path lands at (x, y)
+            // rather than at the surface origin.
+            ImpellerDisplayListBuilderSave(builder);
+            ImpellerDisplayListBuilderTranslate(builder, x, y);
+            ImpellerDisplayListBuilderDrawPath(builder, path, svgPaint);
+            ImpellerDisplayListBuilderRestore(builder);
+            ImpellerPaintRelease(svgPaint);
+          }
+          ImpellerPathRelease(path);
+        }
+      }
+      ImpellerPathBuilderRelease(pb);
+    }
+  }
+#endif
 
   if (node.isParagraph && !node.text.empty() && typography_ != nullptr) {
     ImpellerParagraphStyle style = ImpellerParagraphStyleNew();

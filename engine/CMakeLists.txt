@@ -141,6 +141,17 @@ include(${CMAKE_SOURCE_DIR}/cmake/ReactCommonCore.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/ReactCommonFabric.cmake)
 
 # ---------------------------------------------------------------------------
+# P9-B/B2: the SVG component tier (react-native-svg codegen + our own `d`
+# parser). A separate target/source list on purpose, so a codegen problem
+# (missing engine/svg/generated, stale react-native-svg checkout) is its own
+# distinct build failure rather than folded into the main link.
+# ---------------------------------------------------------------------------
+option(RNI_WITH_RNSVG "Build the SVG component tier (RNSVGSvgView/Group/Path)" ON)
+if(RNI_WITH_RNSVG)
+  include(${CMAKE_SOURCE_DIR}/cmake/RnSvg.cmake)
+endif()
+
+# ---------------------------------------------------------------------------
 # The engine host binary. Name and CLI contract are FROZEN by P1 -- the npm
 # package's resolver and run-impeller both depend on both.
 # ---------------------------------------------------------------------------
@@ -276,6 +287,10 @@ target_link_libraries(rn-impeller PRIVATE
   "${HERMESVM_LIB}"
   "${IMPELLER_LINK_LIB}"
 )
+if(RNI_WITH_RNSVG)
+  target_compile_definitions(rn-impeller PRIVATE RNI_WITH_RNSVG=1)
+  target_link_libraries(rn-impeller PRIVATE rnsvg_common)
+endif()
 
 # ⛔ SHARED-vs-STATIC IS A PACKAGING DIFFERENCE, AND IT LEAKS INTO OUR LINK LINE.
 # `hermesvm` is a SHARED library on Linux — libhermesvm.so has already absorbed
