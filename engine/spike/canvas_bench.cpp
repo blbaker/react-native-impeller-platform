@@ -39,6 +39,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <vector>
 
 #include "impeller.h"
@@ -87,11 +88,26 @@ int main() {
   const int timedFrames = envInt("RNI_FRAMES", 120);
 
   // ---- EGL, surfaceless: same substrate every other gate in this repo uses --
+  // ⛔ SURFACELESS_MESA IS A MESA EXTENSION, AND THE MAC DOES NOT HAVE IT.
+  // The name says Mesa and it means it: on macOS the GLES driver is ANGLE, and
+  // eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA) returns
+  // EGL_NO_DISPLAY there. ANGLE does implement EGL_KHR_surfaceless_context, so
+  // a PLAIN eglGetDisplay(EGL_DEFAULT_DISPLAY) followed by the same
+  // eglMakeCurrent(EGL_NO_SURFACE, ...) works -- the surfacelessness comes
+  // from the context, not from the platform enum. Try Mesa's spelling first
+  // (Linux CI), fall back to the portable one (Mac).
+  EGLDisplay dpy = EGL_NO_DISPLAY;
+  const char* dpyPath = "surfaceless-mesa";
   auto getPlatformDisplay = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress(
       "eglGetPlatformDisplayEXT");
-  CHECK(getPlatformDisplay != nullptr, "eglGetPlatformDisplayEXT unavailable");
-  EGLDisplay dpy = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA,
-                                      EGL_DEFAULT_DISPLAY, nullptr);
+  if (getPlatformDisplay != nullptr) {
+    dpy = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA,
+                             (void*)(uintptr_t)EGL_DEFAULT_DISPLAY, nullptr);
+  }
+  if (dpy == EGL_NO_DISPLAY) {
+    dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    dpyPath = "default-display";
+  }
   CHECK(dpy != EGL_NO_DISPLAY, "surfaceless eglGetPlatformDisplay");
   EGLint maj = 0, min = 0;
   CHECK(eglInitialize(dpy, &maj, &min), "eglInitialize");
@@ -106,7 +122,8 @@ int main() {
   EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctxAttrs);
   CHECK(ctx != EGL_NO_CONTEXT, "eglCreateContext");
   CHECK(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx), "eglMakeCurrent");
-  printf("GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
+  printf("GL_RENDERER=%s (egl=%s)\n", (const char*)glGetString(GL_RENDERER),
+         dpyPath);
 
   ImpellerContext ictx =
       ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ProcAddr, nullptr);

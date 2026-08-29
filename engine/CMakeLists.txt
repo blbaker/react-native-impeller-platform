@@ -162,13 +162,32 @@ endif()
 #
 # Linux-only for now: it uses surfaceless EGL directly, exactly as the P0
 # headless spike does.
-# ---------------------------------------------------------------------------
-if(NOT WIN32 AND NOT APPLE)
+#
+# ⛔ macOS IS INCLUDED, AND IT NEEDS DIFFERENT WIRING THAN LINUX. There is no
+# system EGL on macOS -- Apple ships DESKTOP GL 2.1 and no EGL whatsoever -- so
+# this needs the VENDORED Khronos headers and must link ANGLE's dylibs by path
+# rather than `-lEGL -lGLESv2`, which resolve to nothing there. Same trap the
+# main binary hit after compiling 337 of 355 objects.
+#
+# Windows is excluded: WinGLSurface loads ANGLE with LoadLibrary rather than
+# linking it, so the bench would need its own loader.
+if(NOT WIN32)
   add_executable(canvas-bench spike/canvas_bench.cpp)
   target_include_directories(canvas-bench PRIVATE "${IMPELLER_SDK}/include")
-  target_link_libraries(canvas-bench PRIVATE "${IMPELLER_LINK_LIB}" EGL GLESv2)
-  set_target_properties(canvas-bench PROPERTIES
-    BUILD_RPATH "${IMPELLER_SDK}/lib")
+  if(APPLE)
+    target_include_directories(canvas-bench SYSTEM PRIVATE
+      "${CMAKE_SOURCE_DIR}/third_party/khronos")
+    target_link_libraries(canvas-bench PRIVATE
+      "${IMPELLER_LINK_LIB}"
+      "${ANGLE_DIR}/libEGL.dylib"
+      "${ANGLE_DIR}/libGLESv2.dylib")
+    set_target_properties(canvas-bench PROPERTIES
+      BUILD_RPATH "${IMPELLER_SDK}/lib;${ANGLE_DIR}")
+  else()
+    target_link_libraries(canvas-bench PRIVATE "${IMPELLER_LINK_LIB}" EGL GLESv2)
+    set_target_properties(canvas-bench PROPERTIES
+      BUILD_RPATH "${IMPELLER_SDK}/lib")
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
