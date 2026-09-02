@@ -92,6 +92,18 @@ bash tools/ci-release-meta.sh | tail -2
 echo "### gate 11: package selftest (what a user's npm test runs)"
 (cd package && node src/selftest.js | tail -2)
 
+# ⛔ THE RESOLVER MUST BE TESTED THROUGH A SYMLINK, NOT DESCRIBED AS SUPPORTING ONE.
+# resolve.js carried a comment saying "link, install and tarball must all work"
+# while resolving only from __dirname -- which under pnpm link:/file: points at
+# the symlink TARGET inside this checkout, not at the consumer app. No gate had
+# ever run the resolver through a symlink, so the claim lived in a comment and
+# was false in fact; a downstream app with the engine correctly installed got
+# "Missing engine package". This gate makes the linked case a tested case, and
+# equally asserts a CWD decoy cannot outrank an installed engine -- that half is
+# what keeps __dirname first when someone next edits the candidate order.
+echo "### gate 11b: engine resolver under link: (and install non-regression)"
+bash tools/ci-linkresolve.sh | tail -2
+
 # ⛔ THE WORKFLOW POLICY GATE RUNS EVERYWHERE, LIKE THE RELEASE GATE.
 # It reads the workflow FILES and touches nothing, so any host can run it — and
 # it is the only gate whose subject is what a push is allowed to CAUSE. Every
