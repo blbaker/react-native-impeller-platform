@@ -26,7 +26,13 @@ TRIPLE="$(node -e 'process.stdout.write(process.platform+"-"+process.arch)')"
 PKG="@react-native-impeller/engine-${TRIPLE}"
 ENGDIR="${ROOT}/packages-engine/engine-${TRIPLE}"
 
-WORK="$(mktemp -d)"
+# ⛔ REALPATH, NOT mktemp's WORD. On macOS `mktemp -d` hands back /var/folders/...
+# while /var is a symlink to /private/var, so the resolver -- which reports the
+# path node actually resolved -- answers /private/var/folders/... The two are the
+# same directory and a naive string compare calls a correct resolution a failure.
+# This gate exists to catch resolver bugs, not to fail on a platform's symlinked
+# temp root, so normalise once here and compare normalised paths throughout.
+WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 
 if [[ ! -f "${ENGDIR}/package.json" ]]; then
