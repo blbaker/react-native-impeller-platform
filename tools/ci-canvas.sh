@@ -39,22 +39,34 @@ BIN="$BUILD/canvas-bench"
 
 fail() { echo "CANVAS_GATE_FAIL: $*" >&2; exit 1; }
 
+# ⛔ MAC PORTABILITY, FOUND BY THE macOS tester 2026-08-29 00:2x.
+# canvas-bench is linked with the install name "./libimpeller.dylib" (relative,
+# no @rpath), so it ONLY runs with the working directory set to $BUILD. This
+# script cd's to $ROOT, so invoking "$BIN" from here died in dyld before main()
+# and the gate reported CANVAS_GATE_FAIL on a tree where the engine is correct.
+# Run every probe with cwd=$BUILD. Do not "fix" this by cd'ing the whole script.
+run_bench() { ( cd "$BUILD" && env "$@" ./canvas-bench 2>&1 ); }
+
+# nproc is a GNU coreutils tool and does NOT exist on macOS; the build fallback
+# below used it and would die rc=127 on a clean Mac checkout.
+ncpu() { command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu; }
+
 if [ ! -x "$BIN" ]; then
   echo "building canvas-bench..."
-  cmake --build "$BUILD" --target canvas-bench -j"$(nproc)" > /tmp/canvas-build.log 2>&1 \
+  cmake --build "$BUILD" --target canvas-bench -j"$(ncpu)" > /tmp/canvas-build.log 2>&1 \
     || { tail -30 /tmp/canvas-build.log; fail "canvas-bench build failed"; }
 fi
 [ -x "$BIN" ] || fail "no canvas-bench binary at $BIN"
 
 echo "=== POSITIVE: blit enabled ==="
-POS="$("$BIN" 2>&1)" || { echo "$POS"; fail "positive run exited non-zero"; }
+POS="$(run_bench RNI_SKIP_BLIT=0)" || { echo "$POS"; fail "positive run exited non-zero"; }
 echo "$POS"
 grep -q "CANVAS_BENCH_PASS" <<< "$POS" || fail "positive run did not report PASS"
 grep -q "^sprite TL .* OK" <<< "$POS" || fail "sprite did not blit in positive run"
 
 echo
 echo "=== NEGATIVE CONTROL: blit skipped, sprite sites MUST be background ==="
-NEG="$(RNI_SKIP_BLIT=1 "$BIN" 2>&1)" || { echo "$NEG"; fail "negative run exited non-zero"; }
+NEG="$(run_bench RNI_SKIP_BLIT=1)" || { echo "$NEG"; fail "negative run exited non-zero"; }
 echo "$NEG"
 grep -q "CANVAS_BENCH_PASS (negative control)" <<< "$NEG" \
   || fail "negative control did not report PASS"
