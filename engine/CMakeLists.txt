@@ -576,6 +576,31 @@ elseif(APPLE)
     execute_process(COMMAND install_name_tool
       -change \"./libEGL.dylib\" \"@loader_path/libEGL.dylib\"
       \"\${_bin}/libGLESv2.dylib\")
+
+    # ⛔ RE-SIGN, OR arm64 KILLS THE PROCESS WITH NO DIAGNOSTIC.
+    # Every install_name_tool write invalidates the Mach-O code signature.
+    # On Apple silicon a signature is MANDATORY -- an unsigned or
+    # stale-signature image is refused by the kernel, and the process dies on
+    # SIGKILL (9) or `Abort trap: 6` with nothing on stderr explaining why.
+    # That is indistinguishable from the relative-install-name crash this same
+    # block exists to prevent, so fixing one without the other just swaps a
+    # silent abort for a different silent abort.
+    #
+    # cctools' install_name_tool re-signs ad-hoc BY ITSELF in most cases, which
+    # is precisely why this is dangerous to leave implicit: it works on the
+    # build box and rots on a toolchain bump. Sign explicitly. `-` is the
+    # ad-hoc identity, which is all a non-distributed CLI binary needs.
+    foreach(_m libEGL.dylib libGLESv2.dylib libimpeller.dylib rn-impeller
+               hermesvm.framework/Versions/0/hermesvm)
+      execute_process(COMMAND codesign --force --sign - \"\${_bin}/\${_m}\"
+                      RESULT_VARIABLE _cs_rc ERROR_QUIET OUTPUT_QUIET)
+      if(NOT _cs_rc EQUAL 0)
+        message(FATAL_ERROR
+          \"codesign failed on \${_m} (rc=\${_cs_rc}). Shipping an image with an \"
+          \"install_name_tool-invalidated signature produces an unexplained \"
+          \"Abort trap: 6 on every arm64 consumer.\")
+      endif()
+    endforeach()
   " COMPONENT engine)
 else()
   install(FILES

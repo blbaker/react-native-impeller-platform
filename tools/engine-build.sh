@@ -179,13 +179,48 @@ STRAY_BIN="$(cd "${PKG}/bin" && ls -A | grep -vE "${ALLOWED_BIN}" || true)"
 # verifies its own tool is present first.
 if [ "${PLATFORM}" = "darwin" ]; then
   command -v otool >/dev/null || { echo "engine-build: FAIL — otool not found; cannot verify linkage" >&2; exit 1; }
-  # otool -L lists what the binary asks for. Anything pointing INTO the build
-  # tree or at an absolute developer path would break on a consumer's machine;
-  # everything we ship must be @rpath/@loader_path relative or a system library.
-  BADLINK="$(cd "${PKG}/bin" && otool -L ./rn-impeller | tail -n +2 \
-    | grep -vE '@(rpath|loader_path|executable_path)/' \
-    | grep -vE '/usr/lib/|/System/Library/' || true)"
-  [ -z "$BADLINK" ] || { echo "engine-build: FAIL — staged binary links non-relocatable paths:"; echo "$BADLINK"; exit 1; }
+  # ⛔ CHECK EVERY MACH-O WE SHIP, NOT JUST THE EXECUTABLE.
+  # The original form inspected ./rn-impeller alone. That is a hole: the dylibs
+  # reference EACH OTHER (libGLESv2 -> libEGL), so a shipped library carrying a
+  # `./libEGL.dylib` install name passes a binary-only check and then aborts at
+  # runtime for the consumer. Reported from the mac 2026-09-03 after a raw
+  # `cmake --build` was promoted directly, bypassing `cmake --install` and thus
+  # bypassing the install_name_tool rewrite entirely: it ran from its own build
+  # directory and died with `Abort trap: 6` from anywhere else. The rewrite
+  # existing in CMakeLists is not evidence it RAN; only inspecting the staged
+  # artifacts is.
+  #
+  # -D (the install ID) matters as much as -L (the dependencies): a library
+  # whose own ID is relative poisons everything that links it later.
+  BADLINK=""
+  while IFS= read -r _macho; do
+    _d="$(cd "${PKG}/bin" && otool -D "${_macho}" 2>/dev/null | tail -n +2 \
+      | grep -vE '^@(rpath|loader_path|executable_path)/' | grep -v '^$' || true)"
+    [ -z "$_d" ] || BADLINK="${BADLINK}${_macho} ID: ${_d}"$'\n'
+    _l="$(cd "${PKG}/bin" && otool -L "${_macho}" 2>/dev/null | tail -n +2 \
+      | grep -vE '@(rpath|loader_path|executable_path)/' \
+      | grep -vE '/usr/lib/|/System/Library/' || true)"
+    [ -z "$_l" ] || BADLINK="${BADLINK}${_macho} -> ${_l}"$'\n'
+  done < <(cd "${PKG}/bin" && find . -type f \
+             \( -name '*.dylib' -o -name 'rn-impeller' -o -name 'hermesvm' \) | sort)
+  [ -z "$BADLINK" ] || { echo "engine-build: FAIL — staged Mach-O links non-relocatable paths:"; echo "$BADLINK"; exit 1; }
+
+  # ⛔ AND EVERY ONE OF THEM MUST STILL BE VALIDLY SIGNED.
+  # install_name_tool invalidates the signature it rewrites. An unsigned image
+  # on arm64 is killed by the kernel with `Abort trap: 6` and no explanation —
+  # the SAME symptom as the bad install name above, so a fix for one silently
+  # masquerades as a fix for the other. Verify, do not assume the toolchain
+  # re-signed for us.
+  if command -v codesign >/dev/null; then
+    BADSIG=""
+    while IFS= read -r _macho; do
+      (cd "${PKG}/bin" && codesign --verify "${_macho}" 2>/dev/null) \
+        || BADSIG="${BADSIG}  ${_macho}"$'\n'
+    done < <(cd "${PKG}/bin" && find . -type f \
+               \( -name '*.dylib' -o -name 'rn-impeller' -o -name 'hermesvm' \) | sort)
+    [ -z "$BADSIG" ] || { echo "engine-build: FAIL — staged Mach-O has an invalid/absent signature:"; echo "$BADSIG"; exit 1; }
+  fi
+
   # And the rpath itself must be @loader_path, not this machine's build tree.
   if otool -l "${PKG}/bin/rn-impeller" | grep -A2 LC_RPATH | grep -q 'engine/build'; then
     echo "engine-build: FAIL — staged binary still has build-tree rpath" >&2
