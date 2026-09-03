@@ -206,6 +206,15 @@ SceneGraph::SceneGraph(ImpellerTypographyContext typography)
 void SceneGraph::updateFromShadowView(SceneNode& node,
                                       const react::ShadowView& view) {
   node.tag = view.tag;
+  // ⛔ RETAIN THE EVENT EMITTER OR TOUCH DISPATCH HAS NO TARGET.
+  // This is the ONLY point where the emitter is reachable: it rides on the
+  // ShadowView through the mounting transaction and is then dropped. Fabric
+  // owns the ShadowNode on the JS thread and the host must never reach back
+  // into the shadow tree to find it, so the emitter is captured here (it is a
+  // shared_ptr, so holding it is safe across threads) and used later by
+  // FabricHost::dispatchTouch. Without this line a hit test resolves a correct
+  // tag and then has nothing to deliver the event to.
+  node.eventEmitter = view.eventEmitter;
   node.componentName = view.componentName ? view.componentName : "";
   node.layoutMetrics = view.layoutMetrics;
 
@@ -1260,6 +1269,61 @@ std::string SceneGraph::frameReport() {
     out += buf;
   }
   return out;
+}
+
+facebook::react::Tag SceneGraph::hitTestNode(const SceneNode& node,
+                                             float originX,
+                                             float originY,
+                                             float x,
+                                             float y) {
+  const auto& frame = node.layoutMetrics.frame;
+  const float nx = originX + (float)frame.origin.x;
+  const float ny = originY + (float)frame.origin.y;
+  const float w = (float)frame.size.width;
+  const float h = (float)frame.size.height;
+  const bool inside = x >= nx && x < nx + w && y >= ny && y < ny + h;
+
+  // A clipping node crops its subtree to its own bounds, so a point outside it
+  // cannot hit any descendant either -- bail before recursing. Without this a
+  // child scrolled out of view is still hittable, which is the classic
+  // "pressed an invisible button" bug. Non-clipping parents must NOT bail:
+  // React Native lets children overflow their parent by default, and those
+  // children do paint, so they must remain hittable.
+  if (node.overflowHidden && !inside) return 0;
+
+  // Reverse paint order: last painted is topmost, so it is tested first.
+  for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
+    auto child = nodes_.find(*it);
+    if (child == nodes_.end()) continue;
+    if (auto hit = hitTestNode(child->second, nx, ny, x, y)) return hit;
+  }
+
+  // Zero-sized nodes are never targets. This matters more than it looks: a
+  // <Text> whose TextLayoutManager measured 0x0 still PAINTS its glyphs (see
+  // frameReport's note), so it would otherwise be visible-but-unhittable ink
+  // sitting at a point that reports no hit at all. Excluding it here keeps the
+  // hit result honest rather than silently returning a degenerate box.
+  if (inside && w > 0.0f && h > 0.0f) return node.tag;
+  return 0;
+}
+
+facebook::react::Tag SceneGraph::hitTest(float x, float y) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  // Roots in reverse too: a later root paints over an earlier one.
+  for (auto it = roots_.rbegin(); it != roots_.rend(); ++it) {
+    auto root = nodes_.find(*it);
+    if (root == nodes_.end()) continue;
+    if (auto hit = hitTestNode(root->second, 0, 0, x, y)) return hit;
+  }
+  return 0;
+}
+
+facebook::react::EventEmitter::Shared SceneGraph::eventEmitterFor(
+    facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end()) return nullptr;
+  return it->second.eventEmitter;
 }
 
 std::string SceneGraph::describe() {

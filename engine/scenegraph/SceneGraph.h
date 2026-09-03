@@ -29,6 +29,11 @@ namespace rni {
 // object the JS thread is concurrently replacing.
 struct SceneNode {
   facebook::react::Tag tag{};
+  // The node's Fabric event emitter, captured from the ShadowView during
+  // mounting. Held as the base EventEmitter (what ShadowView carries); touch
+  // dispatch downcasts to TouchEventEmitter. Null for nodes whose descriptor
+  // does not emit touches, so every use must check.
+  facebook::react::EventEmitter::Shared eventEmitter{};
   std::string componentName;
   facebook::react::LayoutMetrics layoutMetrics{};
 
@@ -203,7 +208,42 @@ class SceneGraph {
   // frame is the only signal that separates the two.
   std::string frameReport();
 
+  // Topmost node containing (x, y), or 0 if the point hits nothing.
+  //
+  // ⛔ ARGUMENTS ARE IN POINTS, NOT DEVICE PIXELS.
+  // Same coordinate space as `paint()` receives BEFORE it applies
+  // pointScaleFactor as a root transform. A caller holding a GLFW cursor
+  // position (device pixels on a retina display) must divide by the same
+  // pointScaleFactor first, or every hit on a 2x screen lands at double the
+  // intended coordinate and misses low/right targets entirely.
+  //
+  // "Topmost" is defined by the painter, not by z-order bookkeeping: children
+  // paint after their parent and in array order, so the last thing painted at
+  // a point is the first thing that should be hit. This walk is `paintNode`'s
+  // traversal with the child loop reversed, which is why it needs no extra
+  // per-node state and cannot drift out of sync with what is on screen --
+  // any future change to paint order is a change to hit order for free.
+  facebook::react::Tag hitTest(float x, float y);
+
+  // The retained event emitter for `tag`, or nullptr.
+  //
+  // Returned BY VALUE (a shared_ptr copy) taken under the same mutex that
+  // guards mutation. A reference or raw pointer would be a use-after-free the
+  // moment the JS thread applied a transaction that removed the node between
+  // lookup and dispatch -- which is exactly the window a press on a view that
+  // is unmounting lands in.
+  facebook::react::EventEmitter::Shared eventEmitterFor(
+      facebook::react::Tag tag);
+
  private:
+  // Returns the hit tag, or 0. `originX/originY` accumulate exactly as in
+  // paintNode: frames are PARENT-RELATIVE, so absolute position is the running
+  // sum down the tree, never the node's own frame alone.
+  facebook::react::Tag hitTestNode(const SceneNode& node,
+                                   float originX,
+                                   float originY,
+                                   float x,
+                                   float y);
   void updateFromShadowView(SceneNode& node,
                             const facebook::react::ShadowView& view);
   void paintNode(ImpellerDisplayListBuilder builder,

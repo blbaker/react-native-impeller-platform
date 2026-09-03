@@ -373,6 +373,7 @@ int main(int argc, char** argv) {
   bool testOpenUrl = false;
   bool windowMode = false;
   int frames = 0;              // 0 = unbounded, run until window closes
+  std::string tapSpec;         // "X,Y" in points; empty = no input probe
   int screenshotAfterMs = -1;  // -1 = no timed capture
   std::string screenshotFirst;  // empty = no frame-0 capture
   int width = 400, height = 300;
@@ -410,6 +411,12 @@ int main(int argc, char** argv) {
     else if (a == "--headless") headless = true;
     else if (a == "--window") windowMode = true;
     else if (a == "--frames") frames = atoi(next("--frames").c_str());
+    // Headless input probe: "--tap X,Y" hit-tests a point in POINTS and
+    // dispatches a full down/up pair. Exists so the hit test and the touch
+    // dispatch path are testable WITHOUT a window -- the geometry and the
+    // emitter wiring are platform-independent, and gating them on a working
+    // macOS window would leave the whole input tier unverified on Linux.
+    else if (a == "--tap") tapSpec = next("--tap");
     else if (a == "--screenshot-after") screenshotAfterMs = atoi(next("--screenshot-after").c_str());
     // Frame-0 capture. Pairs with --screenshot/--screenshot-after so ONE run
     // yields two frames to compare; see tools/ci-animate.sh for why a single
@@ -573,6 +580,34 @@ int main(int argc, char** argv) {
     // to prove LAYOUT, and painted pixels alone cannot (a 0x0-measured <Text>
     // still paints its glyphs).
     fputs(sceneGraph.frameReport().c_str(), stdout);
+    // Input probe. Runs AFTER the tree is mounted and laid out -- a hit test
+    // against an empty scene graph would report "no hit" for reasons that have
+    // nothing to do with the hit test.
+    if (!tapSpec.empty()) {
+      float tx = 0, ty = 0;
+      if (std::sscanf(tapSpec.c_str(), "%f,%f", &tx, &ty) == 2) {
+        int hit = fabric.dispatchTouch(rni::FabricHost::TouchPhase::Down, tx, ty);
+        printf("rn-impeller: tap_hit=%d at=%.1f,%.1f\n", hit, tx, ty);
+        if (hit) {
+          fabric.dispatchTouch(rni::FabricHost::TouchPhase::Up, tx, ty);
+        }
+        fflush(stdout);
+        // Let the scheduled work reach the JS thread: dispatchTouch is
+        // asynchronous by design, so returning immediately would end the
+        // process before any handler ran and make a WORKING dispatch look dead.
+        host.waitForJsIdle(5000);
+        // ⛔ RE-EMIT THE COUNTER *AFTER* THE TAP.
+        // `alerts_shown` above is printed before this probe runs, so it can
+        // only ever read 0 here no matter how well dispatch works. This line
+        // is the post-tap value and the only one an input gate may assert on.
+        printf("rn-impeller: alerts_after_tap=%zu\n", host.alerts()->count());
+        fflush(stdout);
+      } else {
+        fprintf(stderr, "rn-impeller: FATAL: --tap wants X,Y (got '%s')\n",
+                tapSpec.c_str());
+        return 1;
+      }
+    }
     if (logMutations) {
       printf("rn-impeller: scene=%s\n", sceneGraph.describe().c_str());
     }

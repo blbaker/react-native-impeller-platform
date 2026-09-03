@@ -45,6 +45,23 @@ class FabricHost {
                     float height, float pointScaleFactor = 1.0f);
   void stopSurface();
 
+  // Touch phases, mapped to TouchEventEmitter's four touch entry points.
+  enum class TouchPhase { Down, Move, Up, Cancel };
+
+  // Hit-tests (x, y) and dispatches a touch to whatever is under it.
+  // Returns the tag that received the event, or 0 if nothing did.
+  //
+  // ⛔ x/y ARE IN POINTS. A windowed caller holding a GLFW cursor position has
+  // DEVICE PIXELS and must divide by pointScaleFactor first -- the same factor
+  // the painter applies as its root transform. Getting this wrong is invisible
+  // at 1x and doubles every coordinate on a retina display.
+  //
+  // Safe to call from the UI/event thread: it takes the SceneGraph lock to
+  // resolve the target, then dispatches through the RuntimeScheduler so the
+  // emitter runs on the JS thread. Calling a TouchEventEmitter directly from
+  // the event thread would race the mounting transaction that owns the node.
+  int dispatchTouch(TouchPhase phase, float x, float y);
+
   // The component names this host can actually mount. Handed to ReactHost so
   // RN's NativeComponentRegistry and this registry cannot drift apart.
   static std::vector<std::string> knownComponentNames();

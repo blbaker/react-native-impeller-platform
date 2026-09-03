@@ -16,6 +16,9 @@
 #include <react/renderer/scheduler/SchedulerDelegate.h>
 #include <react/renderer/scheduler/SchedulerToolbox.h>
 #include <react/renderer/scheduler/SurfaceHandler.h>
+#include <react/renderer/components/view/TouchEventEmitter.h>
+
+#include <chrono>
 #include <react/runtime/ReactInstance.h>
 #include <react/utils/ContextContainer.h>
 
@@ -313,6 +316,79 @@ void FabricHost::stopSurface() {
   }
   scheduler_->unregisterSurface(*surfaceHandler_);
   surfaceHandler_.reset();
+}
+
+int FabricHost::dispatchTouch(TouchPhase phase, float x, float y) {
+  if (!sceneGraph_ || !runtimeScheduler_) return 0;
+
+  const react::Tag target = sceneGraph_->hitTest(x, y);
+  if (target == 0) return 0;
+
+  auto emitter = sceneGraph_->eventEmitterFor(target);
+  if (!emitter) return 0;
+  // Not every descriptor emits touches. An unregistered or non-view component
+  // yields a base EventEmitter, and this cast is what separates "nothing was
+  // there" from "something was there but cannot receive a press" -- otherwise
+  // the caller sees a hit and silently no handler, which is the exact
+  // ambiguity that made this feature look implemented when it was not.
+  auto touchEmitter =
+      std::dynamic_pointer_cast<const react::TouchEventEmitter>(emitter);
+  if (!touchEmitter) return 0;
+
+  react::Touch touch{};
+  touch.target = target;
+  // One mouse == one finger, so a fixed identifier is correct here and must
+  // stay stable across down/move/up: RN pairs a touchend with the touchstart
+  // that shares its identifier, and a changing id yields a press that never
+  // completes.
+  touch.identifier = 0;
+  touch.pagePoint = {x, y};
+  touch.screenPoint = {x, y};
+  // offsetPoint is target-relative. Left equal to pagePoint for now: resolving
+  // it needs the target's absolute origin, which the hit walk knows but does
+  // not yet return. onPress does not read it; a component measuring locationX
+  // would. Called out rather than silently wrong.
+  touch.offsetPoint = {x, y};
+  touch.force = 1.0f;
+  touch.timestamp =
+      (react::Float)std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count() /
+      1000.0f;
+
+  react::TouchEvent event{};
+  event.changedTouches = {touch};
+  // On Up/Cancel the contact is GONE, so `touches` (still on screen) must be
+  // empty while changedTouches carries it. RN's Pressability derives release
+  // from that emptiness; sending a still-present touch here yields a press
+  // that highlights and never fires.
+  const bool ending =
+      phase == TouchPhase::Up || phase == TouchPhase::Cancel;
+  if (!ending) {
+    event.touches = {touch};
+    event.targetTouches = {touch};
+  }
+
+  // Hop to the JS thread. The emitter must not be invoked from the event
+  // thread: it reaches into the runtime.
+  runtimeScheduler_->scheduleWork(
+      [touchEmitter, event, phase](facebook::jsi::Runtime&) {
+        switch (phase) {
+          case TouchPhase::Down:
+            touchEmitter->onTouchStart(event);
+            break;
+          case TouchPhase::Move:
+            touchEmitter->onTouchMove(event);
+            break;
+          case TouchPhase::Up:
+            touchEmitter->onTouchEnd(event);
+            break;
+          case TouchPhase::Cancel:
+            touchEmitter->onTouchCancel(event);
+            break;
+        }
+      });
+  return (int)target;
 }
 
 }  // namespace rni
