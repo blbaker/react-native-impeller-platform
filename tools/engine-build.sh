@@ -154,6 +154,21 @@ rm -rf "${PKG}/bin" "${PKG}/include" "${PKG}/lib" "${PKG}/share"
 cmake --install engine/build --component engine > /dev/null
 ${STRIP_CMD} "${PKG}/bin/rn-impeller" 2>/dev/null || true
 
+# ⛔ STRIP INVALIDATES THE CODE SIGNATURE. RE-SIGN, OR arm64 KILLS THE BINARY.
+# The install step's install_name_tool rewrite leaves a valid ad-hoc signature
+# behind, and then the strip above silently breaks it again -- so the verify
+# further down fails on rn-impeller and ONLY on rn-impeller (the dylibs are
+# never stripped). On Apple silicon an invalid signature is `Abort trap: 6`
+# with no message, the exact symptom a bad install name produces, which is how
+# this hid behind the install-name work instead of showing up as its own bug.
+# Ad-hoc (`-s -`) matches what the toolchain already produces; this re-signs
+# rather than skipping the strip because the size win is real and the fix is
+# one line.
+if [ "${PLATFORM}" = "darwin" ] && command -v codesign >/dev/null; then
+  codesign --force -s - "${PKG}/bin/rn-impeller" >/dev/null 2>&1 \
+    || { echo "engine-build: FAIL — could not re-sign rn-impeller after strip"; exit 1; }
+fi
+
 # The package must contain the payload and NOTHING ELSE. A dependency that
 # quietly adds an install rule would otherwise ship its whole header tree to
 # every consumer, and npm pack would not complain.
