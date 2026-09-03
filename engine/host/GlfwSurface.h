@@ -22,6 +22,13 @@
 #include "host/Pixel.h"
 #include "impeller.h"
 
+#if defined(__APPLE__)
+// macOS has no system EGL; the windowed path builds an ANGLE display/context
+// itself and attaches it to the Cocoa view's layer. Those handles have to live
+// for the surface's lifetime, so they are members here. See GlfwSurface.cpp.
+#include <EGL/egl.h>
+#endif
+
 struct GLFWwindow;
 
 namespace rni {
@@ -58,9 +65,20 @@ class GlfwSurface {
   void present();  // glfwSwapBuffers
 
  private:
+#if defined(__APPLE__)
+  // Builds the ANGLE display/context and the window surface bound to the
+  // Cocoa view. Split out because it is the entire darwin-only story.
+  bool initAngleForWindow(std::string* error);
+#endif
+
   int width_{0};
   int height_{0};
   GLFWwindow* window_{nullptr};
+#if defined(__APPLE__)
+  EGLDisplay display_{EGL_NO_DISPLAY};
+  EGLSurface eglSurface_{EGL_NO_SURFACE};
+  EGLContext eglContext_{EGL_NO_CONTEXT};
+#endif
   ImpellerContext context_{nullptr};
   ImpellerSurface surface_{nullptr};
   ImpellerTypographyContext typography_{nullptr};

@@ -70,6 +70,63 @@ if [ -f "$PREFIX/lib/libglfw3.a" ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# ⛔ EVERYTHING ABOVE THIS POINT IS LINUX/X11 AND CANNOT RUN ON DARWIN.
+# ensure_xinerama shells `apt-get` and `dpkg-deb`, which do not exist on macOS;
+# the X11 backend itself is meaningless there. macOS uses GLFW's Cocoa backend,
+# which needs NO staged sysroot at all — its dependencies are system
+# frameworks that every Mac already has.
+#
+# ⚠️ THE CLONE MUST BE COMPLETE, AND A PARTIAL ONE LOOKS FINE.
+# GLFW's Cocoa backend lives entirely in .m files (cocoa_init.m, cocoa_window.m,
+# cocoa_monitor.m, cocoa_joystick.m, nsgl_context.m). A tree missing them still
+# has CMakeLists.txt and every header, so `cmake -S` gets a long way in before
+# failing — on this repo it first surfaced as a missing CMake/glfw3.pc.in,
+# which points at packaging rather than at the real cause. Verified explicitly
+# below rather than trusted, because a hand-copied or rsync-filtered tree is
+# exactly how this arrives broken.
+# ---------------------------------------------------------------------------
+if [ "$(uname -s)" = "Darwin" ]; then
+  mkdir -p "$(dirname "$SRC")"
+  if [ ! -f "$SRC/src/cocoa_init.m" ]; then
+    echo "=== [1/3] fetching glfw $GLFW_VERSION (cocoa) ==="
+    rm -rf "$SRC"
+    git clone --depth 1 --branch "$GLFW_VERSION" https://github.com/glfw/glfw.git "$SRC"
+  fi
+
+  for f in src/cocoa_init.m src/cocoa_window.m src/cocoa_monitor.m \
+           src/cocoa_joystick.m src/nsgl_context.m CMake/glfw3.pc.in; do
+    test -f "$SRC/$f" || { echo "GLFW_SOURCE_INCOMPLETE: missing $f"; exit 1; }
+  done
+
+  echo "=== [2/3] configuring (cocoa) ==="
+  # CMAKE_POLICY_VERSION_MINIMUM: CMake 4.x removed compatibility with
+  # cmake_minimum_required(<3.5), which GLFW 3.4 and several vendored deps
+  # still declare. Harmless on older CMake, required on 4.4+.
+  cmake -S "$SRC" -B "$BUILD" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DGLFW_BUILD_EXAMPLES=OFF \
+    -DGLFW_BUILD_TESTS=OFF \
+    -DGLFW_BUILD_DOCS=OFF \
+    -DGLFW_BUILD_COCOA=ON
+
+  echo "=== [3/3] building + installing ==="
+  cmake --build "$BUILD" --parallel
+  cmake --install "$BUILD"
+
+  test -f "$PREFIX/lib/libglfw3.a" || { echo "GLFW_BUILD_FAIL: no static lib"; exit 1; }
+  # Assert the Cocoa backend is actually IN the archive. A GLFW built with the
+  # null backend also produces libglfw3.a and links clean, then returns NULL
+  # from glfwCreateWindow at runtime.
+  nm -a "$PREFIX/lib/libglfw3.a" 2>/dev/null | grep -q "cocoa_init" \
+    || { echo "GLFW_BUILD_FAIL: libglfw3.a has no cocoa backend"; exit 1; }
+  echo "GLFW_BUILD_PASS $PREFIX/lib/libglfw3.a"
+  exit 0
+fi
+
 ensure_xinerama
 
 mkdir -p "$(dirname "$SRC")"

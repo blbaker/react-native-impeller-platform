@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.24)
 project(rn_impeller_engine CXX C)
 
+# ⛔ .mm FILES DO NOT COMPILE UNLESS OBJCXX IS AN ENABLED LANGUAGE.
+# Without this, CMake does not recognise host/GlfwCocoaView.mm as a source it
+# can build and the failure is a LINK error naming GlfwCocoaLayerBackedView —
+# a symbol whose definition is sitting right there in the tree, which reads as
+# a namespace or mangling problem rather than a missing language.
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -13,9 +22,11 @@ include(${CMAKE_SOURCE_DIR}/cmake/CompileFlags.cmake)
 
 # ---------------------------------------------------------------------------
 # P9-A: windowed WSI. Default ON on Linux (where tools/window-spike.sh proved
-# the chain), OFF elsewhere until a platform gets its own GLFW build.
+# the chain) and on APPLE (where the darwin context path goes through ANGLE
+# rather than system EGL — see host/GlfwSurface.cpp). Still OFF on Windows
+# until that platform gets its own GLFW build.
 # ---------------------------------------------------------------------------
-if(WIN32 OR APPLE)
+if(WIN32)
   option(RNI_WITH_WINDOW "Build GlfwSurface / --window support" OFF)
 else()
   option(RNI_WITH_WINDOW "Build GlfwSurface / --window support" ON)
@@ -203,6 +214,10 @@ add_executable(rn-impeller
   $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurface.cpp>
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/host/WinGLSurface.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurface.cpp>
+  # The one Objective-C TU: NSWindow -> layer-backed NSView, which is what
+  # ANGLE/Metal accepts as a native window. APPLE-only by generator expression
+  # so no other platform ever tries to compile Cocoa.
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwCocoaView.mm>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   modules/PlatformModules.cpp
@@ -293,13 +308,31 @@ if(RNI_WITH_WINDOW)
   if(NOT EXISTS "${GLFW_DIR}/lib/libglfw3.a")
     message(FATAL_ERROR "GLFW not found at ${GLFW_DIR}. Run: bash tools/glfw-fetch.sh")
   endif()
-  set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
   target_compile_definitions(rn-impeller PRIVATE RNI_WITH_WINDOW=1)
   target_include_directories(rn-impeller PRIVATE "${GLFW_DIR}/include")
-  target_link_libraries(rn-impeller PRIVATE
-    "${GLFW_DIR}/lib/libglfw3.a"
-    "-L${X11_SYSROOT}/usr/lib/x86_64-linux-gnu"
-    X11 Xrandr Xcursor Xi Xinerama m pthread dl)
+  if(APPLE)
+    # ⛔ GLFW'S COCOA BACKEND LINKS APPLE FRAMEWORKS, NOT THE X11 SET.
+    # There is no libX11 on this platform at all, so falling through to the
+    # Linux branch fails with five "library not found" errors that name
+    # packages a Mac can never have. This set is what GLFW's own generated
+    # glfw3.pc lists for a static Cocoa build.
+    #
+    # ANGLE's libEGL/libGLESv2 are NOT repeated here — the APPLE branch further
+    # down already links them into this same target for HeadlessSurface, and
+    # the windowed path calls the identical entry points.
+    target_link_libraries(rn-impeller PRIVATE
+      "${GLFW_DIR}/lib/libglfw3.a"
+      "-framework Cocoa"
+      "-framework IOKit"
+      "-framework CoreVideo"
+      "-framework QuartzCore")
+  else()
+    set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
+    target_link_libraries(rn-impeller PRIVATE
+      "${GLFW_DIR}/lib/libglfw3.a"
+      "-L${X11_SYSROOT}/usr/lib/x86_64-linux-gnu"
+      X11 Xrandr Xcursor Xi Xinerama m pthread dl)
+  endif()
 endif()
 
 rni_compile_flags(rn-impeller EXCEPTIONS RTTI NO_DEPRECATED FORCE_INCLUDE cstdint)
