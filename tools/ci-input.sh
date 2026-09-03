@@ -91,7 +91,10 @@ echo "== 4. assert 1/3: geometry — the tap lands on the box at that point =="
 # Collect each box's tag from the frame report, then assert the tap on that
 # box's centre returns that SAME tag. Comparing against the frame report (not
 # a hardcoded tag) keeps the gate valid if RN renumbers tags.
-declare -A HIT
+# ⛔ NO ASSOCIATIVE ARRAYS. macOS ships bash 3.2 (declare -A is bash 4+), and
+# this gate must run on the Mac, which is the platform whose input tier is
+# actually blocked. Three plain variables instead.
+HIT_top=""; HIT_mid=""; HIT_bot=""
 for spec in "200,50:top" "200,150:mid" "200,250:bot"; do
   point="${spec%%:*}"; name="${spec##*:}"
   LOG="$WORK/tap-$name.log"
@@ -99,7 +102,7 @@ for spec in "200,50:top" "200,150:mid" "200,250:bot"; do
   TAG="$(sed -n 's/^rn-impeller: tap_hit=\([0-9]*\) .*/\1/p' "$LOG" | head -1)"
   [ -n "$TAG" ] || { sed 's/^/   /' "$LOG" >&2; fail "no tap_hit line for $name at $point"; }
   [ "$TAG" != "0" ] || { sed 's/^/   /' "$LOG" >&2; fail "tap at $point ($name) hit NOTHING — hit test found no target"; }
-  HIT[$name]="$TAG"
+  eval "HIT_$name=\$TAG"
   echo "   $name at $point -> tag $TAG"
 done
 
@@ -107,9 +110,9 @@ done
 # This is the assertion that catches a hit test which ignores coordinates and
 # returns the same (first, topmost, or root) node every time — the single most
 # likely way for this to be wrong while still looking like it works.
-UNIQ="$(printf '%s\n' "${HIT[top]}" "${HIT[mid]}" "${HIT[bot]}" | sort -u | wc -l)"
+UNIQ="$(printf '%s\n' "$HIT_top" "$HIT_mid" "$HIT_bot" | sort -u | wc -l | tr -d ' ')"
 [ "$UNIQ" -eq 3 ] \
-  || fail "three disjoint boxes returned $UNIQ distinct tags (${HIT[top]}/${HIT[mid]}/${HIT[bot]}) — the hit test is not using coordinates"
+  || fail "three disjoint boxes returned $UNIQ distinct tags ($HIT_top/$HIT_mid/$HIT_bot) — the hit test is not using coordinates"
 echo "   OK: three disjoint boxes -> three distinct tags"
 
 echo "== 5. assert 2/3: dispatch — onPress actually RAN in JS =="
@@ -136,4 +139,4 @@ MISS="$(sed -n 's/^rn-impeller: tap_hit=\([0-9]*\) .*/\1/p' "$MISS_LOG" | head -
   || fail "tap far outside the surface returned tag $MISS — the hit test returns a target for ANY point"
 echo "   OK: off-surface tap -> tap_hit=0"
 
-echo "INPUT_GATE_PASS (tags ${HIT[top]}/${HIT[mid]}/${HIT[bot]}, alerts=$ALERTS)"
+echo "INPUT_GATE_PASS (tags $HIT_top/$HIT_mid/$HIT_bot, alerts=$ALERTS)"
