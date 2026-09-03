@@ -19,9 +19,9 @@
 namespace rni {
 
 #if defined(__APPLE__)
-// Defined in GlfwCocoaView.mm — returns the NSWindow's contentView with
-// wantsLayer set, which is what ANGLE/Metal accepts as a native window.
-void* GlfwCocoaLayerBackedView(GLFWwindow* window);
+// Defined in GlfwCocoaView.mm — returns the window's layer-backed CALayer,
+// which is what ANGLE/Metal accepts as a native window.
+void* GlfwCocoaLayer(GLFWwindow* window);
 #endif
 
 namespace {
@@ -114,12 +114,20 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
   }
   if (!eglBindAPI(EGL_OPENGL_ES_API)) return fail("eglBindAPI failed");
 
-  void* view = GlfwCocoaLayerBackedView(window_);
-  if (!view) return fail("glfwGetCocoaWindow/contentView returned null");
+  void* layer = GlfwCocoaLayer(window_);
+  if (!layer) return fail("glfwGetCocoaWindow/contentView layer was null");
 
   eglSurface_ = eglCreateWindowSurface(display_, cfg,
-                                       (EGLNativeWindowType)view, nullptr);
-  if (eglSurface_ == EGL_NO_SURFACE) return fail("eglCreateWindowSurface failed");
+                                       (EGLNativeWindowType)layer, nullptr);
+  if (eglSurface_ == EGL_NO_SURFACE) {
+    // PRINT THE EGL ERROR CODE. Without it this line says only "failed" and
+    // gives no way to tell a bad native window (0x300B, the wrong pointer
+    // type) from a bad config match (0x3005) — which cost a full build+gate
+    // round trip to distinguish once already.
+    fprintf(stderr, "rn-impeller: eglCreateWindowSurface eglGetError=0x%04x\n",
+            eglGetError());
+    return fail("eglCreateWindowSurface failed");
+  }
 
   const EGLint ctxAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_NONE};
   eglContext_ = eglCreateContext(display_, cfg, EGL_NO_CONTEXT, ctxAttrs);

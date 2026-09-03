@@ -121,9 +121,16 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # Assert the Cocoa backend is actually IN the archive. A GLFW built with the
   # null backend also produces libglfw3.a and links clean, then returns NULL
   # from glfwCreateWindow at runtime.
-  nm -a "$PREFIX/lib/libglfw3.a" 2>/dev/null | grep -q "cocoa_init" \
+  #
+  # ⛔ COUNT INTO A VARIABLE; DO NOT PIPE nm INTO `grep -q` UNDER `set -o pipefail`.
+  # grep -q exits the instant it matches, nm is still writing, nm takes SIGPIPE
+  # and dies 141, and pipefail reports the PIPELINE as failed. The gate then
+  # rejects a perfectly good archive — measured here: 168 cocoa symbols present,
+  # `nm` alone rc=0, the piped form rc=141. A match must not be able to fail.
+  COCOA_SYMS="$(nm -a "$PREFIX/lib/libglfw3.a" 2>/dev/null | grep -c cocoa_init || true)"
+  [ "${COCOA_SYMS:-0}" -gt 0 ] \
     || { echo "GLFW_BUILD_FAIL: libglfw3.a has no cocoa backend"; exit 1; }
-  echo "GLFW_BUILD_PASS $PREFIX/lib/libglfw3.a"
+  echo "GLFW_BUILD_PASS $PREFIX/lib/libglfw3.a (cocoa symbols=$COCOA_SYMS)"
   exit 0
 fi
 
