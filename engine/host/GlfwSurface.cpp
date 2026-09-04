@@ -177,6 +177,17 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   width_ = fbWidth;
   height_ = fbHeight;
 
+  // ⛔ RECORD THE POINT SIZE TOO — THE WINDOW MAY NOT BE THE SIZE WE ASKED FOR.
+  // glfwCreateWindow's arguments are a REQUEST in screen coordinates; a window
+  // manager, a fullscreen constraint or a DPI policy can hand back something
+  // else. Reading it back rather than reusing `width`/`height` means the
+  // pixels:points ratio the host derives is a property of the window that
+  // actually exists, not of the numbers we hoped for.
+  int winWidth = 0, winHeight = 0;
+  glfwGetWindowSize(window_, &winWidth, &winHeight);
+  pointWidth_ = winWidth;
+  pointHeight_ = winHeight;
+
 #if defined(__APPLE__)
   if (!initAngleForWindow(error)) return false;
 #else

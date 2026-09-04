@@ -53,6 +53,9 @@
 #include <chrono>
 #include <thread>
 #endif
+// Header-only and platform-free on purpose: the backing-scale decision has to
+// be testable (--test-pointscale) on hosts that have no window at all.
+#include "host/PointScale.h"
 #include "impeller.h"
 #include "runtime/FeatureFlags.h"
 #include "runtime/ReactHost.h"
@@ -257,7 +260,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 int width, int height, float pointScale, bool logMutations,
                 int frames, int screenshotAfterMs,
                 const std::string& screenshotPath,
-                const std::string& screenshotFirstPath) {
+                const std::string& screenshotFirstPath,
+                bool pointScaleGiven) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -267,11 +271,35 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     return 1;
   }
 
+  // ⛔ THE WINDOW, NOT THE CLI, DECIDES THE PIXEL SIZE AND THE SCALE.
+  // --width/--height went to glfwCreateWindow, which treats them as SCREEN
+  // COORDINATES (points). On a 2x display the framebuffer that comes back is
+  // twice as large in each axis. Continuing to use the CLI numbers here —
+  // which is what this function did until now, with pointScale stuck at its
+  // 1.0 default — laid the app out in `width` x `height` POINTS and
+  // rasterised at 1x, so the content filled only the top-left quarter of the
+  // framebuffer and every glyph was rasterised for a 1x display. On screen
+  // that reads as "pixelated / half-size next to a native window", not as a
+  // layout bug, which is why it survived the windowed gates.
+  //
+  // From here down, pxWidth/pxHeight are the surface's REAL pixel size and
+  // pointScale is the REAL backing scale; layout points are pixels/scale, the
+  // same relationship the headless path already documents at --width.
+  const int pxWidth = surface.width();
+  const int pxHeight = surface.height();
+  pointScale = rni::DeriveWindowPointScale(pxWidth, surface.pointWidth(),
+                                           pointScale, pointScaleGiven);
+  printf("rn-impeller: window px=%dx%d points=%.1fx%.1f scale=%.2f%s\n",
+         pxWidth, pxHeight, (float)pxWidth / pointScale,
+         (float)pxHeight / pointScale, pointScale,
+         pointScaleGiven ? " (--scale override)" : " (from framebuffer)");
+  fflush(stdout);
+
   rni::SceneGraph sceneGraph(surface.typography());
   rni::ReactHost host;
   host.setKnownComponents(rni::FabricHost::knownComponentNames());
-  host.displayMetrics()->set((float)width / pointScale, (float)height / pointScale,
-                             pointScale);
+  host.displayMetrics()->set((float)pxWidth / pointScale,
+                             (float)pxHeight / pointScale, pointScale);
   host.appearance()->set(colorScheme);
   *host.initialUrl() = initialUrl;
 
@@ -280,7 +308,9 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
 
   host.runScript(std::move(bundle), "file://" + bundlePath);
   host.waitForJsIdle(10000);
-  fabric.startSurface(appName, 1, (float)width, (float)height, pointScale);
+  // startSurface takes DEVICE PIXELS and divides by pointScale itself
+  // (FabricHost.cpp:279) — so it gets the framebuffer size, not the request.
+  fabric.startSurface(appName, 1, (float)pxWidth, (float)pxHeight, pointScale);
   host.waitForJsIdle(10000);
 
   printf("rn-impeller: scene_nodes=%zu\n", sceneGraph.nodeCount());
@@ -371,6 +401,7 @@ int main(int argc, char** argv) {
   bool logMutations = false;
   bool listModules = false;
   bool testOpenUrl = false;
+  bool testPointScale = false;
   bool windowMode = false;
   int frames = 0;              // 0 = unbounded, run until window closes
   std::string tapSpec;         // "X,Y" in points; empty = no input probe
@@ -385,6 +416,12 @@ int main(int argc, char** argv) {
   //
   // Default 1.0 keeps every existing gate byte-identical: points == pixels.
   float pointScale = 1.0f;
+  // ⛔ "1.0" AND "THE USER ASKED FOR 1.0" MUST BE DISTINGUISHABLE.
+  // On the windowed path the display is the source of truth and --scale is an
+  // override; without this flag a defaulted 1.0 is indistinguishable from an
+  // explicit one, and the derived Retina scale could never be applied without
+  // silently ignoring a real `--scale 1`.
+  bool pointScaleGiven = false;
   // Arbitrary pixel probes, so a gate can assert the geometry ITS fixture
   // declares instead of whatever probes happen to be hardcoded here. Each
   // prints `probe=<x>,<y> rgb=r,g,b`.
@@ -425,6 +462,7 @@ int main(int argc, char** argv) {
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
+    else if (a == "--test-pointscale") testPointScale = true;
     else if (a == "--color-scheme") colorScheme = next("--color-scheme");
     else if (a == "--initial-url") initialUrl = next("--initial-url");
     else if (a == "--probe-banner") probeBanner = (next("--probe-banner") != "off");
@@ -437,6 +475,7 @@ int main(int argc, char** argv) {
                 argv[i]);
         return 2;
       }
+      pointScaleGiven = true;
     }
     else if (a == "--probe") {
       std::string v = next("--probe");
@@ -477,6 +516,10 @@ int main(int argc, char** argv) {
   // side effect at all: it exercises the predicate that protects the Windows
   // opener, on the platform that actually builds today.
   if (testOpenUrl) return rni::runOpenUrlSelfTest();
+  // Same shape as --test-openurl, and for the same reason: it exercises a
+  // decision whose WRONG answer only shows up on hardware CI does not have
+  // (a Retina display), on the platform that actually builds today.
+  if (testPointScale) return rni::runPointScaleSelfTest();
   if (listModules) return ListModules();
 
   if (bundlePath.empty() || appName.empty()) {
@@ -509,7 +552,7 @@ int main(int argc, char** argv) {
     return RunWindowed(bundlePath, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl, width, height, pointScale,
                        logMutations, frames, screenshotAfterMs, screenshot,
-                       screenshotFirst);
+                       screenshotFirst, pointScaleGiven);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "

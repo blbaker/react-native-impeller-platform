@@ -47,6 +47,14 @@ class GlfwSurface {
   int width() const { return width_; }
   int height() const { return height_; }
 
+  // ⛔ width()/height() ARE PIXELS; THESE ARE POINTS.
+  // glfwCreateWindow takes screen coordinates (points) and
+  // glfwGetFramebufferSize reports pixels; on a Retina display the second is
+  // twice the first. Both are recorded at init so the host can derive the
+  // backing scale instead of assuming 1.0 — see host/PointScale.h.
+  int pointWidth() const { return pointWidth_; }
+  int pointHeight() const { return pointHeight_; }
+
   bool drawDisplayList(ImpellerDisplayList dl);
 
   // Reads the DEFAULT framebuffer back, already Y-flipped into top-left
@@ -73,6 +81,8 @@ class GlfwSurface {
 
   int width_{0};
   int height_{0};
+  int pointWidth_{0};
+  int pointHeight_{0};
   GLFWwindow* window_{nullptr};
 #if defined(__APPLE__)
   EGLDisplay display_{EGL_NO_DISPLAY};
