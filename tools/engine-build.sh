@@ -20,13 +20,53 @@ ROOT="$PWD"
 # `resolve.js` computes the package name from those values at runtime, so the
 # directory here must be `win32-x64` and never `windows-x64`: a mismatch produces
 # a package that publishes fine, installs fine, and can never be found.
-PLATFORM="${1:-linux}"
-ARCH="${2:-x64}"
+# ⛔ THE DEFAULT TRIPLE IS THE HOST'S, NOT "linux x64".
+# This used to read `${1:-linux}` / `${2:-x64}`. The toolchain switch below keys
+# off `uname -s`, so on a Mac an argument-less run COMPILED A CORRECT DARWIN
+# BINARY AND STAGED IT INTO packages-engine/engine-linux-x64/ — announcing
+# "configuring + compiling linux-x64 host" while writing an arm64 Mach-O, Mac
+# dylibs and hermesvm.framework into the Linux package. Nothing downstream
+# checks a staged binary's architecture, so the corruption is silent until
+# `npm install` of the tarballs fails on a consumer gate and reads as a real
+# gate failure. Measured 2026-09-03 on the macOS tester.
+#
+# Eleven call sites still pass a literal `linux x64` or default RNI_ENGINE_PKG
+# to engine-linux-x64; those are separately wrong on a Mac, but the default here
+# is what turns "gate can't run" into "gate poisons the package".
+#
+# Derived from node — the SAME source ci-triple.sh uses — so the two can't drift.
+PLATFORM="${1:-$(node -p 'process.platform' 2>/dev/null)}"
+ARCH="${2:-$(node -p 'process.arch' 2>/dev/null)}"
+if [ -z "${PLATFORM}" ] || [ -z "${ARCH}" ]; then
+  echo "engine-build: FAIL — no triple given and node is not on PATH to supply one." >&2
+  echo "  Pass one explicitly (engine-build.sh linux x64) or load nvm:" >&2
+  echo "    . \"\$HOME/.nvm/nvm.sh\"" >&2
+  exit 1
+fi
 case "${PLATFORM}" in
   windows|win) PLATFORM=win32 ;;
 esac
 TRIPLE="${PLATFORM}-${ARCH}"
 PKG="packages-engine/engine-${TRIPLE}"
+
+# ⛔ A NATIVE COMPILE CANNOT CROSS-BUILD. Everything below this point compiles
+# with the HOST toolchain, so a requested platform that disagrees with `uname`
+# does not produce the requested package — it produces a host binary in the
+# wrong directory. Refuse, loudly, instead of staging a lie. (win32 is exempt:
+# it execs a staging script that copies prebuilt artefacts rather than compiling.)
+case "$(uname -s)" in
+  Darwin) HOST_PLATFORM=darwin ;;
+  Linux)  HOST_PLATFORM=linux ;;
+  *)      HOST_PLATFORM=unknown ;;
+esac
+if [ "${PLATFORM}" != "win32" ] && [ "${PLATFORM}" != "${HOST_PLATFORM}" ]; then
+  echo "engine-build: FAIL — asked for '${PLATFORM}' on a '${HOST_PLATFORM}' host." >&2
+  echo "  This script compiles natively; it cannot cross-build. Building anyway" >&2
+  echo "  would stage a ${HOST_PLATFORM} binary into ${PKG}, which installs and" >&2
+  echo "  then fails at exec with an unrelated-looking error." >&2
+  echo "  Run it on a ${PLATFORM} host, or drop the argument to build for this one." >&2
+  exit 1
+fi
 VERSION="$(node -p "require('${ROOT}/package/package.json').version")"
 
 case "${PLATFORM}" in
@@ -253,6 +293,35 @@ else
     readelf -d "${PKG}/bin/rn-impeller" | grep -E 'R(UN)?PATH' >&2
     exit 1
   fi
+fi
+
+# ⛔ AND THE STAGED FILE MUST BE THE ARCHITECTURE THE DIRECTORY NAME CLAIMS.
+# Every check above this point is host-relative: run on a Mac, they lovingly
+# verify a Mach-O's signature and @loader_path rpath — inside whatever directory
+# they were pointed at, including engine-linux-x64/. That is exactly how an
+# arm64 Mach-O got staged as the Linux engine on 2026-09-03 with all gates
+# reporting success. The package name is a PROMISE to `resolve.js`; assert it
+# against the file's real header, not against the variable that named the path.
+case "${TRIPLE}" in
+  linux-x64)    WANT_ARCH='ELF 64-bit.*x86-64' ;;
+  linux-arm64)  WANT_ARCH='ELF 64-bit.*aarch64|ELF 64-bit.*ARM aarch64' ;;
+  darwin-arm64) WANT_ARCH='Mach-O 64-bit.*arm64' ;;
+  darwin-x64)   WANT_ARCH='Mach-O 64-bit.*x86_64' ;;
+  *)            WANT_ARCH='' ;;
+esac
+if [ -n "${WANT_ARCH}" ]; then
+  command -v file >/dev/null \
+    || { echo "engine-build: FAIL — \`file\` not found; cannot verify staged architecture" >&2; exit 1; }
+  ACTUAL="$(file -b "${PKG}/bin/rn-impeller")"
+  if ! echo "${ACTUAL}" | grep -qE "${WANT_ARCH}"; then
+    echo "engine-build: FAIL — ${PKG} is named for ${TRIPLE}, but the staged" >&2
+    echo "  binary is not that architecture. This package would install cleanly" >&2
+    echo "  on a ${PLATFORM} machine and fail at exec." >&2
+    echo "    expected: ${WANT_ARCH}" >&2
+    echo "    actual:   ${ACTUAL}" >&2
+    exit 1
+  fi
+  echo "engine-build: arch check ....... OK (${TRIPLE})"
 fi
 
 # ⛔ AND THE STAGED BINARY MUST ACTUALLY START.
