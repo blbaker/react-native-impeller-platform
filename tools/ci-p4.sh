@@ -183,6 +183,11 @@ const SPEC_FOR = {
   StatusBarManager:   'src/private/specs_DEPRECATED/modules/NativeStatusBarManagerIOS.js',
   DevSettings:        'src/private/specs_DEPRECATED/modules/NativeDevSettings.js',
   LinkingManager:     'src/private/specs_DEPRECATED/modules/NativeLinkingManager.js',
+  // The IOS spec, matching the metro shim's RCTNetworking.ios.js redirect and
+  // the NativeNetworkingIOSCxxSpec the module subclasses. The Android flavour
+  // has a different method map (it assumes a JNI-backed handler), so mapping
+  // to it here would fail this guard for the right reason on the wrong axis.
+  Networking:         'src/private/specs_DEPRECATED/modules/NativeNetworkingIOS.js',
 };
 // Inherited from RN's TurboModule base, not declared per-spec.
 const INHERITED = new Set(['addListener', 'removeListeners']);

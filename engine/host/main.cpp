@@ -103,7 +103,9 @@ void Usage() {
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
           "                   [--screenshot-first <file.ppm>]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
-          "       rn-impeller --test-openurl   (URL predicate self-test)\n");
+          "       rn-impeller --test-openurl   (URL predicate self-test)\n"
+          "       rn-impeller --test-urlparse  (Networking URL parse self-test)\n"
+          "       rn-impeller --test-http      (Networking loopback GET/POST self-test)\n");
 }
 
 // Prints the TurboModule seam as a machine-readable manifest:
@@ -402,6 +404,8 @@ int main(int argc, char** argv) {
   bool listModules = false;
   bool testOpenUrl = false;
   bool testPointScale = false;
+  bool testUrlParse = false;
+  bool testHttp = false;
   bool windowMode = false;
   int frames = 0;              // 0 = unbounded, run until window closes
   std::string tapSpec;         // "X,Y" in points; empty = no input probe
@@ -463,6 +467,8 @@ int main(int argc, char** argv) {
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
     else if (a == "--test-pointscale") testPointScale = true;
+    else if (a == "--test-urlparse") testUrlParse = true;
+    else if (a == "--test-http") testHttp = true;
     else if (a == "--color-scheme") colorScheme = next("--color-scheme");
     else if (a == "--initial-url") initialUrl = next("--initial-url");
     else if (a == "--probe-banner") probeBanner = (next("--probe-banner") != "off");
@@ -520,6 +526,14 @@ int main(int argc, char** argv) {
   // decision whose WRONG answer only shows up on hardware CI does not have
   // (a Retina display), on the platform that actually builds today.
   if (testPointScale) return rni::runPointScaleSelfTest();
+  // The Networking transport, proven WITHOUT a JS runtime. --test-http stands
+  // up a loopback server on an ephemeral port and drives a real GET and a real
+  // POST-with-headers through the same performRequest() the TurboModule calls,
+  // then asserts the SERVER saw the method, path, headers and body. A test
+  // that only checked "the client got 200 back" would pass against a request
+  // that dropped every custom header.
+  if (testUrlParse) return rni::runUrlSelfTest();
+  if (testHttp) return rni::runHttpSelfTest();
   if (listModules) return ListModules();
 
   if (bundlePath.empty() || appName.empty()) {
@@ -614,6 +628,33 @@ int main(int argc, char** argv) {
     // the JS thread. Idle means that whole chain has drained.
     host.waitForJsIdle(10000);
 
+    // ⛔ AN IDLE JS THREAD DOES NOT MEAN THE NETWORK FINISHED.
+    // A request runs on a native worker; while it is on the wire there is no
+    // pending JS task, so waitForJsIdle returns true immediately and a
+    // headless capture screenshots before any response has landed. Measured on
+    // the first two P10 runs: the Networking module resolved (swatch green)
+    // and every request swatch was red, with NO JS error — a working transport
+    // presenting exactly like a dead one.
+    //
+    // So: drain the network, THEN let the JS that its responses scheduled
+    // (setState -> render -> commit -> mutations) drain in turn. Both waits are
+    // bounded; a stuck socket must fail the gate, not hang CI forever.
+    if (auto net = host.network()) {
+      auto netDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+      while (net->inFlight.load() > 0 &&
+             std::chrono::steady_clock::now() < netDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+      // The native-side side-effect counter, same role alerts_shown plays for
+      // AlertManager: a pixel proves JS received a response, this proves a
+      // request actually crossed into native and completed.
+      printf("rn-impeller: net_requests_completed=%d net_in_flight=%d\n",
+             net->completed.load(), net->inFlight.load());
+      host.waitForJsIdle(10000);
+    }
+
+    // Counted AFTER the network settle: nodes mounted by a response handler
+    // do not exist yet at the point the old count was taken.
     nodeCount = sceneGraph.nodeCount();
     printf("rn-impeller: scene_nodes=%zu\n", nodeCount);
     // Side effects the modules recorded, so a gate can assert that JS actually

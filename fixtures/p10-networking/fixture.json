@@ -1,0 +1,79 @@
+{
+  "surface": {"width": 400, "height": 300, "background": "#ffffff"},
+
+  "_comment": "P10 networking fixture geometry. THE TRAP THIS FIXTURE EXISTS TO CATCH: RN's JS half of networking is complete without any native module — whatwg-fetch installs a real global `fetch`, so `typeof fetch === 'function'` was TRUE on this engine for its entire life while every request failed. Any gate asserting only that passes against a completely dead network stack. So BOTH halves are asserted independently: `nativeHalf` demands TurboModuleRegistry.get('Networking') be non-null, and the request swatches demand real bytes come back from a real server. The gate rewrites baseUrl with the ephemeral port of the server it started.",
+
+  "swatchSize": 60,
+
+  "baseUrl": "http://127.0.0.1:0",
+
+  "control": {
+    "_comment": "POSITIVE CONTROL, and it is not optional. If the engine failed to boot, the bundle threw, or Fabric never mounted, every OTHER swatch would be background — which is indistinguishable from 'networking is broken'. This swatch depends on NOTHING but React rendering, so a run where control is background means the gate itself did not execute, not that the feature failed.",
+    "x": 20, "y": 20,
+    "probe": [50, 50],
+    "expect": [0, 170, 0],
+    "failColor": "#ff0000"
+  },
+
+  "nativeHalf": {
+    "_comment": "THE ASSERTION THE OLD PROBE COULD NOT MAKE. Painted only if TurboModuleRegistry.get('Networking') returns non-null AND it exposes sendRequest. A JS-only polyfill cannot satisfy this: there is no native module to get. This is the half that was null before this phase.",
+    "x": 100, "y": 20,
+    "probe": [130, 50],
+    "expect": [0, 102, 204],
+    "failColor": "#ff0000"
+  },
+
+  "getRequest": {
+    "_comment": "A real fetch() GET against the gate's loopback server. Painted only if the response body EXACTLY equals the token the server was told to return — a unique string the JS side cannot fabricate, so an empty or stubbed response paints background. Asserting only `response.ok` would pass on any 200 from anywhere.",
+    "x": 180, "y": 20,
+    "probe": [210, 50],
+    "expect": [204, 102, 0],
+    "expectBody": "impeller-get-9f3a2c",
+    "failColor": "#ff0000"
+  },
+
+  "getStatus": {
+    "_comment": "The status code must arrive as a NUMBER from the native response event, not be assumed. The server answers this path with 418 rather than 200: a native module that hardcoded 200, or a JS fallback inventing a default, paints background here while getRequest still passes.",
+    "x": 260, "y": 20,
+    "probe": [290, 50],
+    "expect": [102, 0, 204],
+    "expectStatus": 418,
+    "failColor": "#ff0000"
+  },
+
+  "postRequest": {
+    "_comment": "A real fetch() POST. The server ECHOES back the method, one custom request header and the request body it actually received, and the fixture demands all three round-trip. This is what catches a transport that connects and returns 200 while silently dropping headers or sending an empty body — the failure mode a status-code-only assertion is blind to.",
+    "x": 20, "y": 100,
+    "probe": [50, 130],
+    "expect": [0, 153, 153],
+    "sendHeader": "X-Impeller-Probe",
+    "sendHeaderValue": "hostapp-v5",
+    "sendBody": "{\"sets\":3,\"reps\":10}",
+    "failColor": "#ff0000"
+  },
+
+  "responseHeaders": {
+    "_comment": "Response headers must survive the native->JS event. The server sets X-Impeller-Server on every reply and the fixture reads it back through the standard Headers API. Header parsing is the piece most likely to be silently dropped, because a body-only implementation still looks completely healthy.",
+    "x": 100, "y": 100,
+    "probe": [130, 130],
+    "expect": [153, 153, 0],
+    "expectHeader": "X-Impeller-Server",
+    "expectHeaderValue": "impeller-fixture",
+    "failColor": "#ff0000"
+  },
+
+  "errorPath": {
+    "_comment": "A request to a port with nothing on it must REJECT, and reject in bounded time. An engine that leaves the promise pending forever presents as an app hang rather than a failed request, and a gate that only tests the happy path cannot see the difference. Painted only if the promise actually rejected.",
+    "x": 180, "y": 100,
+    "probe": [210, 130],
+    "expect": [204, 0, 102],
+    "failColor": "#ff0000"
+  },
+
+  "text": {
+    "_comment": "The measured status rendered as TEXT so a human reading the frame can see WHAT came back rather than only that a square is coloured.",
+    "x": 20, "y": 190,
+    "fontSize": 16,
+    "inkBand": [20, 190, 300, 24]
+  }
+}

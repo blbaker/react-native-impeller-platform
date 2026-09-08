@@ -12,13 +12,13 @@
 // caller reads them with `mapfile`/`for /f` rather than splitting on a
 // separator that also appears inside the data.
 //
-// Usage: node fixture-probe-args.js <fixture.json> <p2|p3|p4>
+// Usage: node fixture-probe-args.js <fixture.json> <p2|p3|p4|p10>
 'use strict';
 const path = require('path');
 
 const [fixturePath, phase] = process.argv.slice(2);
 if (!fixturePath || !phase) {
-  console.error('usage: fixture-probe-args.js <fixture.json> <p2|p3|p4>');
+  console.error('usage: fixture-probe-args.js <fixture.json> <p2|p3|p4|p10>');
   process.exit(2);
 }
 const g = require(path.resolve(fixturePath));
@@ -52,6 +52,17 @@ const BUILDERS = {
   p4() {
     for (const k of ['appearance', 'statusBar', 'alert', 'linking', 'initialUrl',
                      'devSettings', 'defaults', 'platformConstants']) {
+      probe(g[k].probe);
+    }
+    arg('--ink-band', g.text.inkBand.join(','));
+  },
+
+  p10() {
+    // `control` is FIRST and is not a networking assertion: it proves the
+    // engine booted and Fabric mounted, so a run where everything is
+    // background is distinguishable from a run where networking failed.
+    for (const k of ['control', 'nativeHalf', 'getRequest', 'getStatus',
+                     'postRequest', 'responseHeaders', 'errorPath']) {
       probe(g[k].probe);
     }
     arg('--ink-band', g.text.inkBand.join(','));

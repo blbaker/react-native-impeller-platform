@@ -16,14 +16,14 @@
 // 140x31, a real CoreText/DirectWrite-vs-FreeType line-metric delta — the range
 // lives in the FIXTURE and both hosts are held to the same declared range.
 //
-// Usage: node assert-fixture.js <p2|p3|p4> <fixture.json> <engine.log> <FAIL_TAG>
+// Usage: node assert-fixture.js <p2|p3|p4|p10> <fixture.json> <engine.log> <FAIL_TAG>
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
 const [phase, fixturePath, logPath, failTag] = process.argv.slice(2);
 if (!phase || !fixturePath || !logPath || !failTag) {
-  console.error('usage: assert-fixture.js <p2|p3|p4> <fixture.json> <engine.log> <FAIL_TAG>');
+  console.error('usage: assert-fixture.js <p2|p3|p4|p10> <fixture.json> <engine.log> <FAIL_TAG>');
   process.exit(2);
 }
 const g = require(path.resolve(fixturePath));
@@ -250,6 +250,45 @@ const PHASES = {
     // Text ink: the frame must be human-readable too, so a reviewer can see
     // WHICH scheme was reported rather than only that a square is green.
     checkInk('colorScheme label', g.text.inkBand);
+  },
+
+  p10() {
+    const TOL = 3;
+    const c = (label, spec, why) => check(label, spec.probe, spec.expect, TOL, why);
+
+    // ⛔ THE CONTROL IS CHECKED FIRST AND ITS FAILURE IS FATAL TO THE RUN'S
+    // MEANING, not just to the gate. It asserts nothing about networking — if
+    // it is background, the engine did not boot or Fabric never mounted, and
+    // every other background swatch below is uninformative rather than a
+    // networking verdict. Reporting "networking failed" off that run would be
+    // a false attribution.
+    c('POSITIVE CONTROL: engine booted and Fabric mounted', g.control,
+      'this swatch depends on nothing but React rendering — if it is background the run itself did not happen, ' +
+      'and no networking conclusion can be drawn from the other probes');
+
+    c('NATIVE HALF: TurboModuleRegistry.get(\'Networking\') is non-null', g.nativeHalf,
+      "this is the assertion no fetch-shaped check can make. RN's whatwg-fetch polyfill makes " +
+      "`typeof fetch === 'function'` TRUE with NO native module at all — it was true on this engine " +
+      'for its entire life while every request failed. A JS polyfill cannot fake a TurboModule');
+
+    c('GET returns the exact body the server sent', g.getRequest,
+      `expected body '${g.getRequest.expectBody}' — a unique token the JS side cannot fabricate, so ` +
+      'an empty or stubbed response fails here while `response.ok` would still be true');
+    c('GET status is the real status code', g.getStatus,
+      `expected status ${g.getStatus.expectStatus} (deliberately NOT 200) — a module hardcoding 200, ` +
+      'or a JS fallback inventing a default, fails here while the body assertion still passes');
+    c('POST round-trips method, custom header and body', g.postRequest,
+      'the server echoes what it ACTUALLY received. This is what catches a transport that connects ' +
+      'and returns 200 while silently dropping headers or sending an empty body');
+    c('response headers survive the native->JS event', g.responseHeaders,
+      `expected ${g.responseHeaders.expectHeader}: ${g.responseHeaders.expectHeaderValue}. Header parsing ` +
+      'is the piece most likely to be silently dropped — a body-only implementation looks completely healthy');
+    c('a dead port REJECTS rather than hanging', g.errorPath,
+      'a promise left pending forever presents as an app hang, not a failed request; a happy-path-only ' +
+      'gate cannot tell the two apart');
+
+    // Human-readable frame, same reason as P4.
+    checkInk('status label', g.text.inkBand);
   },
 };
 

@@ -104,6 +104,7 @@ ReactHost::ReactHost() {
   knownComponents_ = std::make_shared<std::vector<std::string>>();
   appearance_ = std::make_shared<AppearanceState>();
   alerts_ = std::make_shared<AlertRecord>();
+  network_ = std::make_shared<NetworkActivity>();
   initialUrl_ = std::make_shared<std::string>();
 
   auto jsRuntime = react::HermesInstance::createJSRuntime(
@@ -185,6 +186,13 @@ ReactHost::ReactHost() {
   });
   modules_->add("LinkingManager", [u = initialUrl_](auto inv) {
     return std::make_shared<LinkingManagerModule>(inv, u);
+  });
+  // Networking — what fetch() and XMLHttpRequest reach for. Registered here
+  // and NOT getEnforcing'd anywhere, which is exactly why its absence was
+  // silent: RN's JS installs a real global `fetch` regardless, so the bundle
+  // ran fine and every request failed. See NetworkingModule.h.
+  modules_->add("Networking", [n = network_](auto inv) {
+    return std::make_shared<NetworkingModule>(inv, n);
   });
 
   auto moduleProvider = [jsInvoker, modules = modules_](

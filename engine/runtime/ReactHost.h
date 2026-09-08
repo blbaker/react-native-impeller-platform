@@ -14,6 +14,7 @@
 
 #include "modules/CoreModules.h"
 #include "modules/ModuleRegistry.h"
+#include "modules/NetworkingModule.h"
 #include "modules/PlatformModules.h"
 #include "runtime/JsThread.h"
 
@@ -48,6 +49,9 @@ class ReactHost {
   std::shared_ptr<AppearanceState> appearance() { return appearance_; }
   std::shared_ptr<AlertRecord> alerts() { return alerts_; }
   std::shared_ptr<std::string> initialUrl() { return initialUrl_; }
+  // Network activity, so a headless run can wait for in-flight REQUESTS and
+  // not only for an idle JS thread. See NetworkActivity in NetworkingModule.h.
+  std::shared_ptr<NetworkActivity> network() { return network_; }
 
   std::string jsThreadStats() const {
     return jsThread_ ? jsThread_->debugStats() : std::string();
@@ -73,6 +77,7 @@ class ReactHost {
   std::shared_ptr<ModuleRegistry> modules_;
   std::shared_ptr<AppearanceState> appearance_;
   std::shared_ptr<AlertRecord> alerts_;
+  std::shared_ptr<NetworkActivity> network_;
   std::shared_ptr<std::string> initialUrl_;
 };
 
