@@ -43,6 +43,23 @@ class FabricHost {
   // The surface is constrained in POINTS = pixels / scale.
   void startSurface(const std::string& moduleName, int surfaceId, float width,
                     float height, float pointScaleFactor = 1.0f);
+
+  // Re-constrains an ALREADY RUNNING surface to a new pixel size and scale.
+  //
+  // ⛔ THIS IS THE ONLY THING THAT MAKES A RESIZE VISIBLE TO THE APP.
+  // startSurface constrains the layout once and there was no other entry
+  // point, so a host that re-measured its window on every framebuffer change
+  // could update Dimensions and the framebuffer and still leave every mounted
+  // view at the geometry it had at launch. RN's own platforms re-constrain:
+  // iOS through RCTSurface's setSize, Android through the SurfaceHandler the
+  // ReactRootView owns. Same units as startSurface -- DEVICE PIXELS, divided
+  // by the scale here -- so the two cannot drift.
+  //
+  // Returns false when no surface has been started, rather than crashing on a
+  // null handler: a resize event that arrives before startSurface is a real
+  // ordering, not a programming error.
+  bool updateSurface(int surfaceId, float width, float height,
+                     float pointScaleFactor = 1.0f);
   void stopSurface();
 
   // Touch phases, mapped to TouchEventEmitter's four touch entry points.

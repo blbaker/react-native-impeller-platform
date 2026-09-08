@@ -263,7 +263,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 int frames, int screenshotAfterMs,
                 const std::string& screenshotPath,
                 const std::string& screenshotFirstPath,
-                bool pointScaleGiven) {
+                bool pointScaleGiven, int resizeAfterFrames, int resizeToW,
+                int resizeToH) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -356,6 +357,54 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
 
   while (!surface.shouldClose()) {
     surface.pollEvents();
+
+    // ⛔ SCALE AND SIZE ARE DECIDED ONCE AT WINDOW CREATION UNLESS THIS RUNS.
+    // Everything above the loop ran exactly once. RN's own platforms do not
+    // stop at detection: iOS reads UIScreen.mainScreen.scale then listens on
+    // didUpdateDimensions, Android reads densityDpi then re-delivers on
+    // configuration change. consumeDirty() is this engine's version of that
+    // listener, and it is false on every frame that is not a resize, so the
+    // steady-state cost is one relaxed atomic load.
+    if (surface.consumeDirty()) {
+      const int newPx = surface.width();
+      const int newPy = surface.height();
+      // ⛔ HONOUR THE OVERRIDE THE SAME WAY THE STARTUP PATH DOES.
+      // pointScaleGiven, not `pointScale != 1.0f`: the default IS 1.0, so an
+      // explicit `--scale 1` has to stay distinguishable from no flag at all
+      // (D-46). Re-deriving through the same DeriveWindowPointScale the
+      // startup path uses means a resize can never disagree with launch, and
+      // the mutation gate on that function covers both callers.
+      pointScale = rni::DeriveWindowPointScale(newPx, surface.pointWidth(),
+                                               pointScale, pointScaleGiven);
+      const float newPointW = (float)newPx / pointScale;
+      const float newPointH = (float)newPy / pointScale;
+
+      // Dimensions.get('window') and the useWindowDimensions hook read this.
+      host.displayMetrics()->set(newPointW, newPointH, pointScale);
+      // And this re-constrains the LAYOUT. Without it the framebuffer and
+      // Dimensions are both correct and every mounted view keeps the geometry
+      // it had at launch, which is the half of the bug a screenshot of a
+      // freshly-launched window can never show.
+      fabric.updateSurface(1, (float)newPx, (float)newPy, pointScale);
+
+      printf("rn-impeller: resize px=%dx%d points=%.1fx%.1f scale=%.2f%s\n",
+             newPx, newPy, newPointW, newPointH, pointScale,
+             pointScaleGiven ? " (--scale override)" : " (from framebuffer)");
+      fflush(stdout);
+    }
+
+    // Test hook: drive a resize from inside the process at a known frame.
+    // There is no headless way to make a window manager resize a window, and
+    // glfwSetWindowSize enters the SAME framebuffer-size callback a user drag
+    // does, so this is the only way the feature is gateable without a human
+    // and a mouse.
+    if (resizeAfterFrames > 0 && frameIndex == resizeAfterFrames) {
+      printf("rn-impeller: resize_requested %dx%d points\n", resizeToW,
+             resizeToH);
+      fflush(stdout);
+      surface.requestSize(resizeToW, resizeToH);
+    }
+
     int painted = paintFrame();
     ++frameIndex;
     if (frameIndex == 1) printf("rn-impeller: painted_nodes=%d\n", painted);
@@ -411,6 +460,9 @@ int main(int argc, char** argv) {
   std::string tapSpec;         // "X,Y" in points; empty = no input probe
   int screenshotAfterMs = -1;  // -1 = no timed capture
   std::string screenshotFirst;  // empty = no frame-0 capture
+  int resizeAfterFrames = 0;    // 0 = no scripted resize
+  int resizeToW = 0;
+  int resizeToH = 0;
   int width = 400, height = 300;
   // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
   // The surface is allocated at width x height PIXELS; layout then happens in
@@ -463,6 +515,29 @@ int main(int argc, char** argv) {
     // yields two frames to compare; see tools/ci-animate.sh for why a single
     // capture cannot prove the repaint loop is alive.
     else if (a == "--screenshot-first") screenshotFirst = next("--screenshot-first");
+    // Resize test hook: "--resize-after-frames N:WxH" calls glfwSetWindowSize
+    // after frame N. See tools/ci-resize.sh on why a hook rather than a drag.
+    else if (a == "--resize-after-frames") {
+      std::string spec = next("--resize-after-frames");
+      auto colon = spec.find(':');
+      auto ex = spec.find('x', colon == std::string::npos ? 0 : colon + 1);
+      if (colon == std::string::npos || ex == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --resize-after-frames wants N:WxH (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      resizeAfterFrames = atoi(spec.substr(0, colon).c_str());
+      resizeToW = atoi(spec.substr(colon + 1, ex - colon - 1).c_str());
+      resizeToH = atoi(spec.substr(ex + 1).c_str());
+      if (resizeAfterFrames <= 0 || resizeToW <= 0 || resizeToH <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --resize-after-frames needs N, W and H all > 0 "
+                "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
@@ -566,7 +641,8 @@ int main(int argc, char** argv) {
     return RunWindowed(bundlePath, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl, width, height, pointScale,
                        logMutations, frames, screenshotAfterMs, screenshot,
-                       screenshotFirst, pointScaleGiven);
+                       screenshotFirst, pointScaleGiven, resizeAfterFrames,
+                       resizeToW, resizeToH);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "

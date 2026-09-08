@@ -309,6 +309,32 @@ void FabricHost::startSurface(const std::string& moduleName, int surfaceId,
   std::fflush(stdout);
 }
 
+bool FabricHost::updateSurface(int surfaceId, float width, float height,
+                               float pointScaleFactor) {
+  if (!surfaceHandler_) return false;
+
+  // Identical arithmetic to startSurface, deliberately: the constraint that a
+  // resize produces must be the one the same window would have produced at
+  // launch, or the app renders differently depending on how it got to a size.
+  const float scale = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;
+  const float pointWidth = width / scale;
+  const float pointHeight = height / scale;
+
+  react::LayoutConstraints constraints;
+  constraints.minimumSize = {.width = pointWidth, .height = pointHeight};
+  constraints.maximumSize = {.width = pointWidth, .height = pointHeight};
+  constraints.layoutDirection = react::LayoutDirection::LeftToRight;
+  react::LayoutContext layoutContext;
+  layoutContext.pointScaleFactor = scale;
+  surfaceHandler_->constraintLayout(constraints, layoutContext);
+
+  std::printf("[fabric] surface %d resized %gx%g points @%gx (%gx%g px)\n",
+              surfaceId, (double)pointWidth, (double)pointHeight, (double)scale,
+              (double)width, (double)height);
+  std::fflush(stdout);
+  return true;
+}
+
 void FabricHost::stopSurface() {
   if (!surfaceHandler_) return;
   if (surfaceHandler_->getStatus() == react::SurfaceHandler::Status::Running) {

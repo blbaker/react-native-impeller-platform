@@ -188,6 +188,26 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   pointWidth_ = winWidth;
   pointHeight_ = winHeight;
 
+  // ⛔ OBSERVE THE WINDOW, DO NOT JUST MEASURE IT ONCE.
+  // Everything above runs exactly once. Without this callback the backing
+  // scale and the surface size are frozen at whatever the window was when it
+  // opened, so a resize paints the old geometry into a new framebuffer and a
+  // drag to a 1x monitor keeps rasterising at 2x. GLFW fires this for BOTH,
+  // because a scale change on the same logical window size still changes the
+  // framebuffer size in pixels -- which is exactly why the framebuffer
+  // callback is the right one to listen on and the window-size callback is
+  // not.
+  //
+  // `this` reaches the callback through the window's user pointer; GLFW's C
+  // API has no other channel. Only the flag is set here: see GlfwSurface.h on
+  // why the GL work belongs to the frame loop.
+  glfwSetWindowUserPointer(window_, this);
+  glfwSetFramebufferSizeCallback(
+      window_, [](GLFWwindow* w, int, int) {
+        auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+        if (self) self->dirty_.store(true, std::memory_order_release);
+      });
+
 #if defined(__APPLE__)
   if (!initAngleForWindow(error)) return false;
 #else
@@ -213,6 +233,64 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   std::printf("rn-impeller: GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
   std::fflush(stdout);
   return true;
+}
+
+// Reallocates the Impeller surface for the framebuffer's CURRENT size and
+// re-records both sizes, so backingScale() and width()/height() describe the
+// window that exists now rather than the one that opened.
+//
+// ⛔ THE IMPELLER SURFACE WRAPS A SIZE, NOT JUST AN FBO ID.
+// FBO 0 stays valid across a resize -- it is the window's own default
+// framebuffer -- but the ImpellerSurface built over it in init() carries the
+// dimensions it was created with. Leaving it alone means Impeller keeps
+// clipping and presenting at the OLD pixel size into a window that is now a
+// different size, which reads as content pinned to a corner with garbage
+// beside it. So the wrapper is released and rebuilt; the CONTEXT is not
+// touched, because recreating that would drop every uploaded texture and the
+// typography atlas for what is a per-drag event.
+bool GlfwSurface::consumeDirty() {
+  if (!dirty_.exchange(false, std::memory_order_acq_rel)) return false;
+  if (!window_) return false;
+
+  int fbWidth = 0, fbHeight = 0;
+  glfwGetFramebufferSize(window_, &fbWidth, &fbHeight);
+  int winWidth = 0, winHeight = 0;
+  glfwGetWindowSize(window_, &winWidth, &winHeight);
+  // A minimised window reports 0 in at least one axis on every platform. Zero
+  // would divide the layout to nothing and ImpellerSurfaceCreateWrappedFBONew
+  // would be asked for a degenerate surface, so drop the event and keep the
+  // last good size; the un-minimise fires the callback again.
+  if (fbWidth <= 0 || fbHeight <= 0 || winWidth <= 0 || winHeight <= 0)
+    return false;
+  if (fbWidth == width_ && fbHeight == height_ && winWidth == pointWidth_ &&
+      winHeight == pointHeight_)
+    return false;
+
+  width_ = fbWidth;
+  height_ = fbHeight;
+  pointWidth_ = winWidth;
+  pointHeight_ = winHeight;
+
+#if defined(__APPLE__)
+  // ANGLE's window surface tracks the CALayer, which AppKit has already
+  // resized by the time this callback runs, so there is nothing to rebuild on
+  // the EGL side. The viewport is ours and must follow.
+#endif
+  glViewport(0, 0, width_, height_);
+
+  if (surface_) {
+    ImpellerSurfaceRelease(surface_);
+    surface_ = nullptr;
+  }
+  ImpellerISize size = {width_, height_};
+  surface_ = ImpellerSurfaceCreateWrappedFBONew(
+      context_, 0u, kImpellerPixelFormatRGBA8888, &size);
+  return surface_ != nullptr;
+}
+
+void GlfwSurface::requestSize(int pointW, int pointH) {
+  if (!window_ || pointW <= 0 || pointH <= 0) return;
+  glfwSetWindowSize(window_, pointW, pointH);
 }
 
 bool GlfwSurface::drawDisplayList(ImpellerDisplayList dl) {
