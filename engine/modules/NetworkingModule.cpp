@@ -7,6 +7,9 @@
 #include <boost/asio/read_until.hpp>
 #include <boost/asio/streambuf.hpp>
 #include <boost/asio/write.hpp>
+#ifdef RNI_WITH_TLS
+#include <boost/asio/ssl.hpp>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -144,19 +147,23 @@ ParsedUrl parseUrl(const std::string& url) {
   }
   out.scheme = toLower(url.substr(0, schemeEnd));
 
-  // ⛔ https is REFUSED, not downgraded. See the header: no TLS is linked in.
-  // The error text names the limitation so a developer reads "this engine has
-  // no TLS" rather than "the network is broken".
+  // https is carried by asio::ssl over the same socket the http path uses.
+  // When the engine is built without TLS the scheme is REFUSED with an error
+  // naming the limitation, rather than silently downgraded to plaintext — a
+  // downgrade would put a bearer token on the wire in clear text, which is a
+  // credential leak wearing a success message.
+  if (out.scheme != "http" && out.scheme != "https") {
+    out.error = "Unsupported URL scheme '" + out.scheme + "'";
+    return out;
+  }
+#ifndef RNI_WITH_TLS
   if (out.scheme == "https") {
     out.error =
         "https is not supported by this engine build (no TLS linked). "
         "Use http:// or build with TLS support.";
     return out;
   }
-  if (out.scheme != "http") {
-    out.error = "Unsupported URL scheme '" + out.scheme + "'";
-    return out;
-  }
+#endif
 
   std::string rest = url.substr(schemeEnd + 3);
   size_t pathStart = rest.find('/');
@@ -172,12 +179,17 @@ ParsedUrl parseUrl(const std::string& url) {
   size_t colon = authority.rfind(':');
   // rfind(':') would also match inside an IPv6 literal; a ']' after it means
   // the colon belongs to the address, not to a port.
+  // ⛔ THE DEFAULT PORT IS SCHEME-DEPENDENT. Defaulting to 80 for an https URL
+  // sends a TLS ClientHello at a plaintext port: the peer either refuses or
+  // replies with an HTTP error page that the handshake reads as garbage, and
+  // the failure names neither the port nor the scheme.
+  const std::string defaultPort = (out.scheme == "https") ? "443" : "80";
   if (colon != std::string::npos && authority.find(']', colon) == std::string::npos) {
     out.host = authority.substr(0, colon);
     out.port = authority.substr(colon + 1);
   } else {
     out.host = authority;
-    out.port = "80";
+    out.port = defaultPort;
   }
 
   // Bare IPv6 literals arrive bracketed; asio's resolver wants them bare.
@@ -189,7 +201,7 @@ ParsedUrl parseUrl(const std::string& url) {
     out.error = "URL has no host: " + url;
     return out;
   }
-  if (out.port.empty()) out.port = "80";
+  if (out.port.empty()) out.port = defaultPort;
 
   out.valid = true;
   return out;
@@ -198,6 +210,124 @@ ParsedUrl parseUrl(const std::string& url) {
 // ---------------------------------------------------------------------------
 // The transport
 // ---------------------------------------------------------------------------
+
+// The HTTP exchange, written once against ANY synchronous asio stream.
+// `tcp::socket` and `ssl::stream<tcp::socket&>` both satisfy it, so the wire
+// format has exactly one implementation and plaintext and TLS cannot drift
+// apart in framing, header handling or chunk decoding.
+template <typename Stream>
+HttpResponse httpExchange(Stream& stream,
+                          const std::string& method,
+                          const ParsedUrl& url,
+                          const std::map<std::string, std::string>& headers,
+                          const std::string& body) {
+  HttpResponse res;
+
+  // -- request --
+  std::ostringstream req;
+  req << method << " " << url.target << " HTTP/1.1\r\n";
+  req << "Host: " << url.host;
+  // The default port is omitted from Host, and which port is "default"
+  // depends on the scheme. Sending "Host: h:443" on https is legal but
+  // differs from what every other client sends, and vhost routing and
+  // certificate/SNI matching are both sensitive to it.
+  const std::string defaultPort = (url.scheme == "https") ? "443" : "80";
+  if (url.port != defaultPort) req << ":" << url.port;
+  req << "\r\n";
+
+  bool sawUserAgent = false, sawAccept = false, sawContentLength = false;
+  for (const auto& [k, v] : headers) {
+    std::string lk = toLower(k);
+    if (lk == "host") continue;  // ours wins; a duplicate Host is a 400
+    if (lk == "connection") continue;
+    if (lk == "user-agent") sawUserAgent = true;
+    if (lk == "accept") sawAccept = true;
+    if (lk == "content-length") sawContentLength = true;
+    req << k << ": " << v << "\r\n";
+  }
+  if (!sawUserAgent) req << "User-Agent: react-native-impeller\r\n";
+  if (!sawAccept) req << "Accept: */*\r\n";
+  // Content-Length is emitted whenever there is a body, and also for
+  // bodyless POST/PUT — a POST with neither Content-Length nor
+  // Transfer-Encoding makes some servers wait for a body that never comes.
+  std::string m = toLower(method);
+  if (!sawContentLength && (!body.empty() || m == "post" || m == "put" || m == "patch")) {
+    req << "Content-Length: " << body.size() << "\r\n";
+  }
+  // Identity + close: chunked and keep-alive both need a framing layer this
+  // module does not have, and asking for them would produce a body we then
+  // mis-read. Asking for exactly what we can parse is honest.
+  req << "Accept-Encoding: identity\r\n";
+  req << "Connection: close\r\n\r\n";
+  req << body;
+
+  std::string requestStr = req.str();
+  asio::write(stream, asio::buffer(requestStr));
+
+  // -- status line --
+  asio::streambuf buf;
+  asio::read_until(stream, buf, "\r\n");
+  std::istream is(&buf);
+  std::string httpVersion;
+  is >> httpVersion >> res.status;
+  std::getline(is, res.statusText);
+  res.statusText = trim(res.statusText);
+  if (httpVersion.rfind("HTTP/", 0) != 0) {
+    res.error = "Malformed HTTP response from " + url.host;
+    return res;
+  }
+
+  // -- headers --
+  asio::read_until(stream, buf, "\r\n\r\n");
+  std::string line;
+  while (std::getline(is, line) && line != "\r") {
+    size_t colon = line.find(':');
+    if (colon == std::string::npos) continue;
+    res.headers[trim(line.substr(0, colon))] = trim(line.substr(colon + 1));
+  }
+
+  // -- body: everything until the server closes (Connection: close) --
+  std::ostringstream bodyOut;
+  if (buf.size() > 0) bodyOut << &buf;
+  boost::system::error_code ec;
+  while (asio::read(stream, buf, asio::transfer_at_least(1), ec)) {
+    bodyOut << &buf;
+    if (ec) break;
+  }
+  // ⛔ A TLS PEER THAT CLOSES WITHOUT close_notify RAISES ssl::error::stream_truncated,
+  // NOT eof. Treating that as a read failure would fail perfectly good responses
+  // from the many servers that just close the TCP connection — and it would fail
+  // them AFTER the body had already been read in full.
+  const bool benignEof = !ec || ec == asio::error::eof ||
+                         ec == asio::error::connection_reset
+#ifdef RNI_WITH_TLS
+                         || ec == asio::ssl::error::stream_truncated
+#endif
+      ;
+  if (!benignEof) {
+    res.error = "Read failed: " + ec.message();
+    return res;
+  }
+  res.body = bodyOut.str();
+
+  // Decode the transfer framing the SERVER chose. Case-insensitive: header
+  // names and values are not normalised on the wire.
+  for (const auto& [k, v] : res.headers) {
+    if (toLower(k) == "transfer-encoding" &&
+        toLower(v).find("chunked") != std::string::npos) {
+      bool decoded = false;
+      std::string decodedBody = decodeChunked(res.body, &decoded);
+      if (!decoded) {
+        res.error = "Malformed chunked response from " + url.host;
+        return res;
+      }
+      res.body = decodedBody;
+      break;
+    }
+  }
+  res.ok = true;
+  return res;
+}
 
 HttpResponse performRequest(const std::string& method,
                             const ParsedUrl& url,
@@ -277,95 +407,80 @@ HttpResponse performRequest(const std::string& method,
 #endif
     }
 
-    // -- request --
-    std::ostringstream req;
-    req << method << " " << url.target << " HTTP/1.1\r\n";
-    req << "Host: " << url.host;
-    if (url.port != "80") req << ":" << url.port;
-    req << "\r\n";
+    // -- dispatch: plaintext reuses the socket, TLS wraps it --
+    // The wire format lives in httpExchange() and is shared. Only the
+    // handshake and the trust decision are scheme-specific.
+    if (url.scheme == "https") {
+#ifdef RNI_WITH_TLS
+      asio::ssl::context ctx(asio::ssl::context::tls_client);
 
-    bool sawUserAgent = false, sawAccept = false, sawContentLength = false;
-    for (const auto& [k, v] : headers) {
-      std::string lk = toLower(k);
-      if (lk == "host") continue;  // ours wins; a duplicate Host is a 400
-      if (lk == "connection") continue;
-      if (lk == "user-agent") sawUserAgent = true;
-      if (lk == "accept") sawAccept = true;
-      if (lk == "content-length") sawContentLength = true;
-      req << k << ": " << v << "\r\n";
-    }
-    if (!sawUserAgent) req << "User-Agent: react-native-impeller\r\n";
-    if (!sawAccept) req << "Accept: */*\r\n";
-    // Content-Length is emitted whenever there is a body, and also for
-    // bodyless POST/PUT — a POST with neither Content-Length nor
-    // Transfer-Encoding makes some servers wait for a body that never comes.
-    std::string m = toLower(method);
-    if (!sawContentLength && (!body.empty() || m == "post" || m == "put" || m == "patch")) {
-      req << "Content-Length: " << body.size() << "\r\n";
-    }
-    // Identity + close: chunked and keep-alive both need a framing layer this
-    // module does not have, and asking for them would produce a body we then
-    // mis-read. Asking for exactly what we can parse is honest.
-    req << "Accept-Encoding: identity\r\n";
-    req << "Connection: close\r\n\r\n";
-    req << body;
+      // ⛔ VERIFICATION IS NOT ON BY DEFAULT. asio's default is verify_none:
+      // a self-signed or actively forged certificate is ACCEPTED and the
+      // request succeeds, which is worse than no TLS because it looks secure.
+      ctx.set_verify_mode(asio::ssl::verify_peer);
+      ctx.set_options(asio::ssl::context::default_workarounds |
+                      asio::ssl::context::no_sslv2 |
+                      asio::ssl::context::no_sslv3 |
+                      asio::ssl::context::no_tlsv1 |
+                      asio::ssl::context::no_tlsv1_1);
 
-    std::string requestStr = req.str();
-    asio::write(socket, asio::buffer(requestStr));
-
-    // -- status line --
-    asio::streambuf buf;
-    asio::read_until(socket, buf, "\r\n");
-    std::istream stream(&buf);
-    std::string httpVersion;
-    stream >> httpVersion >> res.status;
-    std::getline(stream, res.statusText);
-    res.statusText = trim(res.statusText);
-    if (httpVersion.rfind("HTTP/", 0) != 0) {
-      res.error = "Malformed HTTP response from " + url.host;
-      return res;
-    }
-
-    // -- headers --
-    asio::read_until(socket, buf, "\r\n\r\n");
-    std::string line;
-    while (std::getline(stream, line) && line != "\r") {
-      size_t colon = line.find(':');
-      if (colon == std::string::npos) continue;
-      res.headers[trim(line.substr(0, colon))] = trim(line.substr(colon + 1));
-    }
-
-    // -- body: everything until the server closes (Connection: close) --
-    std::ostringstream bodyOut;
-    if (buf.size() > 0) bodyOut << &buf;
-    boost::system::error_code ec;
-    while (asio::read(socket, buf, asio::transfer_at_least(1), ec)) {
-      bodyOut << &buf;
-      if (ec) break;
-    }
-    if (ec && ec != asio::error::eof && ec != asio::error::connection_reset) {
-      res.error = "Read failed: " + ec.message();
-      return res;
-    }
-    res.body = bodyOut.str();
-
-    // Decode the transfer framing the SERVER chose. Case-insensitive: header
-    // names and values are not normalised on the wire.
-    for (const auto& [k, v] : res.headers) {
-      if (toLower(k) == "transfer-encoding" &&
-          toLower(v).find("chunked") != std::string::npos) {
-        bool decoded = false;
-        std::string body = decodeChunked(res.body, &decoded);
-        if (!decoded) {
-          res.error = "Malformed chunked response from " + url.host;
-          return res;
-        }
-        res.body = body;
-        break;
+      // The trust store. Without this there is nothing to verify AGAINST and
+      // every request fails "unable to get local issuer certificate" -- which
+      // reads as a server problem rather than a client misconfiguration.
+      boost::system::error_code storeEc;
+      ctx.set_default_verify_paths(storeEc);
+      if (storeEc) {
+        res.error = "TLS trust store unavailable: " + storeEc.message();
+        return res;
       }
+
+      asio::ssl::stream<tcp::socket&> tls(socket, ctx);
+
+      // ⛔ TWO SEPARATE THINGS BOTH NEED THE HOSTNAME.
+      // 1. SNI, or a vhosting server sends the wrong certificate (or refuses).
+      //    SSL_set_tlsext_host_name is a macro, so it needs the raw handle.
+      // 2. Hostname verification. verify_peer alone proves the chain is
+      //    trusted, NOT that the certificate was issued for THIS host -- a
+      //    valid certificate for any other domain would otherwise pass.
+      if (!SSL_set_tlsext_host_name(tls.native_handle(), url.host.c_str())) {
+        res.error = "TLS SNI setup failed for " + url.host;
+        return res;
+      }
+      tls.set_verify_callback(asio::ssl::host_name_verification(url.host));
+
+      boost::system::error_code hsEc;
+      tls.handshake(asio::ssl::stream_base::client, hsEc);
+      if (hsEc) {
+        // Name the certificate result explicitly. "handshake failed" sends a
+        // developer looking at the network; a rejected certificate is a trust
+        // problem and the two have nothing in common.
+        long vr = SSL_get_verify_result(tls.native_handle());
+        std::string detail = hsEc.message();
+        if (vr != X509_V_OK) {
+          detail += " (certificate rejected: ";
+          detail += X509_verify_cert_error_string(vr);
+          detail += ")";
+        }
+        res.error = "TLS handshake with " + url.host + " failed: " + detail;
+        return res;
+      }
+
+      res = httpExchange(tls, method, url, headers, body);
+
+      // Best-effort close_notify. A peer that has already gone away makes this
+      // fail, and that is not a request failure -- the response is complete.
+      boost::system::error_code shutEc;
+      tls.shutdown(shutEc);
+      return res;
+#else
+      res.error =
+          "https is not supported by this engine build (no TLS linked). "
+          "Use http:// or build with TLS support.";
+      return res;
+#endif
     }
-    res.ok = true;
-    return res;
+
+    return httpExchange(socket, method, url, headers, body);
   } catch (const std::exception& e) {
     res.error = std::string("Request failed: ") + e.what();
     return res;
@@ -590,7 +705,15 @@ int runUrlSelfTest() {
       {"http://example.com", true, "example.com", "80", "/"},
       {"http://user:pw@example.com:81/p", true, "example.com", "81", "/p"},
       {"http://[::1]:9000/p", true, "::1", "9000", "/p"},
+      // https now PARSES, and defaults to 443 rather than 80. Before TLS this
+      // row asserted `false` -- the assertion inverting is the point: it is
+      // what proves the build actually links TLS rather than merely claiming to.
+#ifdef RNI_WITH_TLS
+      {"https://example.com/", true, "example.com", "443", "/"},
+      {"https://example.com:8443/p", true, "example.com", "8443", "/p"},
+#else
       {"https://example.com/", false, "", "", ""},
+#endif
       {"ftp://example.com/", false, "", "", ""},
       {"/relative/path", false, "", "", ""},
       {"http:///nohost", false, "", "", ""},
@@ -733,13 +856,65 @@ int runHttpSelfTest() {
     check("POST body reached the server", seen.body == postBody);
   }
 
-  // -- https must be refused, and say why --
+  // -- https: refused when TLS is absent, verified when TLS is present --
   {
+#ifdef RNI_WITH_TLS
+    // The NEGATIVE CONTROL. A hostname that resolves but presents a
+    // certificate for a different name must be REJECTED. Without this arm a
+    // TLS stack with verification disabled passes every other assertion here,
+    // which is exactly the failure mode this test exists to catch.
+    //
+    // Uses a documented-invalid-certificate endpoint rather than a live the company
+    // host. Skipped when the network is unreachable so the suite stays
+    // hermetic; a network failure is not a verification failure and must not
+    // be reported as one.
+    auto badUrl = parseUrl("https://self-signed.badssl.com/");
+    check("https URL parses once TLS is linked", badUrl.valid);
+    check("https defaults to port 443", badUrl.port == "443");
+    auto bad = performRequest("GET", badUrl, {}, "", 8000);
+    const bool unreachable =
+        !bad.ok && bad.error.find("certificate") == std::string::npos &&
+        (bad.error.find("resolve") != std::string::npos ||
+         bad.error.find("timed out") != std::string::npos ||
+         bad.error.find("Connection") != std::string::npos);
+    if (unreachable) {
+      std::printf("  SKIP (no network): bad-cert arm — %s\n", bad.error.c_str());
+    } else {
+      check("a bad certificate is REJECTED, not accepted", !bad.ok);
+      check("the bad-cert error names the certificate, not the network",
+            bad.error.find("certificate") != std::string::npos ||
+                bad.error.find("TLS handshake") != std::string::npos);
+    }
+
+    // SECOND NEGATIVE CONTROL, and it is NOT redundant with the first.
+    // self-signed.badssl.com fails on CHAIN trust, so verify_peer alone
+    // rejects it -- deleting the hostname check leaves that arm passing.
+    // Measured: mutation testing removed host_name_verification() and the
+    // suite stayed green. wrong.host.badssl.com serves a PUBLICLY TRUSTED
+    // certificate issued for a DIFFERENT name, so the chain verifies and only
+    // the hostname check can reject it. This arm is the one that dies when
+    // that callback goes missing.
+    auto wrongUrl = parseUrl("https://wrong.host.badssl.com/");
+    auto wrong = performRequest("GET", wrongUrl, {}, "", 8000);
+    const bool wrongUnreachable =
+        !wrong.ok && wrong.error.find("certificate") == std::string::npos &&
+        wrong.error.find("handshake") == std::string::npos &&
+        (wrong.error.find("resolve") != std::string::npos ||
+         wrong.error.find("timed out") != std::string::npos ||
+         wrong.error.find("Connection") != std::string::npos);
+    if (wrongUnreachable) {
+      std::printf("  SKIP (no network): wrong-host arm — %s\n",
+                  wrong.error.c_str());
+    } else {
+      check("a cert for the WRONG HOSTNAME is rejected", !wrong.ok);
+    }
+#else
     auto url = parseUrl("https://example.com/");
     auto res = performRequest("GET", url, {}, "", 5000);
     check("https is refused rather than attempted", !res.ok);
     check("https error names the TLS limitation",
           res.error.find("TLS") != std::string::npos);
+#endif
   }
 
   // -- a closed port must fail fast, not hang --

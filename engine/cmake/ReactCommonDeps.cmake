@@ -28,6 +28,50 @@ FetchContent_MakeAvailable(boost_src)
 add_library(rc_boost INTERFACE)
 target_include_directories(rc_boost SYSTEM INTERFACE "${boost_src_SOURCE_DIR}")
 
+# --- OpenSSL (TLS for the Networking TurboModule) ----------------------------
+# ⛔ PREFER THE SYSTEM OpenSSL, BUILD FROM SOURCE ONLY AS A FALLBACK.
+# A source build costs ~46s and, more importantly, pins a CA story: OpenSSL
+# built from a tarball has NO default trust store, so certificate verification
+# silently has nothing to verify against and every https:// request fails with
+# "unable to get local issuer certificate". Where the platform ships OpenSSL it
+# also ships a populated store, and set_default_verify_paths() finds it.
+#
+# `asio::ssl` is a header-only wrapper over libssl/libcrypto — the boost we
+# already vendor (1.83.0, headers only) provides it, so no new boost machinery
+# is needed. Only the libraries are new.
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+  message(STATUS "rc_ssl: using system OpenSSL ${OPENSSL_VERSION}")
+  add_library(rc_ssl INTERFACE)
+  target_link_libraries(rc_ssl INTERFACE OpenSSL::SSL OpenSSL::Crypto)
+  target_compile_definitions(rc_ssl INTERFACE RNI_WITH_TLS=1)
+else()
+  message(STATUS "rc_ssl: no system OpenSSL; building from source")
+  FetchContent_Declare(openssl_src
+    URL https://github.com/openssl/openssl/releases/download/openssl-3.2.1/openssl-3.2.1.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  FetchContent_MakeAvailable(openssl_src)
+  include(ExternalProject)
+  ExternalProject_Add(openssl_build
+    SOURCE_DIR "${openssl_src_SOURCE_DIR}"
+    CONFIGURE_COMMAND "${openssl_src_SOURCE_DIR}/config"
+                      --prefix=<INSTALL_DIR> --openssldir=<INSTALL_DIR>
+                      no-shared no-tests no-docs
+    BUILD_COMMAND ${CMAKE_COMMAND} -E env make -j4 build_libs
+    INSTALL_COMMAND ${CMAKE_COMMAND} -E env make install_dev
+    BUILD_BYPRODUCTS <INSTALL_DIR>/lib/libssl.a <INSTALL_DIR>/lib64/libssl.a
+                     <INSTALL_DIR>/lib/libcrypto.a <INSTALL_DIR>/lib64/libcrypto.a)
+  ExternalProject_Get_Property(openssl_build INSTALL_DIR)
+  # Built OpenSSL puts libs in lib/ or lib64/ depending on platform; probe both.
+  add_library(rc_ssl INTERFACE)
+  add_dependencies(rc_ssl openssl_build)
+  file(MAKE_DIRECTORY "${INSTALL_DIR}/include")
+  target_include_directories(rc_ssl SYSTEM INTERFACE "${INSTALL_DIR}/include")
+  target_link_libraries(rc_ssl INTERFACE
+    "-L${INSTALL_DIR}/lib" "-L${INSTALL_DIR}/lib64" ssl crypto ${CMAKE_DL_LIBS})
+  target_compile_definitions(rc_ssl INTERFACE RNI_WITH_TLS=1)
+endif()
+
 # --- fmt ---------------------------------------------------------------------
 FetchContent_Declare(fmt
   GIT_REPOSITORY https://github.com/fmtlib/fmt.git

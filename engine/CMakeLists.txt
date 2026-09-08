@@ -357,6 +357,7 @@ find_library(HERMESVM_LIB NAMES hermesvm
 target_link_libraries(rn-impeller PRIVATE
   reactcommon_fabric
   reactcommon_core
+  rc_ssl
   "${HERMESVM_LIB}"
   "${IMPELLER_LINK_LIB}"
 )
