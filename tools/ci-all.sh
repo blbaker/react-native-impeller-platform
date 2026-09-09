@@ -236,4 +236,21 @@ bash tools/ci-usesym.sh | grep -E "USESYM_GATE_PASS|control=|scaled_"
 echo "### gate 24: canvas draw path -- offscreen atlas, blit, rect volume"
 bash tools/ci-canvas.sh | grep -E "CANVAS_GATE_PASS|blit site differs|CANVAS_BENCH steady|CANVAS_BENCH burst"
 
+# ⛔ THE NETWORKING GATE EXISTED FOR A DAY AND WAS NEVER IN THIS FILE.
+# tools/ci-p10.sh was written with the Networking TurboModule (c4e59e1) and TLS
+# (a932ded) and is only referenced by tools/mutation-verify-p10.sh — so the ONLY
+# way it ever ran was by hand, or as the baseline of its own mutation harness. A
+# gate nothing invokes is not a gate; it is a script that happens to pass.
+# .github/workflows/ci.yml runs `bash tools/ci-all.sh` and nothing else, so the
+# whole transport was outside CI while both machines were reporting on
+# it.
+#
+# It is LAST because it is the only gate that leaves the loopback interface, and
+# it is UNCONDITIONAL because the transport self-tests, the JS-visible manifest
+# check and the pixel assertions all work without external egress; only the two
+# certificate arms need the internet, and those now announce their own skip
+# rather than passing silently (see ci-p10.sh step 1).
+echo "### gate 25: Networking TurboModule + TLS (P10)"
+bash tools/ci-p10.sh | grep -E "P10_NETWORKING_PASS|TLS negative controls|NOT proven by this run|net_requests_completed|OK NATIVE HALF"
+
 echo "ALL_GATES_PASS"

@@ -68,12 +68,47 @@ esac
 # asserts the server saw the method, path, headers and body the client claimed
 # to send. A test that only checked "the client got 200 back" would pass
 # against a request that dropped every custom header.
-HTTPTEST="$("$ENGINE_LOCAL" --test-http | tail -1)" || fail "http self-test exited nonzero: $HTTPTEST"
+HTTPRAW="$WORK/http-selftest.log"
+"$ENGINE_LOCAL" --test-http > "$HTTPRAW" 2>&1 \
+  || fail "http self-test exited nonzero: $(tail -1 "$HTTPRAW")"
+HTTPTEST="$(tail -1 "$HTTPRAW")"
 echo "   $HTTPTEST"
 case "$HTTPTEST" in
   "http-selftest: PASS"*) ;;
   *) fail "http self-test did not pass: $HTTPTEST" ;;
 esac
+
+# ⛔ THE TLS ARMS SELF-SKIP ON AN UNREACHABLE NETWORK, AND `tail -1` COULD NOT SEE IT.
+# Both certificate arms (self-signed = chain trust, wrong.host = hostname
+# verification) call out to badssl.com and print "SKIP (no network): ..." rather
+# than failing, because a network outage is not a verification failure. That is
+# the right behaviour for the selftest and the WRONG thing for a gate to swallow:
+# reading only the final PASS line, a run where BOTH negative controls skipped is
+# byte-identical to a run where TLS verification was proven. An engine built with
+# verify_none would go green on a runner with no egress.
+#
+# Measured 2026-09-08 on the macOS tester's report round: the mac's app-level
+# probe proved TLS end to end, but nothing in THIS repo's gate suite would have
+# caught a regression on a sandboxed CI box. So: a skip is ANNOUNCED with its
+# reason, and RNI_REQUIRE_TLS=1 turns the skip itself into a failure for any
+# machine that is supposed to have egress. Same contract as gate 7's
+# RNI_REQUIRE_WIN — silence is not a pass.
+if grep -q "SKIP (no network)" "$HTTPRAW"; then
+  echo "   ⚠️  TLS NEGATIVE CONTROLS SKIPPED — certificate verification is NOT proven by this run:"
+  grep "SKIP (no network)" "$HTTPRAW" | sed 's/^/     /'
+  if [ "${RNI_REQUIRE_TLS:-0}" = "1" ]; then
+    fail "RNI_REQUIRE_TLS=1 but the certificate arms skipped (no egress to badssl.com)"
+  fi
+  echo "     Set RNI_REQUIRE_TLS=1 to make this skip a failure."
+else
+  # Assert the arms did not merely fail to print — name them positively, so a
+  # renamed or deleted assertion reddens here instead of vanishing quietly.
+  grep -q "a bad certificate is REJECTED, not accepted    ok" "$HTTPRAW" \
+    || fail "chain-trust arm did not report ok (and did not skip)"
+  grep -q "a cert for the WRONG HOSTNAME is rejected      ok" "$HTTPRAW" \
+    || fail "hostname-verification arm did not report ok (and did not skip)"
+  echo "   TLS negative controls RAN: chain trust + hostname verification both rejected"
+fi
 
 # ---------------------------------------------------------------------------
 echo "== 2. Networking must be in the manifest, reachable FROM JAVASCRIPT =="
