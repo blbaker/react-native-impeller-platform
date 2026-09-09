@@ -179,6 +179,24 @@ inline int runPointScaleSelfTest() {
        400.0f},
       // Fractional backing scale, derived: cancels like the 2x case.
       {"1.5x derived, cursor 640", 640.0, 1920, 1280, 1.5f, 640.0f},
+      // ⛔ THE DARWIN CASE THE CI GATE USED TO GET WRONG.
+      // `--scale 2` on a REAL Retina window: fb/win is ALSO 2, so the override
+      // agrees with the derivation and the factors cancel — a screen click at
+      // 200 is layout point 200, NOT 100. The 100 answer is correct only on a
+      // 1x host, where fb/win is 1. the macOS tester's darwin-arm64 run failed
+      // an assertion that hardcoded the 1x answer against this correct code;
+      // pinning both hosts' numbers here is what keeps that from recurring.
+      {"--scale 2 on a Retina window (darwin), cursor 200", 200.0, 800, 400,
+       2.0f, 200.0f},
+      {"--scale 2 on a 1x window (linux CI), cursor 200", 200.0, 400, 400, 2.0f,
+       100.0f},
+      // Same window, --scale 4: the divisor doubles, the answer halves. This
+      // pair is the ratio the gate's assertion D2 checks by clicking, and it
+      // holds on every display because fb/win is common to both.
+      {"--scale 4 on a Retina window (darwin), cursor 200", 200.0, 800, 400,
+       4.0f, 100.0f},
+      {"--scale 4 on a 1x window (linux CI), cursor 200", 200.0, 400, 400, 4.0f,
+       50.0f},
       // Degenerate reports must pass the cursor through unchanged rather than
       // divide by zero and dispatch a NaN into the hit test.
       {"minimised window (0 fb)", 200.0, 0, 800, 1.0f, 200.0f},

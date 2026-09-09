@@ -24,6 +24,14 @@
 #      lands on the wrong element on a Retina Mac.
 # M4 — the conversion multiplies by pointScale instead of dividing. The
 #      classic sign error. Must also die on assert D.
+# M5 — the conversion reads the scale DERIVED from the framebuffer instead of
+#      the effective one the surface was given, so an explicit --scale is
+#      ignored. This is the mutant that models the macOS tester's hypothesis
+#      for the darwin failure. It is INVISIBLE to every absolute-coordinate
+#      assertion on a 1x host (fb/win == 1 makes derived == 1 and the answer
+#      is the identity either way) and equally invisible to a Retina host with
+#      no override. Only the D2 --scale 2 vs --scale 4 RATIO can see it: with
+#      the override ignored, both runs answer the same and the ratio is 1:1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -47,7 +55,7 @@ fail() { echo "MUTATION_VERIFY_FAIL: $*" >&2; exit 1; }
 # ⚠️ MUTANT RESIDUE PRE-FLIGHT. A crashed harness leaves a mutant in the tree
 # and its trap does not run on a hard failure; a later unrelated gate then
 # "fails" mysteriously. Cheaper to refuse to start.
-for marker in "M2: inert" "M3: identity" "M4: sign"; do
+for marker in "M2: inert" "M3: identity" "M4: sign" "M5: derived"; do
   if grep -rq "$marker" "$SRC_MAIN" "$SRC_SURF" "$SRC_PS"; then
     fail "mutant residue '$marker' is already in the tree — restore it before running (git diff)"
   fi
@@ -149,7 +157,13 @@ bash tools/engine-build.sh > /dev/null 2>&1 || fail "M3 tree did not build"
 if run_gate "$BAK/m3.log"; then
   fail "M3 SURVIVED: the gate passes with the coordinate conversion replaced by the identity. Every click assertion on a 1x host is blind to this; only the --scale case can see it."
 fi
-grep -q 'expected .100.0,50.0.' "$BAK/m3.log" || grep -q 'CURSORPOINTS' "$BAK/m3.log" || {
+# ⛔ ATTRIBUTE ON THE RATIO ASSERTION, NOT ON A LITERAL COORDINATE.
+# This used to grep for `expected '100.0,50.0'`, the 1x-host answer that assert
+# D hardcoded. That literal is gone: the absolute number is host-dependent
+# (it is 200.0,100.0 on a Retina Mac for the SAME correct code), which is what
+# made the gate fail on darwin. Attribution now matches assert D's D2 ratio
+# message, which reads identically on every display.
+grep -q 'ratio must be exactly 2:1' "$BAK/m3.log" || grep -q 'CURSORPOINTS' "$BAK/m3.log" || {
   tail -25 "$BAK/m3.log" >&2
   fail "M3 was killed, but not by the scale-conversion assertion (assert D). See the tail above."
 }
@@ -175,6 +189,39 @@ fi
 echo "   OK: M4 killed"
 cp "$BAK/PointScale.h" "$SRC_PS"
 
+echo "== M5: the conversion ignores --scale and uses the derived scale =="
+# ⛔ THE MUTANT THAT MODELS THE DARWIN HYPOTHESIS.
+# the macOS tester's reading of the darwin failure was that the division does
+# not use the OVERRIDDEN scale. That turned out not to be what happened (the
+# gate's expected value was wrong, not the engine) — but the hypothesis names
+# a real bug that nothing in this harness covered, so it becomes a mutant.
+# Substituting fb/win for pointScale_ makes the conversion the identity in
+# every configuration, so an explicit --scale is silently ignored.
+python3 - "$SRC_SURF" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """  const float px = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
+  const float py = CursorPointsFromScreen(screenY, fbH, winH, pointScale_);"""
+new = """  // M5: derived — divides by the scale derived from the framebuffer instead
+  // of the effective scale the surface was given, so --scale is ignored.
+  const float derivedScale = (winW > 0 && fbW > 0) ? (float)fbW / (float)winW : 1.0f;
+  const float px = CursorPointsFromScreen(screenX, fbW, winW, derivedScale);
+  const float py = CursorPointsFromScreen(screenY, fbH, winH, derivedScale);"""
+assert old in s, "M5 anchor not found - the dispatch conversion changed"
+open(p, "w").write(s.replace(old, new))
+PY
+bash tools/engine-build.sh > /dev/null 2>&1 || fail "M5 tree did not build"
+if run_gate "$BAK/m5.log"; then
+  fail "M5 SURVIVED: the gate passes when an explicit --scale is ignored and the derived framebuffer ratio is used instead. Every ABSOLUTE-coordinate assertion is blind to this; only the --scale 2 vs --scale 4 ratio can see it."
+fi
+grep -q 'ratio must be exactly 2:1' "$BAK/m5.log" || {
+  tail -25 "$BAK/m5.log" >&2
+  fail "M5 was killed, but not by the D2 ratio assertion — that is the ONLY assertion that can distinguish an ignored --scale from an honoured one. See the tail above."
+}
+echo "   OK: M5 killed (D2 ratio assertion — the override is honoured)"
+cp "$BAK/GlfwSurface.cpp" "$SRC_SURF"
+
 echo "== restore + rebuild =="
 restore
 trap - EXIT
@@ -185,4 +232,4 @@ if ! bash tools/engine-build.sh > "$RESTORE_LOG" 2>&1; then
 fi
 rm -f "$RESTORE_LOG"
 rm -rf "$BAK"
-echo "MUTATION_VERIFY_PASS (4/4 killed: M1 no-registration, M2 inert-dispatch, M3 identity-conversion, M4 inverted-scale)"
+echo "MUTATION_VERIFY_PASS (5/5 killed: M1 no-registration, M2 inert-dispatch, M3 identity-conversion, M4 inverted-scale, M5 ignored---scale-override)"

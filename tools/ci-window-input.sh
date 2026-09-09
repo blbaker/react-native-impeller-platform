@@ -204,26 +204,68 @@ MISS="$(sed -n 's/^rn-impeller: touch_down hit=\([0-9]*\) .*/\1/p' "$MISS_LOG" |
 echo "   OK: off-surface click -> hit=0"
 
 echo "== 6. assert D: the coordinate conversion is right at non-1x scales =="
-# ⛔ THE FACTOR-OF-TWO CANNOT BE SEEN ON THIS 1x HOST BY CLICKING.
-# At scale 1 the three unit systems (screen coords, pixels, layout points)
-# are numerically identical, so every click assertion above passes whether
-# the conversion is correct or is the identity function. --scale 2 separates
-# them: the surface is 400x300 PIXELS laid out as 200x150 POINTS, so a click
-# at screen coordinate 200,100 must arrive as layout point 100,50 — inside
-# the top box — and NOT as 200,100, which would land in the mid box, and not
-# as 400,200, which is off the surface entirely.
-SCALE_LOG="$WORK/click-scale2.log"
-set +e
-"$RESOLVED" --window --probe-banner off --bundle "$BUNDLE" --app-name P9Input \
-            --width "$WIN_W" --height "$WIN_H" --scale 2 --frames 40 \
-            --click-after-frames "5:200,100" > "$SCALE_LOG" 2>&1
-SRC=$?
-set -e
-[ "$SRC" -eq 0 ] || { tail -20 "$SCALE_LOG" | sed 's/^/   /' >&2; fail "--scale 2 click run exited $SRC"; }
-AT="$(sed -n 's/^rn-impeller: touch_down hit=[0-9]* at=\(.*\)$/\1/p' "$SCALE_LOG" | head -1)"
-[ "$AT" = "100.0,50.0" ] \
-  || fail "at --scale 2 a screen click at 200,100 arrived as '$AT', expected '100.0,50.0' — the cursor is not being converted into layout points (this is the factor-of-two that hits the wrong element on a Retina Mac)"
-echo "   OK: --scale 2 converts screen 200,100 -> layout 100.0,50.0"
+# ⛔ THE EXPECTED NUMBER IS NOT A CONSTANT — IT DEPENDS ON THE HOST'S DISPLAY.
+# The conversion is `cursor * (fb/win) / pointScale`. On this 1x host fb/win
+# is 1, so `--scale 2` on a click at 200 must yield 100. On a Retina Mac
+# fb/win is 2, and the SAME correct code must yield 200. An earlier version of
+# this assertion hardcoded 100.0,50.0 and therefore FAILED on darwin against a
+# correct engine — it was asserting the CI host's display, not the arithmetic.
+# (Caught by the macOS tester running this gate on darwin-arm64 at d682627.)
+#
+# The fix is to assert the RELATION the conversion defines, which is identical
+# on every display, instead of one absolute number that encodes fb/win:
+#
+#   D1  no --scale: pointScale IS fb/win, the factors cancel, and the click
+#       must come back UNCHANGED on any host. A host-independent anchor.
+#   D2  --scale 2 vs --scale 4: only the divisor differs, so the two answers
+#       must be in an exact 2:1 ratio whatever fb/win is. This is the
+#       load-bearing one — the identity conversion gives 1:1, multiplying
+#       instead of dividing gives 1:2, and reading a DERIVED scale in place of
+#       the --scale override also gives 1:1, so all three die here on ANY
+#       host including a 1x one.
+#   D3  absolute value at --scale 2, against fb/win measured INDEPENDENTLY
+#       from the framebuffer size the engine reports versus the window size we
+#       requested — not recomputed with the function under test.
+click_at() {
+  local scaleargs="$1" log="$2"
+  set +e
+  # shellcheck disable=SC2086
+  "$RESOLVED" --window --probe-banner off --bundle "$BUNDLE" --app-name P9Input \
+              --width "$WIN_W" --height "$WIN_H" $scaleargs --frames 40 \
+              --click-after-frames "5:200,100" > "$log" 2>&1
+  local rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { tail -20 "$log" | sed 's/^/   /' >&2; fail "click run [$scaleargs] exited $rc"; }
+  sed -n 's/^rn-impeller: touch_down hit=[0-9]* at=\(.*\)$/\1/p' "$log" | head -1
+}
+
+AT_DERIVED="$(click_at "" "$WORK/click-derived.log")"
+[ "$AT_DERIVED" = "200.0,100.0" ] \
+  || fail "with no --scale a screen click at 200,100 arrived as '$AT_DERIVED', expected '200.0,100.0' — with the scale derived from the framebuffer the device ratio and the point scale must cancel exactly, on a 1x display and on a Retina one alike"
+echo "   OK: derived scale is identity — screen 200,100 -> layout $AT_DERIVED"
+
+AT2="$(click_at "--scale 2" "$WORK/click-scale2.log")"
+AT4="$(click_at "--scale 4" "$WORK/click-scale4.log")"
+[ -n "$AT2" ] && [ -n "$AT4" ] \
+  || fail "no touch_down line from the --scale runs (scale2='$AT2' scale4='$AT4')"
+X2="${AT2%%,*}"; Y2="${AT2##*,}"
+X4="${AT4%%,*}"; Y4="${AT4##*,}"
+RATIO_OK="$(awk -v a="$X2" -v b="$X4" -v c="$Y2" -v d="$Y4" \
+  'BEGIN { if (b <= 0 || d <= 0) { print "zero"; exit }
+           rx = a / b; ry = c / d;
+           print ((rx > 1.999 && rx < 2.001 && ry > 1.999 && ry < 2.001) ? "ok" : "bad") }')"
+[ "$RATIO_OK" = "ok" ] \
+  || fail "doubling --scale from 2 to 4 must halve the layout coordinate, but the click at 200,100 arrived as '$AT2' at --scale 2 and '$AT4' at --scale 4 (ratio must be exactly 2:1). A 1:1 ratio means the cursor is not being divided by the EFFECTIVE scale at all — either the conversion is the identity, or it is reading the scale derived from the framebuffer instead of the explicit --scale override. A 1:2 ratio means it multiplies where it must divide. This is the factor-of-two that hits the wrong element on a Retina Mac."
+echo "   OK: --scale 2 -> $AT2 and --scale 4 -> $AT4 are an exact 2:1 ratio"
+
+# fb/win, measured from what the engine REPORTS, not recomputed by us.
+PXW="$(sed -n 's/^rn-impeller: window px=\([0-9]*\)x[0-9]* .*/\1/p' "$WORK/click-scale2.log" | head -1)"
+[ -n "$PXW" ] || fail "no 'window px=' line — cannot measure this host's device ratio"
+EXPECT_X="$(awk -v px="$PXW" -v win="$WIN_W" 'BEGIN { printf "%.1f", 200.0 * (px / win) / 2.0 }')"
+ABS_OK="$(awk -v got="$X2" -v want="$EXPECT_X" 'BEGIN { print ((got - want < 0.05 && want - got < 0.05) ? "ok" : "bad") }')"
+[ "$ABS_OK" = "ok" ] \
+  || fail "at --scale 2 on a host whose framebuffer is ${PXW}px for a ${WIN_W}-point window (device ratio $(awk -v p="$PXW" -v w="$WIN_W" 'BEGIN{printf "%.2f", p/w}')), a screen click at 200 must arrive as layout $EXPECT_X, not $X2"
+echo "   OK: absolute check — fb ${PXW}px / win ${WIN_W}pt, --scale 2 -> x=$X2 (expected $EXPECT_X)"
 
 # The pure conversion's own table, over the number pairs a 2x Mac produces.
 SELFTEST="$("$RESOLVED" --test-pointscale 2>&1)" || fail "pointscale selftest exited nonzero"
