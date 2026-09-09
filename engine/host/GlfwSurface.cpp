@@ -208,6 +208,31 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
         if (self) self->dirty_.store(true, std::memory_order_release);
       });
 
+  // ⛔ MARKING DIRTY IS NOT ENOUGH DURING A LIVE DRAG — SEE GlfwSurface.h.
+  // The callback above raises a flag whose ONLY consumer is the frame loop,
+  // and on macOS that loop is blocked inside glfwPollEvents for the entire
+  // duration of a window-edge drag (AppKit's modal resize loop runs inside
+  // -[NSWindow sendEvent:]). GLFW invokes the REFRESH callback from inside
+  // that same modal loop, so this is the one place a frame can be produced
+  // while the drag is still in progress.
+  //
+  // Registered unconditionally, not under #if defined(__APPLE__): X11 raises
+  // it on Expose and Win32 on WM_PAINT, where repainting on damage is
+  // correct-by-definition rather than a workaround. The handler is
+  // no-op-cheap when the geometry has not changed (consumeDirty() returns
+  // false), so the non-darwin cost is one extra paint per exposure event, not
+  // a double-paint per frame: the steady-state frame loop is untouched.
+  glfwSetWindowRefreshCallback(window_, [](GLFWwindow* w) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (!self || !self->refreshHandler_) return;
+    // Drops the callback when ANY paint is on the stack, including one the
+    // frame loop started -- see PaintScope in GlfwSurface.h. The handler
+    // itself raises this flag via its own PaintScope, so this still covers
+    // refresh-re-entering-refresh; it just no longer covers ONLY that.
+    if (self->paintInFlight_) return;
+    self->refreshHandler_();
+  });
+
 #if defined(__APPLE__)
   if (!initAngleForWindow(error)) return false;
 #else
@@ -288,6 +313,10 @@ bool GlfwSurface::consumeDirty() {
   return surface_ != nullptr;
 }
 
+void GlfwSurface::setRefreshHandler(std::function<void()> handler) {
+  refreshHandler_ = std::move(handler);
+}
+
 void GlfwSurface::requestSize(int pointW, int pointH) {
   if (!window_ || pointW <= 0 || pointH <= 0) return;
   glfwSetWindowSize(window_, pointW, pointH);
@@ -316,6 +345,11 @@ bool GlfwSurface::readPixels(std::vector<Px>* out) {
 }
 
 void GlfwSurface::pollEvents() { glfwPollEvents(); }
+
+void GlfwSurface::waitEvents(double timeoutSeconds) {
+  if (timeoutSeconds <= 0.0) return;
+  glfwWaitEventsTimeout(timeoutSeconds);
+}
 
 bool GlfwSurface::shouldClose() const {
   return window_ ? glfwWindowShouldClose(window_) : true;

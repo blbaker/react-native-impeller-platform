@@ -167,8 +167,18 @@ if [ -n "${DISPLAY:-}" ]; then
   # from ONE run, compared as pixels, can tell them apart.
   echo "### gate 16: repaint loop draws NEW content (matched pair)"
   bash tools/ci-animate.sh | grep -E "ANIMATE_GATE_PASS|px changed"
+
+  # ⛔ NOT covered by gate 15 or 16. Both drive the frame loop, and the defect
+  # here is that the loop CANNOT RUN: macOS holds the thread inside AppKit's
+  # modal resize loop while GLFW keeps dispatching callbacks, so a resize
+  # repaints only on mouse release. --stall-after-frames reproduces that
+  # defining property (loop unreachable, events still dispatching) on every
+  # platform. A gate built on --resize-after-frames alone passes identically
+  # with the fix deleted; see the header of ci-resize.sh.
+  echo "### gate 16b: window repaints while the frame loop is BLOCKED (resize)"
+  bash tools/ci-resize.sh | grep -E "RESIZE_GATE_PASS|OK:"
 else
-  echo "### gates 15-16: SKIPPED (no DISPLAY; windowed gates need an X server)"
+  echo "### gates 15-16b: SKIPPED (no DISPLAY; windowed gates need an X server)"
 fi
 
 # Headless, so it always runs. Matched TRIPLE: solid paints, fillOpacity=0

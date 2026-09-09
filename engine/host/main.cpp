@@ -264,7 +264,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 const std::string& screenshotPath,
                 const std::string& screenshotFirstPath,
                 bool pointScaleGiven, int resizeAfterFrames, int resizeToW,
-                int resizeToH) {
+                int resizeToH, int stallAfterFrames, int stallMs) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -319,7 +319,21 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   printf("rn-impeller: scene_nodes=%zu\n", sceneGraph.nodeCount());
   fflush(stdout);
 
+  // Incremented inside paintFrame at the present, so it counts FRAMES THAT
+  // REACHED THE SCREEN. Declared before paintFrame because that lambda
+  // captures it.
+  int paintsTotal = 0;
+
   auto paintFrame = [&]() -> int {
+    // ⛔ THE PAINT-IN-FLIGHT SCOPE GOES HERE, AT THE ONE SHARED BODY.
+    // Both the frame loop and the window-refresh callback paint through this
+    // lambda, so scoping the guard here is what makes it cover every paint
+    // rather than only the callback's. surface.present() below is the call
+    // that can re-enter: eglSwapBuffers -> CAMetalLayer update ->
+    // -[NSView updateLayer] -> _glfwInputWindowDamage -> refresh callback.
+    // With this scope live, that callback is dropped instead of starting a
+    // second paint on top of this one.
+    rni::GlfwSurface::PaintScope paintScope(&surface);
     ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
     int painted = sceneGraph.paint(builder, pointScale);
     ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
@@ -329,6 +343,14 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     }
     ImpellerDisplayListBuilderRelease(builder);
     surface.present();
+    // ⛔ COUNTED HERE, AT THE PRESENT, NOT AT THE CALLER.
+    // refreshPaints is derived from this counter, so "a frame was painted
+    // during the stall" is measured at the only place a frame actually
+    // reaches the screen. Counting in the refresh handler instead would let a
+    // handler that increments a variable and never paints report success --
+    // precisely the mark-only trap this fix exists to avoid, and exactly what
+    // the M2 mutant in tools/mutation-verify-resize.sh does.
+    ++paintsTotal;
     return painted;
   };
 
@@ -336,6 +358,72 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   bool capturedTimed = false;
   bool capturedFirst = false;
   int frameIndex = 0;
+  // Paints produced from the GLFW window-refresh callback rather than from the
+  // loop below. Printed at exit so a gate has a machine-readable signal that
+  // the modal-loop path actually ran, instead of inferring it from a pixel
+  // comparison that a lucky post-drag repaint would also satisfy.
+  int refreshPaints = 0;
+
+  // ⛔ SCALE AND SIZE ARE DECIDED ONCE AT WINDOW CREATION UNLESS THIS RUNS.
+  // Everything above the loop ran exactly once. RN's own platforms do not
+  // stop at detection: iOS reads UIScreen.mainScreen.scale then listens on
+  // didUpdateDimensions, Android reads densityDpi then re-delivers on
+  // configuration change. consumeDirty() is this engine's version of that
+  // listener, and it is false on every frame that is not a resize, so the
+  // steady-state cost is one relaxed atomic load.
+  //
+  // ⛔ ONE BODY, TWO CALLERS — DO NOT INLINE A SECOND COPY OF THIS.
+  // It is called from the frame loop AND from the window-refresh callback
+  // (which is the only caller that can run during a macOS modal resize drag).
+  // Duplicating it would give the drag path its own copy of the
+  // pointScaleGiven distinction below, and the mutation gate on
+  // DeriveWindowPointScale would then only cover one of the two callers.
+  auto applyResizeIfDirty = [&]() -> bool {
+    if (!surface.consumeDirty()) return false;
+    const int newPx = surface.width();
+    const int newPy = surface.height();
+    // ⛔ HONOUR THE OVERRIDE THE SAME WAY THE STARTUP PATH DOES.
+    // pointScaleGiven, not `pointScale != 1.0f`: the default IS 1.0, so an
+    // explicit `--scale 1` has to stay distinguishable from no flag at all
+    // (D-46). Re-deriving through the same DeriveWindowPointScale the
+    // startup path uses means a resize can never disagree with launch, and
+    // the mutation gate on that function covers both callers.
+    pointScale = rni::DeriveWindowPointScale(newPx, surface.pointWidth(),
+                                             pointScale, pointScaleGiven);
+    const float newPointW = (float)newPx / pointScale;
+    const float newPointH = (float)newPy / pointScale;
+
+    // Dimensions.get('window') and the useWindowDimensions hook read this.
+    host.displayMetrics()->set(newPointW, newPointH, pointScale);
+    // And this re-constrains the LAYOUT. Without it the framebuffer and
+    // Dimensions are both correct and every mounted view keeps the geometry
+    // it had at launch, which is the half of the bug a screenshot of a
+    // freshly-launched window can never show.
+    fabric.updateSurface(1, (float)newPx, (float)newPy, pointScale);
+
+    printf("rn-impeller: resize px=%dx%d points=%.1fx%.1f scale=%.2f%s\n",
+           newPx, newPy, newPointW, newPointH, pointScale,
+           pointScaleGiven ? " (--scale override)" : " (from framebuffer)");
+    fflush(stdout);
+    return true;
+  };
+
+  // ⛔ THE CALLBACK MUST PAINT, NOT JUST MARK DIRTY.
+  // During a macOS window-edge drag, glfwPollEvents() never returns, so the
+  // loop below cannot consume anything. Raising a flag from in here would
+  // change nothing at all — the consumer is blocked. A frame has to be
+  // rendered AND presented from within this callback, which is why it calls
+  // paintFrame() itself.
+  //
+  // JS is NOT pumped here on purpose. Fabric's layout re-constrain in
+  // applyResizeIfDirty is synchronous on the shadow tree, which is what makes
+  // the breakpoint cross visible mid-drag; running the JS scheduler from
+  // inside AppKit's modal loop would re-enter the runtime from a nested event
+  // loop for a benefit the drag does not need.
+  surface.setRefreshHandler([&]() {
+    applyResizeIfDirty();
+    paintFrame();
+  });
 
   // Reads the framebuffer and writes a PPM. Shared by the frame-0 and the
   // timed capture so the two images are produced by literally the same code
@@ -358,40 +446,11 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   while (!surface.shouldClose()) {
     surface.pollEvents();
 
-    // ⛔ SCALE AND SIZE ARE DECIDED ONCE AT WINDOW CREATION UNLESS THIS RUNS.
-    // Everything above the loop ran exactly once. RN's own platforms do not
-    // stop at detection: iOS reads UIScreen.mainScreen.scale then listens on
-    // didUpdateDimensions, Android reads densityDpi then re-delivers on
-    // configuration change. consumeDirty() is this engine's version of that
-    // listener, and it is false on every frame that is not a resize, so the
-    // steady-state cost is one relaxed atomic load.
-    if (surface.consumeDirty()) {
-      const int newPx = surface.width();
-      const int newPy = surface.height();
-      // ⛔ HONOUR THE OVERRIDE THE SAME WAY THE STARTUP PATH DOES.
-      // pointScaleGiven, not `pointScale != 1.0f`: the default IS 1.0, so an
-      // explicit `--scale 1` has to stay distinguishable from no flag at all
-      // (D-46). Re-deriving through the same DeriveWindowPointScale the
-      // startup path uses means a resize can never disagree with launch, and
-      // the mutation gate on that function covers both callers.
-      pointScale = rni::DeriveWindowPointScale(newPx, surface.pointWidth(),
-                                               pointScale, pointScaleGiven);
-      const float newPointW = (float)newPx / pointScale;
-      const float newPointH = (float)newPy / pointScale;
-
-      // Dimensions.get('window') and the useWindowDimensions hook read this.
-      host.displayMetrics()->set(newPointW, newPointH, pointScale);
-      // And this re-constrains the LAYOUT. Without it the framebuffer and
-      // Dimensions are both correct and every mounted view keeps the geometry
-      // it had at launch, which is the half of the bug a screenshot of a
-      // freshly-launched window can never show.
-      fabric.updateSurface(1, (float)newPx, (float)newPy, pointScale);
-
-      printf("rn-impeller: resize px=%dx%d points=%.1fx%.1f scale=%.2f%s\n",
-             newPx, newPy, newPointW, newPointH, pointScale,
-             pointScaleGiven ? " (--scale override)" : " (from framebuffer)");
-      fflush(stdout);
-    }
+    // The loop's caller of the shared resize body. This is the path that runs
+    // in the normal (non-drag) case; the window-refresh callback installed
+    // above is the path that runs when this loop is blocked inside
+    // pollEvents(). Both go through applyResizeIfDirty, deliberately.
+    applyResizeIfDirty();
 
     // Test hook: drive a resize from inside the process at a known frame.
     // There is no headless way to make a window manager resize a window, and
@@ -403,6 +462,43 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
              resizeToH);
       fflush(stdout);
       surface.requestSize(resizeToW, resizeToH);
+    }
+
+    // ⛔ THE HOOK THAT MAKES THE ACTUAL BUG GATEABLE.
+    // --resize-after-frames proves the resize BODY works, because
+    // glfwSetWindowSize enters the framebuffer-size callback. It cannot prove
+    // the thing being fixed: glfwSetWindowSize does NOT enter macOS's modal
+    // resize loop, so under it the frame loop keeps spinning and consumeDirty
+    // is reachable on the very next iteration. A gate built on it alone passes
+    // just as happily with the refresh callback deleted.
+    //
+    // This hook reproduces the DEFINING PROPERTY of the drag instead: the loop
+    // body becomes unreachable while GLFW keeps dispatching event callbacks.
+    // If a frame is painted during the stall, it can ONLY have come from the
+    // window-refresh callback, because nothing else is running. That is the
+    // fix, isolated. Ordered AFTER the resize hook and at the SAME frame N so
+    // the resize is REQUESTED and then never returned to: pass
+    // `--resize-after-frames N:WxH --stall-after-frames N:MS` with the same N.
+    // With different Ns the loop consumes the resize normally before the stall
+    // begins and painted_during is 0 whether or not the fix is present.
+    if (stallAfterFrames > 0 && frameIndex == stallAfterFrames) {
+      const int before = paintsTotal;
+      printf("rn-impeller: stall_begin ms=%d refresh_paints=%d\n", stallMs,
+             refreshPaints);
+      fflush(stdout);
+      auto stallUntil = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(stallMs);
+      while (std::chrono::steady_clock::now() < stallUntil) {
+        // The frame loop body is deliberately NOT run here. Only GLFW's event
+        // dispatch happens, exactly as inside AppKit's modal resize loop.
+        surface.waitEvents(0.02);
+      }
+      // Every paint that landed while the loop body was unreachable came from
+      // the refresh callback -- nothing else could have produced one.
+      refreshPaints += paintsTotal - before;
+      printf("rn-impeller: stall_end refresh_paints=%d painted_during=%d\n",
+             refreshPaints, paintsTotal - before);
+      fflush(stdout);
     }
 
     int painted = paintFrame();
@@ -433,6 +529,18 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     if (frames > 0 && frameIndex >= frames) break;
   }
 
+  // ⛔ CLEAR THE HANDLER BEFORE ANYTHING IT CAPTURED IS DESTROYED.
+  // `surface` is declared FIRST in this function, so it is destroyed LAST —
+  // after `fabric`, `host` and `sceneGraph`. The handler holds references to
+  // all three, and ~GlfwSurface calls glfwDestroyWindow, which is entitled to
+  // dispatch one final damage event. Leaving the handler installed turns
+  // shutdown into a use-after-free that would only ever reproduce on exit.
+  surface.setRefreshHandler(nullptr);
+
+  // Machine-readable evidence that the modal-loop repaint path executed. A
+  // gate asserting only on pixels cannot tell a mid-drag repaint from the
+  // single post-release repaint that was already happening.
+  printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
   printf("RN_IMPELLER_WINDOW_OK app=%s frames=%d\n", appName.c_str(), frameIndex);
   fflush(stdout);
   return 0;
@@ -463,6 +571,11 @@ int main(int argc, char** argv) {
   int resizeAfterFrames = 0;    // 0 = no scripted resize
   int resizeToW = 0;
   int resizeToH = 0;
+  // Gate hook for the blocked-frame-loop condition; 0 = off. See the long
+  // comment at the stall site in RunWindowed for why --resize-after-frames
+  // cannot cover this and this can.
+  int stallAfterFrames = 0;
+  int stallMs = 300;
   int width = 400, height = 300;
   // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
   // The surface is allocated at width x height PIXELS; layout then happens in
@@ -515,6 +628,29 @@ int main(int argc, char** argv) {
     // yields two frames to compare; see tools/ci-animate.sh for why a single
     // capture cannot prove the repaint loop is alive.
     else if (a == "--screenshot-first") screenshotFirst = next("--screenshot-first");
+    // "--stall-after-frames N:MS" — starve the frame loop for MS milliseconds
+    // after frame N while GLFW keeps dispatching events. Reproduces the macOS
+    // modal-resize condition (loop blocked, callbacks still firing) on every
+    // platform, so the window-refresh repaint is gateable without a mouse.
+    else if (a == "--stall-after-frames") {
+      std::string spec = next("--stall-after-frames");
+      auto colon = spec.find(':');
+      if (colon == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --stall-after-frames wants N:MS (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      stallAfterFrames = atoi(spec.substr(0, colon).c_str());
+      stallMs = atoi(spec.substr(colon + 1).c_str());
+      if (stallAfterFrames <= 0 || stallMs <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --stall-after-frames needs N and MS both > 0 "
+                "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
     // Resize test hook: "--resize-after-frames N:WxH" calls glfwSetWindowSize
     // after frame N. See tools/ci-resize.sh on why a hook rather than a drag.
     else if (a == "--resize-after-frames") {
@@ -642,7 +778,7 @@ int main(int argc, char** argv) {
                        colorScheme, initialUrl, width, height, pointScale,
                        logMutations, frames, screenshotAfterMs, screenshot,
                        screenshotFirst, pointScaleGiven, resizeAfterFrames,
-                       resizeToW, resizeToH);
+                       resizeToW, resizeToH, stallAfterFrames, stallMs);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "

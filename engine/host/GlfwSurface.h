@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -73,12 +74,66 @@ class GlfwSurface {
   // callback would race the paint that is already in flight.
   bool consumeDirty();
 
+  // ⛔ consumeDirty() IS UNREACHABLE WHILE THE USER IS DRAGGING THE WINDOW.
+  // On macOS, holding the mouse on a window edge puts AppKit into a MODAL
+  // resize loop inside -[NSWindow sendEvent:]. glfwPollEvents() does not
+  // return until the drag ENDS, so the framebuffer-size callback above raises
+  // dirty_ many times and the frame loop — the only consumer — is blocked the
+  // whole time. The app therefore repaints exactly once, on mouse release.
+  //
+  // glfwSetWindowRefreshCallback is the one escape hatch: GLFW invokes it from
+  // INSIDE that modal loop (cocoa_window.m -drawRect:/-updateLayer ->
+  // _glfwInputWindowDamage). So the handler installed here must not merely
+  // mark state — it has to apply the resize AND render AND present a frame,
+  // because the consumer that would otherwise do so cannot run.
+  //
+  // Cross-platform note: this callback is not darwin-only plumbing. X11 raises
+  // it on Expose and Win32 on WM_PAINT, so on those platforms it fires on
+  // damage/exposure rather than continuously mid-drag (Win32's WM_ENTERSIZEMOVE
+  // modal loop pumps WM_PAINT the same way). The handler must therefore be
+  // safe to call at arbitrary times, and idempotent when nothing changed —
+  // which it is, because consumeDirty() returns false when the geometry is
+  // unchanged and a repaint of identical content is a no-op to the user.
+  void setRefreshHandler(std::function<void()> handler);
+
   // Drives a resize from inside the process, for gates. Produces the SAME
   // framebuffer-size callback a user drag produces; it is the identical code
   // path entered from a different caller. There is no headless way to make a
   // window manager resize a window, so without this the feature is only
   // testable by a human with a mouse, which is not a gate.
   void requestSize(int pointW, int pointH);
+
+  // ⛔ WRAP EVERY PAINT IN ONE OF THESE, NOT JUST THE REFRESH CALLBACK'S.
+  // The reentrancy this guards is not refresh-re-entering-refresh. It is:
+  //   any paint -> present -> eglSwapBuffers -> CAMetalLayer update
+  //     -> -[NSView updateLayer] -> _glfwInputWindowDamage
+  //     -> the window-refresh callback -> a SECOND paint
+  // The frame loop's own paint can enter that chain just as the callback's
+  // can, so a flag raised only inside the callback watches one of the two
+  // ways in. Scoping it around every paint is what makes the flag mean
+  // "a paint is on the stack" rather than "we are inside the refresh
+  // handler". Re-entry is DROPPED, not queued: the paint already on the
+  // stack is producing a frame for the current geometry, so the frame the
+  // re-entrant call would produce is one the outer call is about to present
+  // anyway.
+  //
+  // RAII rather than a bare set/clear pair because paintFrame() has early
+  // returns; a manual clear would be skipped on those paths and the surface
+  // would then silently refuse to repaint for the rest of the process.
+  class PaintScope {
+   public:
+    explicit PaintScope(GlfwSurface* s) : surface_(s) {
+      surface_->paintInFlight_ = true;
+    }
+    ~PaintScope() { surface_->paintInFlight_ = false; }
+    PaintScope(const PaintScope&) = delete;
+    PaintScope& operator=(const PaintScope&) = delete;
+
+   private:
+    GlfwSurface* surface_;
+  };
+
+  bool paintInFlight() const { return paintInFlight_; }
 
   bool drawDisplayList(ImpellerDisplayList dl);
 
@@ -94,6 +149,19 @@ class GlfwSurface {
 
   // Window-lifecycle calls HeadlessSurface has no analogue for.
   void pollEvents();
+  // Blocks in GLFW's event processing for up to `timeoutSeconds`, dispatching
+  // callbacks (including the window-refresh one) WITHOUT returning to the
+  // caller's frame loop.
+  //
+  // ⛔ THIS IS THE ONLY WAY THE DRAG CONDITION IS REPRODUCIBLE OFF DARWIN.
+  // The bug being fixed is "the frame loop cannot run, so nothing consumes
+  // the resize". glfwSetWindowSize does NOT enter macOS's modal resize loop,
+  // so a gate built on requestSize() alone proves the resize BODY works and
+  // says nothing about the blocked-loop case. Stalling here reproduces the
+  // defining property — event callbacks dispatch while the loop body is
+  // unreachable — on every platform, which is what makes the fix gateable at
+  // all. It does NOT claim to be AppKit's modal loop; see tools/ci-resize.sh.
+  void waitEvents(double timeoutSeconds);
   bool shouldClose() const;
   void present();  // glfwSwapBuffers
 
@@ -115,6 +183,23 @@ class GlfwSurface {
   // that never works.
   std::atomic<bool> dirty_{false};
   GLFWwindow* window_{nullptr};
+  // Invoked from the GLFW window-refresh callback. Plain std::function, not
+  // atomic: it is installed once before the loop starts and GLFW only calls
+  // the refresh callback from the thread that is inside glfwPollEvents, which
+  // is the same thread that installed it.
+  std::function<void()> refreshHandler_;
+  // ⛔ REENTRANCY GUARD, AND IT IS NOT THEORETICAL.
+  // Set by PaintScope around EVERY paint (see PaintScope above), not merely
+  // while inside the refresh handler. The handler paints and presents; on
+  // darwin the present is eglSwapBuffers() against a CAMetalLayer, and a
+  // layer update can itself drive -updateLayer:/-drawRect:, which is exactly
+  // where GLFW raises window damage. That chain can be entered from the frame
+  // loop's paint just as easily as from the callback's, so a flag raised only
+  // inside the callback would leave the loop's paint unguarded and let a
+  // paint re-enter a paint that is still on the stack, mid-Impeller-display-
+  // list. Re-entry is dropped rather than queued: the outer paint is already
+  // producing a frame for the current geometry.
+  bool paintInFlight_{false};
 #if defined(__APPLE__)
   EGLDisplay display_{EGL_NO_DISPLAY};
   EGLSurface eglSurface_{EGL_NO_SURFACE};
