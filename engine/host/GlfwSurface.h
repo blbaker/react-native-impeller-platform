@@ -96,6 +96,51 @@ class GlfwSurface {
   // unchanged and a repaint of identical content is a no-op to the user.
   void setRefreshHandler(std::function<void()> handler);
 
+  // ⛔ NOTHING IN THE WINDOWED PATH COULD DELIVER A PRESS BEFORE THIS.
+  // The input tier (SceneGraph::hitTest -> retained EventEmitter ->
+  // TouchEventEmitter) has been correct and gated since P9, but its ONLY
+  // caller was the headless `--tap X,Y` probe in main(), which runs past the
+  // end of RunWindowed and never executes in `--window` mode. Measured
+  // 2026-09-09: glfwSetMouseButtonCallback and glfwSetCursorPosCallback
+  // appeared ZERO times in the whole tree. No callback was registered, and
+  // nothing in the windowed path would have called one.
+  //
+  // That is the reason HostApp's onPress handlers are inert on screen while
+  // tools/ci-input.sh is green: the gate exercises the half of the path that
+  // works. An absent registration is indistinguishable from a broken hit test
+  // from the outside, so it is stated here in the header rather than left to
+  // be rediscovered.
+  //
+  // ⛔ THE HANDLER RECEIVES LAYOUT POINTS, NOT WHAT GLFW REPORTED.
+  // glfwGetCursorPos yields SCREEN COORDINATES; dispatchTouch wants layout
+  // points. The conversion (host/PointScale.h CursorPointsFromScreen) happens
+  // in ONE place — inside this class, at the callback — so no caller can
+  // forget it, and so the pointScale a resize changed is the one that applies.
+  // Doing it in the host would put the factor-of-two on the caller's side of
+  // the boundary, where a second caller would get it wrong independently.
+  //
+  // `down` distinguishes press from release: the host maps that to
+  // TouchPhase::Down/Up. Buttons other than the left one are not forwarded;
+  // there is no RN touch concept for them.
+  void setMouseButtonHandler(std::function<void(float x, float y, bool down)> handler);
+
+  // The effective layout scale, kept in sync by the host on every resize so the
+  // cursor conversion cannot drift from the painter's root transform. Set from
+  // the SAME DeriveWindowPointScale result the layout uses; see the host's
+  // applyResizeIfDirty.
+  void setPointScale(float scale) { pointScale_ = scale > 0.0f ? scale : 1.0f; }
+
+  // Synthesises a left button press+release at a SCREEN-COORDINATE point,
+  // entering the exact same conversion and handler the real GLFW callback
+  // does. Exists for the same reason requestSize() does: a windowed input
+  // path is otherwise only testable by a human with a mouse.
+  //
+  // ⚠️ This is NOT proof the GLFW callback is registered — it calls the
+  // handler directly. tools/ci-window-input.sh therefore uses it only for the
+  // coordinate assertions and drives a REAL XTest pointer click for the
+  // registration assertion. See that gate's header.
+  void synthesiseClick(double screenX, double screenY);
+
   // Drives a resize from inside the process, for gates. Produces the SAME
   // framebuffer-size callback a user drag produces; it is the identical code
   // path entered from a different caller. There is no headless way to make a
@@ -172,6 +217,13 @@ class GlfwSurface {
   bool initAngleForWindow(std::string* error);
 #endif
 
+  // Converts a GLFW screen-coordinate cursor position into LAYOUT POINTS and
+  // hands it to mouseButtonHandler_. The ONE place the conversion happens: the
+  // real GLFW mouse-button callback and synthesiseClick() both route through
+  // it, so a gate driving a synthetic click exercises the same arithmetic a
+  // human click does rather than a parallel copy of it.
+  void dispatchCursorPoint(double screenX, double screenY, bool down);
+
   int width_{0};
   int height_{0};
   int pointWidth_{0};
@@ -188,6 +240,14 @@ class GlfwSurface {
   // the refresh callback from the thread that is inside glfwPollEvents, which
   // is the same thread that installed it.
   std::function<void()> refreshHandler_;
+  // Invoked from the GLFW mouse-button callback with LAYOUT POINTS already
+  // resolved. Same threading argument as refreshHandler_: installed once
+  // before the loop, called only from the thread inside glfwPollEvents.
+  std::function<void(float, float, bool)> mouseButtonHandler_;
+  // The layout scale the cursor conversion divides by. Mirrors the host's
+  // pointScale; kept here so the conversion happens once, at the callback,
+  // rather than at every caller.
+  float pointScale_{1.0f};
   // ⛔ REENTRANCY GUARD, AND IT IS NOT THEORETICAL.
   // Set by PaintScope around EVERY paint (see PaintScope above), not merely
   // while inside the refresh handler. The handler paints and presents; on

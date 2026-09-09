@@ -98,6 +98,7 @@ void Usage() {
           "                   [--headless] [--screenshot <file.ppm>]\n"
           "                   [--probe-banner on|off] [--width N] [--height N]\n"
           "                   [--scale N]  (device pixels per point; default 1)\n"
+          "                   [--click-after-frames N:X,Y]  (windowed; screen coords)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
@@ -264,7 +265,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 const std::string& screenshotPath,
                 const std::string& screenshotFirstPath,
                 bool pointScaleGiven, int resizeAfterFrames, int resizeToW,
-                int resizeToH, int stallAfterFrames, int stallMs) {
+                int resizeToH, int stallAfterFrames, int stallMs,
+                int clickAfterFrames, double clickX, double clickY) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -299,6 +301,10 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   fflush(stdout);
 
   rni::SceneGraph sceneGraph(surface.typography());
+  // The cursor conversion divides by this. Set from the SAME derived value the
+  // layout uses, and re-set on every resize below, so a click can never be
+  // converted with a scale the painter is no longer using.
+  surface.setPointScale(pointScale);
   rni::ReactHost host;
   host.setKnownComponents(rni::FabricHost::knownComponentNames());
   host.displayMetrics()->set((float)pxWidth / pointScale,
@@ -390,6 +396,12 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // the mutation gate on that function covers both callers.
     pointScale = rni::DeriveWindowPointScale(newPx, surface.pointWidth(),
                                              pointScale, pointScaleGiven);
+    // ⛔ THE CURSOR CONVERSION MUST FOLLOW THE RESIZE, NOT LAG IT.
+    // Dragging a window between a 2x and a 1x monitor changes pointScale
+    // here; a stale copy inside the surface would then convert every
+    // subsequent click by the OLD factor and quietly halve or double every
+    // coordinate. Set through the same one derivation, at the same moment.
+    surface.setPointScale(pointScale);
     const float newPointW = (float)newPx / pointScale;
     const float newPointH = (float)newPy / pointScale;
 
@@ -423,6 +435,42 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   surface.setRefreshHandler([&]() {
     applyResizeIfDirty();
     paintFrame();
+  });
+
+  // ⛔ THE WINDOWED PATH'S ONLY ROUTE INTO dispatchTouch.
+  // Before this, dispatchTouch had exactly one caller in the whole binary:
+  // the headless `--tap` probe at main.cpp:885, which is PAST THE END of this
+  // function (RunWindowed spans 259..547; main() calls it at 777). So the
+  // input tier was complete, gated and unreachable in `--window` mode, which
+  // is why hostapp's onPress handlers were inert on screen while ci-input.sh
+  // stayed green.
+  //
+  // x/y arrive in LAYOUT POINTS — the conversion from GLFW's screen
+  // coordinates lives in GlfwSurface::dispatchCursorPoint so that both the
+  // real callback and the test hook share it and neither can drift.
+  //
+  // ⛔ NO waitForJsIdle HERE. dispatchTouch hops to the JS thread through the
+  // RuntimeScheduler and returns; blocking the event thread for the handler
+  // would stall the frame loop (and, on darwin, could be entered from inside
+  // AppKit's modal loop). The next frame picks up whatever the handler
+  // mutated, which is how a real UI toolkit behaves.
+  int touchHits = 0;
+  int touchDowns = 0;
+  surface.setMouseButtonHandler([&](float x, float y, bool down) {
+    const auto phase = down ? rni::FabricHost::TouchPhase::Down
+                            : rni::FabricHost::TouchPhase::Up;
+    const int hit = fabric.dispatchTouch(phase, x, y);
+    if (down) {
+      ++touchDowns;
+      if (hit) ++touchHits;
+      // Machine-readable, and printed for the DOWN only: a gate asserting on
+      // both phases would double-count one click. touch_hit=0 is a real,
+      // meaningful outcome (the user clicked empty space), so it is printed
+      // rather than suppressed — silence here would be indistinguishable from
+      // the callback never firing, which is the exact bug being fixed.
+      printf("rn-impeller: touch_down hit=%d at=%.1f,%.1f\n", hit, x, y);
+      fflush(stdout);
+    }
   });
 
   // Reads the framebuffer and writes a PPM. Shared by the frame-0 and the
@@ -505,6 +553,28 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     ++frameIndex;
     if (frameIndex == 1) printf("rn-impeller: painted_nodes=%d\n", painted);
 
+    // ⛔ SYNTHETIC-CLICK HOOK — AND IT IS DELIBERATELY THE WEAKER EVIDENCE.
+    // This calls the handler through GlfwSurface::synthesiseClick, so it
+    // proves the CONVERSION, the dispatch, and the JS handler. It does NOT
+    // prove glfwSetMouseButtonCallback is registered — deleting that
+    // registration leaves this hook passing. tools/ci-window-input.sh
+    // therefore pairs it with a REAL XTest pointer click, and the mutation
+    // gate asserts that deleting the registration kills the XTest assertion
+    // specifically. Stated here so nobody later mistakes this for the whole
+    // proof; it is the half that runs where there is no X server to drive.
+    if (clickAfterFrames > 0 && frameIndex == clickAfterFrames) {
+      printf("rn-impeller: click_requested at=%.1f,%.1f (screen coords)\n",
+             clickX, clickY);
+      fflush(stdout);
+      surface.synthesiseClick(clickX, clickY);
+      // dispatchTouch is asynchronous by design; returning to the loop
+      // immediately and then exiting at --frames would end the process before
+      // any handler ran, making a WORKING dispatch look dead. Same reasoning
+      // as the headless --tap probe's waitForJsIdle.
+      host.waitForJsIdle(5000);
+    }
+
+
     // ⛔ The frame-0 capture is what makes an animation gate possible at all.
     // A single timed screenshot proves only that SOMETHING was drawn; it
     // cannot distinguish a live repaint loop from a static engine redrawing
@@ -536,11 +606,29 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // dispatch one final damage event. Leaving the handler installed turns
   // shutdown into a use-after-free that would only ever reproduce on exit.
   surface.setRefreshHandler(nullptr);
+  // Same argument, same lifetime bug: the mouse handler captures `fabric`.
+  // glfwDestroyWindow can dispatch a queued button event, and a click landing
+  // after ~FabricHost would dispatch a touch into freed memory.
+  surface.setMouseButtonHandler(nullptr);
+
 
   // Machine-readable evidence that the modal-loop repaint path executed. A
   // gate asserting only on pixels cannot tell a mid-drag repaint from the
   // single post-release repaint that was already happening.
   printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
+  // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
+  // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
+  // a completely different failure from touch_downs=3 touch_hits=0 (clicks
+  // arrived, hit test found nothing). A gate that can only see hits cannot
+  // tell those apart, and would call an unregistered callback "no touchables
+  // under the cursor".
+  printf("rn-impeller: touch_downs=%d touch_hits=%d\n", touchDowns, touchHits);
+  // alerts_shown is the host's canonical "JS actually ran" counter. Emitted
+  // after the loop so it carries the post-click value; the windowed path had
+  // no equivalent of the headless probe's alerts_after_tap until now, so a
+  // window gate could see a hit and still not know whether onPress executed.
+  printf("rn-impeller: alerts_after_clicks=%zu\n", host.alerts()->count());
+
   printf("RN_IMPELLER_WINDOW_OK app=%s frames=%d\n", appName.c_str(), frameIndex);
   fflush(stdout);
   return 0;
@@ -576,6 +664,12 @@ int main(int argc, char** argv) {
   // cannot cover this and this can.
   int stallAfterFrames = 0;
   int stallMs = 300;
+  // Windowed synthetic-click hook; 0 = off. Coordinates are SCREEN
+  // COORDINATES (what GLFW reports for a cursor), not layout points — the
+  // whole point of the hook is to exercise the conversion.
+  int clickAfterFrames = 0;
+  double clickX = 0.0;
+  double clickY = 0.0;
   int width = 400, height = 300;
   // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
   // The surface is allocated at width x height PIXELS; layout then happens in
@@ -670,6 +764,30 @@ int main(int argc, char** argv) {
         fprintf(stderr,
                 "rn-impeller: --resize-after-frames needs N, W and H all > 0 "
                 "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
+    // Windowed input test hook: "--click-after-frames N:X,Y" synthesises a
+    // left press+release at SCREEN COORDINATES X,Y after frame N. See the
+    // hook site in RunWindowed for why this is the WEAKER half of the
+    // evidence and what tools/ci-window-input.sh pairs it with.
+    else if (a == "--click-after-frames") {
+      std::string spec = next("--click-after-frames");
+      auto colon = spec.find(':');
+      auto comma = spec.find(',', colon == std::string::npos ? 0 : colon + 1);
+      if (colon == std::string::npos || comma == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --click-after-frames wants N:X,Y (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      clickAfterFrames = atoi(spec.substr(0, colon).c_str());
+      clickX = atof(spec.substr(colon + 1, comma - colon - 1).c_str());
+      clickY = atof(spec.substr(comma + 1).c_str());
+      if (clickAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --click-after-frames needs N > 0 (got %s)\n",
                 spec.c_str());
         return 2;
       }
@@ -778,7 +896,8 @@ int main(int argc, char** argv) {
                        colorScheme, initialUrl, width, height, pointScale,
                        logMutations, frames, screenshotAfterMs, screenshot,
                        screenshotFirst, pointScaleGiven, resizeAfterFrames,
-                       resizeToW, resizeToH, stallAfterFrames, stallMs);
+                       resizeToW, resizeToH, stallAfterFrames, stallMs,
+                       clickAfterFrames, clickX, clickY);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "

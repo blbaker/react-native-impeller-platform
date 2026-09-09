@@ -3,6 +3,8 @@
 #include <GLFW/glfw3.h>
 #include <GLES3/gl3.h>
 
+#include "host/PointScale.h"
+
 #if defined(__APPLE__)
 // ⛔ macOS REACHES THE WINDOW THROUGH ANGLE, NOT THROUGH SYSTEM EGL.
 // Same reason HeadlessSurface has an APPLE branch: Apple ships a frozen
@@ -233,6 +235,33 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
     self->refreshHandler_();
   });
 
+  // ⛔ THE REGISTRATION THAT WAS ABSENT. Without this line the windowed app
+  // mounts, lays out, paints, hit-tests correctly if asked — and no click ever
+  // asks. glfwSetMouseButtonCallback was measured at ZERO occurrences in this
+  // tree on 2026-09-09, which is why 13 wired onPress handlers in hostapp v5 were
+  // inert while tools/ci-input.sh (headless `--tap`) stayed green.
+  //
+  // ⛔ THE POSITION IS READ HERE, NOT TRACKED FROM A CURSOR-MOVE CALLBACK.
+  // GLFW guarantees glfwGetCursorPos is current inside the button callback,
+  // and reading it at the press is strictly more correct than replaying the
+  // last cursor-position event: a click delivered without an intervening move
+  // (window focus click, a synthetic XTest click that warps then clicks, a
+  // tap on a trackpad) has no prior move to have recorded. A cursor-position
+  // callback would additionally fire hundreds of times per second to maintain
+  // state nothing reads between presses.
+  glfwSetMouseButtonCallback(window_, [](GLFWwindow* w, int button, int action,
+                                         int /*mods*/) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (!self || !self->mouseButtonHandler_) return;
+    // One mouse == one finger. RN has no touch phase for a right or middle
+    // button, and forwarding them would deliver a press RN cannot pair.
+    if (button != GLFW_MOUSE_BUTTON_LEFT) return;
+    if (action != GLFW_PRESS && action != GLFW_RELEASE) return;
+    double cx = 0.0, cy = 0.0;
+    glfwGetCursorPos(w, &cx, &cy);
+    self->dispatchCursorPoint(cx, cy, action == GLFW_PRESS);
+  });
+
 #if defined(__APPLE__)
   if (!initAngleForWindow(error)) return false;
 #else
@@ -315,6 +344,40 @@ bool GlfwSurface::consumeDirty() {
 
 void GlfwSurface::setRefreshHandler(std::function<void()> handler) {
   refreshHandler_ = std::move(handler);
+}
+
+void GlfwSurface::setMouseButtonHandler(
+    std::function<void(float, float, bool)> handler) {
+  mouseButtonHandler_ = std::move(handler);
+}
+
+void GlfwSurface::dispatchCursorPoint(double screenX, double screenY,
+                                      bool down) {
+  if (!mouseButtonHandler_) return;
+  // ⛔ RE-READ THE SIZES, DO NOT USE THE CACHED width_/pointWidth_.
+  // Those are refreshed by consumeDirty(), which the frame loop calls. During
+  // a macOS modal resize drag the loop is blocked, so a click that arrives
+  // just after a resize would be converted with the PREVIOUS geometry — a
+  // silent off-by-a-resize that only manifests as "the first click after
+  // resizing hits the wrong thing". Querying GLFW costs two syscall-free
+  // reads of cached window state and removes the ordering dependency
+  // entirely.
+  int fbW = 0, fbH = 0, winW = 0, winH = 0;
+  if (window_) {
+    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    glfwGetWindowSize(window_, &winW, &winH);
+  }
+  const float px = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
+  const float py = CursorPointsFromScreen(screenY, fbH, winH, pointScale_);
+  mouseButtonHandler_(px, py, down);
+}
+
+void GlfwSurface::synthesiseClick(double screenX, double screenY) {
+  // Down then up, in that order, through the SAME conversion the callback
+  // uses. RN's Pressability needs both: a lone down highlights and never
+  // fires onPress.
+  dispatchCursorPoint(screenX, screenY, true);
+  dispatchCursorPoint(screenX, screenY, false);
 }
 
 void GlfwSurface::requestSize(int pointW, int pointH) {

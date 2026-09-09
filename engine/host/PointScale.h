@@ -59,6 +59,45 @@ inline float DeriveWindowPointScale(int fbSize, int winSize, float cliScale,
   return ratio;
 }
 
+// ⛔ A CURSOR POSITION IS NOT A LAYOUT COORDINATE. THIS IS THE CONVERSION.
+//
+// glfwGetCursorPos and the cursor-position callback both report SCREEN
+// COORDINATES (points, the same unit glfwGetWindowSize speaks) — NOT device
+// pixels, and NOT this engine's layout points. FabricHost::dispatchTouch wants
+// layout points, which are `framebufferPixels / pointScale`.
+//
+// Those three units collapse into one on a 1x display, which is why a wrong
+// conversion here passes every gate on this Linux host and lands on the WRONG
+// ELEMENT on a Retina Mac. They collapse into TWO on a normal Retina window,
+// where pointScale is derived from fb/win and layout points therefore equal
+// screen coordinates exactly — making the identity conversion look correct
+// right up until someone passes `--scale`.
+//
+// The general form, which is identity in both of those cases and right in the
+// third:
+//
+//     pixels       = cursorScreen * (fbSize / winSize)      // real device ratio
+//     layoutPoints = pixels / pointScale                    // effective scale
+//
+// With no --scale, pointScale IS fbSize/winSize, so the two factors cancel and
+// this returns cursorScreen unchanged. With `--scale 2` on a 1x display the
+// layout is half the framebuffer in each axis, and a click at screen 300 must
+// arrive as 150 — not 300, which would hit-test past the end of the surface,
+// and not 600, which is the classic factor-of-two.
+//
+// Pure and header-only for the same reason DeriveWindowPointScale is: it can
+// then be gated on a host with no Retina display and no mouse.
+inline float CursorPointsFromScreen(double cursorScreen, int fbSize,
+                                    int winSize, float pointScale) {
+  if (fbSize <= 0 || winSize <= 0 || !(pointScale > 0.0f))
+    return (float)cursorScreen;
+  const double deviceRatio = (double)fbSize / (double)winSize;
+  if (!std::isfinite(deviceRatio) || deviceRatio <= 0.0) return (float)cursorScreen;
+  const double points = cursorScreen * deviceRatio / (double)pointScale;
+  if (!std::isfinite(points)) return (float)cursorScreen;
+  return (float)points;
+}
+
 // Exercises DeriveWindowPointScale over the real number pairs each platform
 // produces, printing one line per case. Lets a 1x host gate the 2x answer.
 // Returns 0 when every case matches.
@@ -105,10 +144,62 @@ inline int runPointScaleSelfTest() {
            c.name, c.fb, c.win, c.cli, c.given ? " [given]" : "        ", got,
            c.expect, ok ? "ok" : "MISMATCH");
   }
+
+  // ⛔ THE CURSOR CONVERSION IS GATED HERE, ON A 1x HOST WITH NO MOUSE.
+  // A factor-of-two error in CursorPointsFromScreen does not crash and does
+  // not log — it silently hits the WRONG ELEMENT, or nothing, on a Retina
+  // display only. That is unobservable on this CI host by any means except
+  // feeding the function the number pairs a 2x Mac produces, which is exactly
+  // what these cases are.
+  struct CursorCase {
+    const char* name;
+    double cursor;
+    int fb;
+    int win;
+    float scale;
+    float expect;
+  };
+  const CursorCase cursorCases[] = {
+      // 1x, no override: identity. Every existing Linux input gate lives here,
+      // so this case is what says the change is a no-op for them.
+      {"1x window, cursor 200", 200.0, 800, 800, 1.0f, 200.0f},
+      // Retina, scale derived from the window: fb/win and pointScale are the
+      // SAME 2.0 and cancel. A click at screen point 200 is layout point 200,
+      // NOT 400 (the factor-of-two that hits the wrong element) and NOT 100.
+      {"retina 2x derived, cursor 200", 200.0, 1600, 800, 2.0f, 200.0f},
+      {"retina 2x derived, cursor 0", 0.0, 1600, 800, 2.0f, 0.0f},
+      // --scale override on a 1x display: the layout is HALF the framebuffer,
+      // so a click at 300 must arrive as 150. This is the case where treating
+      // the cursor as already-in-points is wrong, and it is precisely the
+      // configuration the macOS tester ran the resize gate under (--scale 2).
+      {"--scale 2 on a 1x display, cursor 300", 300.0, 800, 800, 2.0f, 150.0f},
+      // --scale 1 forced on a Retina window: layout points equal PIXELS, so a
+      // screen-coordinate click must DOUBLE.
+      {"--scale 1 forced on a 2x window, cursor 200", 200.0, 1600, 800, 1.0f,
+       400.0f},
+      // Fractional backing scale, derived: cancels like the 2x case.
+      {"1.5x derived, cursor 640", 640.0, 1920, 1280, 1.5f, 640.0f},
+      // Degenerate reports must pass the cursor through unchanged rather than
+      // divide by zero and dispatch a NaN into the hit test.
+      {"minimised window (0 fb)", 200.0, 0, 800, 1.0f, 200.0f},
+      {"zero window size", 200.0, 800, 0, 1.0f, 200.0f},
+      {"zero scale", 200.0, 800, 800, 0.0f, 200.0f},
+  };
+  for (const CursorCase& c : cursorCases) {
+    const float got = CursorPointsFromScreen(c.cursor, c.fb, c.win, c.scale);
+    const bool ok = std::fabs(got - c.expect) < 1e-4f;
+    if (!ok) ++failures;
+    printf("  %-44s cur=%-7.1f fb=%-5d win=%-5d scale=%.2f -> %.4f (want %.4f) %s\n",
+           c.name, c.cursor, c.fb, c.win, c.scale, got, c.expect,
+           ok ? "ok" : "MISMATCH");
+  }
+
   if (failures) {
     printf("POINTSCALE_SELFTEST_FAIL failures=%d\n", failures);
     return 1;
   }
+  printf("CURSORPOINTS_SELFTEST_OK cases=%d\n",
+         (int)(sizeof(cursorCases) / sizeof(cursorCases[0])));
   printf("POINTSCALE_SELFTEST_OK cases=%d\n", (int)(sizeof(cases) / sizeof(cases[0])));
   return 0;
 }
