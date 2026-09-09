@@ -446,6 +446,23 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     return true;
   };
 
+  // ⛔ THE POST-RESIZE NODE COUNT, AND WHY IT NEEDS ITS OWN LINE.
+  // scene_nodes is printed exactly twice: once after startSurface (line ~333)
+  // and once in the headless summary. Neither observes a windowed resize, so a
+  // gate grepping scene_nodes reads the SAME pre-resize number twice and
+  // concludes "JS did not re-render" no matter what JS did. Measured
+  // 2026-09-09: D4 reported 5 -> 5 against a build whose emit was confirmed
+  // delivered, which is a false RED -- the instrument, not the subject.
+  //
+  // Counted after a JS-idle wait, because the emit is dispatched through the
+  // BUFFERED executor: it is queued, not synchronous, so sampling on the same
+  // turn reads the tree from before React re-rendered.
+  auto reportNodesAfterResize = [&]() {
+    host.waitForJsIdle(2000);
+    printf("rn-impeller: scene_nodes_after_resize=%zu\n", sceneGraph.nodeCount());
+    fflush(stdout);
+  };
+
   // ⛔ THE CALLBACK MUST PAINT, NOT JUST MARK DIRTY.
   // During a macOS window-edge drag, glfwPollEvents() never returns, so the
   // loop below cannot consume anything. Raising a flag from in here would
@@ -536,6 +553,13 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
              resizeToH);
       fflush(stdout);
       surface.requestSize(resizeToW, resizeToH);
+    }
+
+    // Sampled a few frames AFTER the request, not on the same frame: the
+    // resize lands via the framebuffer callback and the emit is queued on the
+    // buffered executor, so React has not re-rendered yet at frame N.
+    if (resizeAfterFrames > 0 && frameIndex == resizeAfterFrames + 5) {
+      reportNodesAfterResize();
     }
 
     // ⛔ THE HOOK THAT MAKES THE ACTUAL BUG GATEABLE.
