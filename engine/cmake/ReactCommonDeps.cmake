@@ -39,9 +39,38 @@ target_include_directories(rc_boost SYSTEM INTERFACE "${boost_src_SOURCE_DIR}")
 # `asio::ssl` is a header-only wrapper over libssl/libcrypto — the boost we
 # already vendor (1.83.0, headers only) provides it, so no new boost machinery
 # is needed. Only the libraries are new.
+# ⛔ ON DARWIN THE SYSTEM OpenSSL IS HOMEBREW'S, AND LINKING IT *SHARED* SHIPS A
+# BINARY THAT ONLY RUNS ON THIS MACHINE.
+# macOS has no OpenSSL in /usr/lib (Apple removed it in 10.15 — only the private
+# libssl.0.9.8 stub remains), so find_package resolves to the brew Cellar and the
+# executable records ABSOLUTE install names:
+#     /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib
+#     /opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib
+# Measured 2026-09-08 on the macOS tester, first darwin build after TLS landed:
+# the relocatability gate below rejected the staged Mach-O for exactly these two
+# paths. That gate is right and must not be relaxed — an npm consumer without
+# Homebrew (or on Intel, where the prefix is /usr/local) gets `Library not
+# loaded` at exec, which on arm64 is an unexplained `Abort trap: 6`.
+#
+# Static archives dodge it: brew ships libssl.a/libcrypto.a alongside the dylibs,
+# they leave no install name to rewrite, and OPENSSL_USE_STATIC_LIBS is
+# FindOpenSSL's documented switch for exactly this. Linux keeps the shared link —
+# there the libraries ARE in a system path, the gate permits them, and static
+# linking would only bloat the binary.
+#
+# ⚠️ THE TRUST STORE IS THE THING TO VERIFY AFTER THIS CHANGE, NOT THE LINK.
+# A statically linked brew OpenSSL still compiles in brew's OPENSSLDIR, so
+# set_default_verify_paths() points at /opt/homebrew/etc/openssl@3/certs — which
+# a consumer machine need not have. NetworkingModule.cpp already error-checks
+# that call, so the failure is loud rather than a silent verify_none; the
+# negative-control arm of the networking probe is what proves the chain actually
+# verifies on this host. Prove it there, do not assume it here.
+if(APPLE)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
-  message(STATUS "rc_ssl: using system OpenSSL ${OPENSSL_VERSION}")
+  message(STATUS "rc_ssl: using system OpenSSL ${OPENSSL_VERSION} (static=${OPENSSL_USE_STATIC_LIBS})")
   add_library(rc_ssl INTERFACE)
   target_link_libraries(rc_ssl INTERFACE OpenSSL::SSL OpenSSL::Crypto)
   target_compile_definitions(rc_ssl INTERFACE RNI_WITH_TLS=1)
