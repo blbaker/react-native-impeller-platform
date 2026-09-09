@@ -421,6 +421,24 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // freshly-launched window can never show.
     fabric.updateSurface(1, (float)newPx, (float)newPy, pointScale);
 
+    // ⛔ EMIT LAST. ORDER IS set -> resizeSurface -> emit, AND IT IS LOAD-BEARING.
+    // Emitting first re-renders JS against the new Dimensions while Fabric
+    // still holds the OLD layout constraint, committing one frame at a width
+    // the surface does not have. That is a single wrong frame -- it survives a
+    // screenshot gate, because by the time anything captures, the next frame
+    // is correct.
+    //
+    // This is the crossing the whole suite was blind to: 16 of 16 probes would
+    // pass on a build where the two lines above run and this one does not
+    // (boundary-audit.py, boundary-crossing 0/16). Native geometry perfect,
+    // JS never told.
+    //
+    // toDimensionsDynamic() rather than a hand-built object: Dimensions.js
+    // requires the SAME metrics under both `window` and `screen`, plus
+    // fontScale. Building it here would let the two shapes drift.
+    host.deviceEvents()->emit("didUpdateDimensions",
+                              host.displayMetrics()->toDimensionsDynamic());
+
     printf("rn-impeller: resize px=%dx%d points=%.1fx%.1f scale=%.2f%s\n",
            newPx, newPy, newPointW, newPointH, pointScale,
            pointScaleGiven ? " (--scale override)" : " (from framebuffer)");

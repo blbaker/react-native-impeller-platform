@@ -16,6 +16,7 @@
 #include "modules/ModuleRegistry.h"
 #include "modules/NetworkingModule.h"
 #include "modules/PlatformModules.h"
+#include "runtime/DeviceEventSink.h"
 #include "runtime/JsThread.h"
 
 namespace rni {
@@ -41,6 +42,11 @@ class ReactHost {
   }
   std::shared_ptr<JsThread> jsThread() { return jsThread_; }
   std::shared_ptr<DisplayMetrics> displayMetrics() { return displayMetrics_; }
+
+  // The host-side path to JS. TurboModule::emitDeviceEvent is PROTECTED, so
+  // window/resize code in engine/host had no way to tell JS anything -- native
+  // could resize perfectly and the app would never hear. See DeviceEventSink.h.
+  std::shared_ptr<DeviceEventSink> deviceEvents() { return deviceEvents_; }
 
   // The seam, exposed so the host can enumerate it (--list-modules) and so the
   // CLI can seed platform state before the bundle runs. Constructed in the
@@ -73,6 +79,10 @@ class ReactHost {
   std::unique_ptr<facebook::react::ReactInstance> instance_;
   std::shared_ptr<std::string> scriptURL_;
   std::shared_ptr<DisplayMetrics> displayMetrics_;
+  // Constructed in the ctor, wired to the runtime executor once the instance
+  // exists, and INVALIDATED in the dtor before teardown -- see ReactHost.cpp.
+  std::shared_ptr<DeviceEventSink> deviceEvents_ =
+      std::make_shared<DeviceEventSink>();
   std::shared_ptr<std::vector<std::string>> knownComponents_;
   std::shared_ptr<ModuleRegistry> modules_;
   std::shared_ptr<AppearanceState> appearance_;

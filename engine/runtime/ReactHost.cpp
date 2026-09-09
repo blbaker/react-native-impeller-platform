@@ -134,6 +134,13 @@ ReactHost::ReactHost() {
 
   timerManager->setRuntimeExecutor(instance_->getBufferedRuntimeExecutor());
 
+  // ⛔ BUFFERED, matching the timer manager and NOT runtimeExecutor().
+  // The unbuffered executor exists so Fabric's UIManagerBinding install is not
+  // queued behind anything. A device event has the opposite requirement: an
+  // emit issued before the bundle is evaluated must WAIT for the runtime
+  // rather than run against a global that has no __rctDeviceEventEmitter yet.
+  deviceEvents_->setRuntimeExecutor(instance_->getBufferedRuntimeExecutor());
+
   auto jsInvoker = std::make_shared<react::RuntimeSchedulerCallInvoker>(
       std::weak_ptr<react::RuntimeScheduler>(instance_->getRuntimeScheduler()));
 
@@ -223,6 +230,17 @@ ReactHost::ReactHost() {
 }
 
 ReactHost::~ReactHost() {
+  // ⛔ FIRST, BEFORE ANYTHING ELSE IS TORN DOWN.
+  // deviceEvents_ closes over the ReactInstance via the runtime executor. A
+  // window resize arrives on the MAIN thread, not the JS thread, so a drag
+  // during shutdown can call emit() while this destructor runs -- scheduling
+  // work against an instance being freed underneath it. invalidate() takes the
+  // sink's own mutex, so an emit already inside the lock finishes and every
+  // later one takes the named-drop path instead of touching dead memory.
+  if (deviceEvents_) {
+    deviceEvents_->invalidate();
+  }
+
   // Let in-flight timers/executor tasks finish (bounded) so async JS work
   // completes before the runtime goes away.
   if (jsThread_) {
