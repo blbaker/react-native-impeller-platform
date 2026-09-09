@@ -68,6 +68,29 @@ target_include_directories(rc_boost SYSTEM INTERFACE "${boost_src_SOURCE_DIR}")
 if(APPLE)
   set(OPENSSL_USE_STATIC_LIBS TRUE)
 endif()
+# ⛔ OPENSSL_SSL_LIBRARY IS A *CACHE* ENTRY, SO FLIPPING THE FLAG ABOVE CHANGES
+# NOTHING IN AN EXISTING BUILD DIRECTORY.
+# FindOpenSSL only searches when its result variables are unset; on a re-configure
+# they are already cached from the previous run, so it returns the SHARED dylibs
+# it found last time and reports success. Measured 2026-09-08: the static fix was
+# delivered and rebuilt on the macOS tester, ninja said "no work to do", and the
+# relocatability gate failed with the IDENTICAL two brew paths — a correct fix
+# that looks like a fix that does not work. That is the worst shape of stale
+# state, and it would have been diagnosed as "the cmake change is wrong".
+#
+# Re-resolve whenever the cached library disagrees with the static/shared mode we
+# are asking for. Cheap (a find_library, not a compile) and it means neither a
+# human nor a peer has to know to delete engine/build.
+if(DEFINED OPENSSL_SSL_LIBRARY AND OPENSSL_USE_STATIC_LIBS)
+  get_filename_component(_rc_ssl_ext "${OPENSSL_SSL_LIBRARY}" EXT)
+  if(NOT _rc_ssl_ext STREQUAL "${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    message(STATUS "rc_ssl: cached ${OPENSSL_SSL_LIBRARY} is not static; re-resolving")
+    unset(OPENSSL_SSL_LIBRARY CACHE)
+    unset(OPENSSL_CRYPTO_LIBRARY CACHE)
+    unset(OPENSSL_INCLUDE_DIR CACHE)
+    unset(OPENSSL_LIBRARIES CACHE)
+  endif()
+endif()
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
   message(STATUS "rc_ssl: using system OpenSSL ${OPENSSL_VERSION} (static=${OPENSSL_USE_STATIC_LIBS})")
