@@ -71,8 +71,49 @@ const PLATFORM_FORKED = {
   'react-native/Libraries/Network/RCTNetworking.js': 'RCTNetworking.ios.js',
 };
 
+// ---------------------------------------------------------------------------
+// ENG-01a. FILES THAT BRANCH THEMSELVES OUT OF EXISTENCE ON A CUSTOM PLATFORM
+//
+// A third failure shape, distinct from both lists above. The file resolves
+// perfectly, imports perfectly, and RUNS -- and then does nothing, because its
+// entire body is `if (ios) {...} else if (android) {...}` with no else. Nothing
+// throws and nothing logs. Alert.js was the first (fixed by vendoring a shim);
+// TextInput.js is the second and CANNOT be vendored, because it is ~1000 lines
+// of stateful RN internals we would then own forever across RN bumps.
+//
+// So instead of replacing the file, we change the ANSWER IT GETS. When
+// TextInput.js asks `Platform.OS`, and only when TextInput.js asks, it is told
+// 'ios' -- the desktop-shaped arm, same rule as PLATFORM_FORKED above. Every
+// other importer of Platform still gets 'impeller'.
+//
+// ⚠️ MATCHED ON THE *IMPORTER*, NOT ON THE RESOLVED FILE.
+// The other two tables inspect what a request resolved TO. This one inspects
+// who ASKED. Metro gives us that as `context.originModulePath`. Keying this on
+// the resolved path instead would swap Platform for the entire bundle, which
+// is the global lie this design exists to avoid.
+const IOS_BRANCHED_IMPORTERS = {
+  'react-native/Libraries/Components/TextInput/TextInput.js':
+    'Platform.impeller-as-ios.js',
+};
+
+// The module specifier TextInput.js actually writes is RELATIVE
+// (`import Platform from '../../Utilities/Platform'`), so this is checked
+// against the RESOLVED Platform path, gated by the origin file.
+const PLATFORM_MODULE_SUFFIX =
+  'react-native/Libraries/Utilities/Platform.js';
+
 function toPosix(p) {
   return p.split(path.sep).join('/');
+}
+
+function shimForOrigin(originModulePath, resolvedFilePath) {
+  if (!originModulePath || !resolvedFilePath) return null;
+  if (!toPosix(resolvedFilePath).endsWith(PLATFORM_MODULE_SUFFIX)) return null;
+  const origin = toPosix(originModulePath);
+  for (const [suffix, shim] of Object.entries(IOS_BRANCHED_IMPORTERS)) {
+    if (origin.endsWith(suffix)) return path.join(SHIM_DIR, shim);
+  }
+  return null;
 }
 
 function shimForResolvedPath(filePath) {
@@ -106,6 +147,10 @@ function withImpeller(config = {}) {
     if (platform !== 'impeller' || !resolution || resolution.type !== 'sourceFile') {
       return resolution;
     }
+    // Origin-scoped first: it is the narrower rule, and the only one that can
+    // return a DIFFERENT Platform than the global shim.
+    const originShim = shimForOrigin(context.originModulePath, resolution.filePath);
+    if (originShim) return {type: 'sourceFile', filePath: originShim};
     const shim = shimForResolvedPath(resolution.filePath);
     return shim ? {type: 'sourceFile', filePath: shim} : resolution;
   }
@@ -119,7 +164,9 @@ function withImpeller(config = {}) {
 module.exports = {
   withImpeller,
   shimForResolvedPath,
+  shimForOrigin,
   SHIM_TARGETS,
   PLATFORM_FORKED,
+  IOS_BRANCHED_IMPORTERS,
   SHIM_DIR,
 };
