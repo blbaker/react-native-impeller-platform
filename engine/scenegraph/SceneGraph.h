@@ -169,6 +169,34 @@ struct SceneNode {
   // Linear: x1,y1,x2,y2. Radial: fx,fy,rx,ry (cx/cy carried in [4],[5]).
   float svgGradientCoords[6]{0, 0, 1, 0, 0, 0};
   int svgGradientUnits{0};  // 0 = objectBoundingBox, 1 = userSpaceOnUse
+  // ⛔ THE ROOT <Svg>'s OWN viewBox. ENG-05a.
+  //
+  // NOT the same storage as svgSymbolViewBox, and deliberately so. A <Symbol>'s
+  // viewBox is consumed at each <Use> SITE (SceneGraph.cpp, the isSvgUse
+  // branch) because one symbol scales differently per instance. The root's is
+  // consumed by the root itself, once, around its own child walk. Sharing one
+  // array would make a <Symbol> nested inside an <Svg> overwrite its parent's
+  // mapping -- and the symptom would be "the icon is subtly the wrong size",
+  // which reads as a design tweak rather than a bug.
+  //
+  // Before this existed the root viewBox was PARSED by codegen
+  // (RNSVGSvgViewProps::minX/minY/vbWidth/vbHeight in
+  // engine/svg/generated/.../Props.h) and then dropped on the floor: the props
+  // reader had no RNSVGSvgView branch at all, so every path painted in raw user
+  // units. A 16x16 <Svg viewBox="0 0 24 24"> declared a 16x16 Yoga box and
+  // painted 24 units of art into it, overflowing 8pt.
+  bool isSvgRoot{false};
+  bool svgRootHasViewBox{false};
+  float svgRootViewBox[4]{0, 0, 0, 0};  // minX, minY, vbWidth, vbHeight
+  // preserveAspectRatio, split as rnsvg ships it: `align` is the alignment
+  // token ("xMidYMid", "none", ...) and `meetOrSlice` is 0=meet, 1=slice.
+  // An EMPTY align means the prop was never set, which SVG defines as
+  // "xMidYMid meet" -- NOT as "none". Treating unset as none is the specific
+  // mistake that makes every square icon look correct and every non-square one
+  // stretch.
+  std::string svgRootAlign;
+  int svgRootMeetOrSlice{0};
+
 
   std::vector<facebook::react::Tag> children;
   facebook::react::Tag parent{};

@@ -491,6 +491,36 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       // so the stroke pass is unambiguously what paints.
       node.svgHasFill = false;
     }
+  } else if (node.componentName == "RNSVGSvgView") {
+    // ⛔ THE ROOT <Svg> IS A VIEWPORT, NOT A CONTAINER. ENG-05a.
+    //
+    // Before this branch existed the chain fell straight through to the else,
+    // so a root <Svg viewBox="0 0 24 24"> at width 16 height 16 declared a
+    // 16x16 Yoga frame and then painted 24 user units of path data into it at
+    // 1:1. Every design-system Icon is a 24-unit viewBox drawn at 16 in buttons
+    // and 20 in the rail, so every glyph overflowed its centred box downward
+    // and sat low. The props were never missing -- RNSVGSvgViewProps has
+    // carried minX/minY/vbWidth/vbHeight all along (engine/svg/generated/react/
+    // renderer/components/rnsvg/Props.h) -- there was simply no consumer.
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGSvgViewProps*>(view.props.get())) {
+      node.isSvgRoot = true;
+      node.svgRootViewBox[0] = (float)pp->minX;
+      node.svgRootViewBox[1] = (float)pp->minY;
+      node.svgRootViewBox[2] = (float)pp->vbWidth;
+      node.svgRootViewBox[3] = (float)pp->vbHeight;
+      // ⚠️ A ZERO-OR-NEGATIVE EXTENT MEANS "NO viewBox DECLARED", NOT "SCALE BY
+      // ZERO". rnsvg default-initialises all four to 0.0, so an <Svg> with no
+      // viewBox at all is indistinguishable from one declaring an empty box.
+      // Dividing here would map every coordinate to infinity and paint
+      // nothing -- the silent-blank failure this file keeps producing. The
+      // painter is gated on this flag and falls back to raw user units, which
+      // is exactly what SVG specifies for a missing viewBox.
+      node.svgRootHasViewBox =
+          node.svgRootViewBox[2] > 0.0f && node.svgRootViewBox[3] > 0.0f;
+      node.svgRootAlign = pp->align;
+      node.svgRootMeetOrSlice = pp->meetOrSlice;
+    }
   } else if (node.componentName == "RNSVGDefs" ||
              node.componentName == "RNSVGClipPath" ||
              node.componentName == "RNSVGMask") {
@@ -756,6 +786,92 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerDisplayListBuilderSave(builder);
     ImpellerDisplayListBuilderTransform(builder, &sm);
   }
+  // ⛔ THE ROOT <Svg> viewBox MAPPING. ENG-05a.
+  //
+  // Wraps this node AND its subtree, so the save is here and the restore sits
+  // next to the svgTransformed one after the child walk. A mapping applied only
+  // around the root's own draws would be a no-op, because the root paints no
+  // ink of its own -- every path is a descendant.
+  //
+  // ⛔ THIS IS A UNIFORM SCALE, NOT w/vbW BY h/vbH.
+  //
+  // SVG's default preserveAspectRatio is "xMidYMid meet": scale by
+  // min(w/vbW, h/vbH) and CENTRE the leftover slack. Independent per-axis
+  // scaling is only correct for align="none". The two agree exactly when the
+  // aspect ratios match -- and every icon in the design system is a square 16
+  // or 20 box over a square 24 viewBox, so a per-axis stretch passes every
+  // square fixture and silently distorts the first non-square SVG anyone
+  // authors. That is why the acceptance probe needs a 32x16-over-24 arm; a
+  // square-only probe cannot tell the two implementations apart.
+  const bool svgRootMapped = node.isSvgRoot && node.svgRootHasViewBox;
+  if (svgRootMapped) {
+    const float vbX = node.svgRootViewBox[0];
+    const float vbY = node.svgRootViewBox[1];
+    const float vbW = node.svgRootViewBox[2];
+    const float vbH = node.svgRootViewBox[3];
+    const float sxRaw = w / vbW;
+    const float syRaw = h / vbH;
+
+    // align="none" is the ONLY value that means "stretch". Empty means the prop
+    // was never set, which SVG defines as xMidYMid meet -- not none.
+    const bool noneAlign = node.svgRootAlign == "none";
+    // meetOrSlice: 0 = meet (fit inside, letterbox), 1 = slice (fill, overflow).
+    const bool slice = node.svgRootMeetOrSlice == 1;
+    float sx = sxRaw, sy = syRaw;
+    if (!noneAlign) {
+      const float s = slice ? std::max(sxRaw, syRaw) : std::min(sxRaw, syRaw);
+      sx = s;
+      sy = s;
+    }
+
+    // Slack is what the uniform scale left over on each axis; align says who
+    // gets it. xMin/yMin keep it all at the far edge, xMax/yMax at the near
+    // edge, xMid/yMid (the default) split it. Under "slice" the slack is
+    // NEGATIVE -- the drawing is larger than the box -- and the identical
+    // arithmetic centres the overflow, which is what slice means.
+    const float slackX = w - vbW * sx;
+    const float slackY = h - vbH * sy;
+    float offX = 0.0f, offY = 0.0f;
+    if (!noneAlign) {
+      const auto& a = node.svgRootAlign;
+      // Substring tests rather than an exact match on all nine tokens: the X
+      // and Y halves are independent and rnsvg ships them concatenated.
+      if (a.find("xMax") != std::string::npos) {
+        offX = slackX;
+      } else if (a.find("xMin") == std::string::npos) {
+        offX = slackX * 0.5f;  // xMid, and the unset default
+      }
+      if (a.find("YMax") != std::string::npos) {
+        offY = slackY;
+      } else if (a.find("YMin") == std::string::npos) {
+        offY = slackY * 0.5f;  // YMid, and the unset default
+      }
+    }
+
+    // A path's `d` coordinate u is painted at absolute (x + u): the path
+    // painter translates by the node's origin before drawing, and every RNSVG
+    // child's layout frame origin is 0 because rnsvg lays out in SVG user
+    // space. So the map from a painted point q back through user space is
+    //     q' = x + off + (q - x - vbMin) * s
+    // which folds into a plain scale-and-translate.
+    const float tx = x + offX - sx * (x + vbX);
+    const float ty = y + offY - sy * (y + vbY);
+    ImpellerMatrix vbm = {{sx, 0, 0, 0,
+                           0, sy, 0, 0,
+                           0, 0, 1, 0,
+                           tx, ty, 0, 1}};
+    ImpellerDisplayListBuilderSave(builder);
+    // ⚠️ CLIP BEFORE THE TRANSFORM, in the node's own painted space. Under
+    // "slice" the scaled drawing is deliberately larger than the viewport and
+    // MUST be cut to it; without this the overflow paints over sibling UI and
+    // reads as a z-order bug. Under "meet" the drawing fits and the clip is
+    // harmless, so it is unconditional rather than gated on the mode.
+    ImpellerRect vbClip = {x, y, w, h};
+    ImpellerDisplayListBuilderClipRect(builder, &vbClip,
+                                       kImpellerClipOperationIntersect);
+    ImpellerDisplayListBuilderTransform(builder, &vbm);
+  }
+
 
   ImpellerRoundingRadii radii = {};
   // Field order is TL, BL, TR, BR — not clockwise. node.borderRadii is stored
@@ -1031,6 +1147,13 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     }
   }
   if (clip) {
+    ImpellerDisplayListBuilderRestore(builder);
+  }
+  // Paired with the viewBox save above. AFTER the child walk, for the same
+  // reason the SVG-matrix restore is: the mapping exists to transform the
+  // subtree, so restoring before the walk would drop it entirely while leaving
+  // the save/restore count balanced -- a silent no-op rather than a crash.
+  if (svgRootMapped) {
     ImpellerDisplayListBuilderRestore(builder);
   }
   // Paired with the save above; must come AFTER the child walk so a group's
