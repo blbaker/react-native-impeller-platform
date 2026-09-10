@@ -262,6 +262,25 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
     self->dispatchCursorPoint(cx, cy, action == GLFW_PRESS);
   });
 
+  // <ScrollView>. ENG-02. THE SECOND REGISTRATION THAT WAS ABSENT.
+  // glfwSetScrollCallback was measured at ZERO occurrences in this tree before
+  // this line, exactly as glfwSetMouseButtonCallback was before the block
+  // above. Same failure shape: a <ScrollView> mounts, lays out, paints its
+  // first screenful and never moves, and nothing logs.
+  //
+  // ⛔ THE POSITION IS READ AT THE EVENT, NOT TRACKED. Same argument as the
+  // button callback: GLFW guarantees glfwGetCursorPos is current here, and a
+  // wheel event can arrive with no preceding cursor-move to have recorded
+  // (wheel over a window that just gained focus).
+  glfwSetScrollCallback(window_, [](GLFWwindow* w, double /*xoffset*/,
+                                    double yoffset) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (!self || !self->scrollHandler_) return;
+    double cx = 0.0, cy = 0.0;
+    glfwGetCursorPos(w, &cx, &cy);
+    self->dispatchScrollPoint(cx, cy, yoffset);
+  });
+
 #if defined(__APPLE__)
   if (!initAngleForWindow(error)) return false;
 #else
@@ -370,6 +389,42 @@ void GlfwSurface::dispatchCursorPoint(double screenX, double screenY,
   const float px = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
   const float py = CursorPointsFromScreen(screenY, fbH, winH, pointScale_);
   mouseButtonHandler_(px, py, down);
+}
+
+void GlfwSurface::setScrollHandler(
+    std::function<void(float, float, float)> handler) {
+  scrollHandler_ = std::move(handler);
+}
+
+// <ScrollView>. ENG-02. The one place screen->points AND the GLFW sign flip
+// happen; see the header for why the flip is not optional.
+void GlfwSurface::dispatchScrollPoint(double screenX, double screenY,
+                                      double glfwDy) {
+  if (!scrollHandler_) return;
+  // Re-read the sizes for the same reason dispatchCursorPoint does: the cached
+  // values are refreshed by the frame loop, which is blocked during a modal
+  // resize drag.
+  int fbW = 0, fbH = 0, winW = 0, winH = 0;
+  if (window_) {
+    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    glfwGetWindowSize(window_, &winW, &winH);
+  }
+  const float px = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
+  const float py = CursorPointsFromScreen(screenY, fbH, winH, pointScale_);
+  // Wheel notches are not points. A notch of 1 that moved the list by one point
+  // would be indistinguishable from a dead scroll to a human, so it is scaled
+  // to a conventional line height. The sign flips here: GLFW positive = wheel
+  // away = scroll UP, RN contentOffset grows going DOWN.
+  constexpr float kPointsPerNotch = 40.0f;
+  scrollHandler_(px, py, (float)(-glfwDy) * kPointsPerNotch);
+}
+
+void GlfwSurface::synthesiseScroll(double screenX, double screenY, double dy) {
+  // Through dispatchScrollPoint, NOT scrollHandler_ directly, so the probe
+  // exercises the same conversion and the same sign flip a real wheel does. A
+  // synthetic path that called the handler with raw numbers would pass while
+  // the real wheel scrolled backwards.
+  dispatchScrollPoint(screenX, screenY, dy);
 }
 
 void GlfwSurface::synthesiseClick(double screenX, double screenY) {

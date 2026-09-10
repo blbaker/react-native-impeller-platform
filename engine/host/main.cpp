@@ -107,6 +107,10 @@ void Usage() {
           "                     The startup line states which is in force:\n"
           "                     '(--scale override)' vs '(from framebuffer)'.\n"
           "                   [--click-after-frames N:X,Y]  (windowed; screen coords)\n"
+          "                   [--scroll-after-frames N:X,Y,dx,dy]  (windowed;\n"
+          "                     screen coords, GLFW notch convention: dy>0 is\n"
+          "                     wheel-away/scroll-up. Synthetic -- it does NOT\n"
+          "                     prove glfwSetScrollCallback is registered.)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
@@ -274,7 +278,11 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 const std::string& screenshotFirstPath,
                 bool pointScaleGiven, int resizeAfterFrames, int resizeToW,
                 int resizeToH, int stallAfterFrames, int stallMs,
-                int clickAfterFrames, double clickX, double clickY) {
+                int clickAfterFrames, double clickX, double clickY,
+                int scrollAfterFrames, double scrollX, double scrollY,
+                double scrollDx, double scrollDy) {
+  (void)scrollDx;  // horizontal scroll is out of scope for ENG-02; parsed and
+                   // carried so the flag's shape does not change when it lands.
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -516,6 +524,22 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     }
   });
 
+  // <ScrollView>. ENG-02. Same shape and the same threading argument as the
+  // touch handler above: dispatch and return, never block the event thread.
+  //
+  // scroll_hit=0 is printed too, for the same reason touch_hit=0 is: "the wheel
+  // was over nothing scrollable" and "the callback never fired" are different
+  // facts, and suppressing the first makes them look identical to a gate.
+  int scrollHits = 0;
+  int scrollEvents = 0;
+  surface.setScrollHandler([&](float x, float y, float dy) {
+    const int hit = fabric.dispatchScroll(x, y, dy);
+    ++scrollEvents;
+    if (hit) ++scrollHits;
+    printf("rn-impeller: scroll hit=%d at=%.1f,%.1f dy=%.1f\n", hit, x, y, dy);
+    fflush(stdout);
+  });
+
   // Reads the framebuffer and writes a PPM. Shared by the frame-0 and the
   // timed capture so the two images are produced by literally the same code
   // path -- if they differed in how they were read back, a difference between
@@ -624,6 +648,24 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       host.waitForJsIdle(5000);
     }
 
+    // ⛔ SYNTHETIC-SCROLL HOOK — WEAKER EVIDENCE, EXACTLY LIKE THE CLICK ONE.
+    // Routes through GlfwSurface::synthesiseScroll, so it proves the
+    // conversion, the sign flip, the SceneGraph offset and the JS onScroll. It
+    // does NOT prove glfwSetScrollCallback is registered: deleting that
+    // registration leaves this hook green. tools/ci-scroll.sh pairs it with a
+    // REAL XTest wheel event for the registration arm.
+    if (scrollAfterFrames > 0 && frameIndex == scrollAfterFrames) {
+      printf("rn-impeller: scroll_requested at=%.1f,%.1f dy=%.1f (screen coords, "
+             "GLFW notch convention)\n",
+             scrollX, scrollY, scrollDy);
+      fflush(stdout);
+      surface.synthesiseScroll(scrollX, scrollY, scrollDy);
+      // Same reason the click hook waits: onScroll is dispatched onto the JS
+      // thread, so exiting at --frames without draining it would make a working
+      // emitter look dead.
+      host.waitForJsIdle(5000);
+    }
+
 
     // ⛔ The frame-0 capture is what makes an animation gate possible at all.
     // A single timed screenshot proves only that SOMETHING was drawn; it
@@ -660,6 +702,10 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // glfwDestroyWindow can dispatch a queued button event, and a click landing
   // after ~FabricHost would dispatch a touch into freed memory.
   surface.setMouseButtonHandler(nullptr);
+  // <ScrollView>. ENG-02. Same lifetime argument again: the scroll handler
+  // captures `fabric`, and a queued wheel event delivered by glfwDestroyWindow
+  // would dispatch into freed memory.
+  surface.setScrollHandler(nullptr);
 
 
   // Machine-readable evidence that the modal-loop repaint path executed. A
@@ -673,6 +719,12 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // tell those apart, and would call an unregistered callback "no touchables
   // under the cursor".
   printf("rn-impeller: touch_downs=%d touch_hits=%d\n", touchDowns, touchHits);
+  // <ScrollView>. ENG-02. Same rule, same reason: scroll_events=0 means the
+  // wheel callback never fired (the pre-ENG-02 state), which is a different
+  // failure from scroll_events=1 scroll_hits=0 (a wheel arrived over nothing
+  // scrollable). A gate that only counts hits calls the first one the second.
+  printf("rn-impeller: scroll_events=%d scroll_hits=%d\n", scrollEvents,
+         scrollHits);
   // alerts_shown is the host's canonical "JS actually ran" counter. Emitted
   // after the loop so it carries the post-click value; the windowed path had
   // no equivalent of the headless probe's alerts_after_tap until now, so a
@@ -720,6 +772,14 @@ int main(int argc, char** argv) {
   int clickAfterFrames = 0;
   double clickX = 0.0;
   double clickY = 0.0;
+  // <ScrollView>. ENG-02. Screen coordinates and GLFW-convention deltas, same
+  // as the click hook: the flag exercises the conversion, so it must be fed
+  // the same units GLFW itself reports.
+  int scrollAfterFrames = 0;
+  double scrollX = 0.0;
+  double scrollY = 0.0;
+  double scrollDx = 0.0;
+  double scrollDy = 0.0;
   int width = 400, height = 300;
   // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
   // The surface is allocated at width x height PIXELS; layout then happens in
@@ -842,6 +902,51 @@ int main(int argc, char** argv) {
         return 2;
       }
     }
+    // <ScrollView>. ENG-02. Windowed scroll test hook:
+    // "--scroll-after-frames N:X,Y,dx,dy" synthesises a wheel scroll at SCREEN
+    // COORDINATES X,Y with GLFW-convention deltas dx,dy after frame N.
+    //
+    // Named to match --resize-after-frames / --click-after-frames /
+    // --stall-after-frames rather than a bare --scroll: every hook in this host
+    // is anchored to a frame, and an unanchored one would race the first paint.
+    // See the hook site in RunWindowed for why it is the WEAKER half.
+    else if (a == "--scroll-after-frames") {
+      std::string spec = next("--scroll-after-frames");
+      auto colon = spec.find(':');
+      auto c1 = spec.find(',', colon == std::string::npos ? 0 : colon + 1);
+      auto c2 = c1 == std::string::npos ? std::string::npos
+                                        : spec.find(',', c1 + 1);
+      auto c3 = c2 == std::string::npos ? std::string::npos
+                                        : spec.find(',', c2 + 1);
+      if (colon == std::string::npos || c1 == std::string::npos ||
+          c2 == std::string::npos || c3 == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --scroll-after-frames wants N:X,Y,dx,dy (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      scrollAfterFrames = atoi(spec.substr(0, colon).c_str());
+      scrollX = atof(spec.substr(colon + 1, c1 - colon - 1).c_str());
+      scrollY = atof(spec.substr(c1 + 1, c2 - c1 - 1).c_str());
+      scrollDx = atof(spec.substr(c2 + 1, c3 - c2 - 1).c_str());
+      scrollDy = atof(spec.substr(c3 + 1).c_str());
+      if (scrollAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --scroll-after-frames needs N > 0 (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      // A zero delta would produce a scroll event that cannot move anything,
+      // and a gate asserting "the offset changed" would fail with a message
+      // about scrolling rather than about its own arguments.
+      if (scrollDx == 0.0 && scrollDy == 0.0) {
+        fprintf(stderr,
+                "rn-impeller: --scroll-after-frames needs a non-zero dx or dy "
+                "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
@@ -947,7 +1052,8 @@ int main(int argc, char** argv) {
                        logMutations, frames, screenshotAfterMs, screenshot,
                        screenshotFirst, pointScaleGiven, resizeAfterFrames,
                        resizeToW, resizeToH, stallAfterFrames, stallMs,
-                       clickAfterFrames, clickX, clickY);
+                       clickAfterFrames, clickX, clickY,
+                       scrollAfterFrames, scrollX, scrollY, scrollDx, scrollDy);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "

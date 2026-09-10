@@ -124,6 +124,20 @@ class GlfwSurface {
   // there is no RN touch concept for them.
   void setMouseButtonHandler(std::function<void(float x, float y, bool down)> handler);
 
+  // <ScrollView>. ENG-02. Wheel/trackpad scroll, delivered as LAYOUT POINTS at
+  // the cursor's LAYOUT POINT position -- the same conversion, in the same one
+  // place, as the mouse button handler above, for the same reason.
+  //
+  // ⛔ dy IS INVERTED RELATIVE TO GLFW HERE, DELIBERATELY.
+  // GLFW reports yoffset POSITIVE when the wheel is pushed away from the user
+  // (scroll up), matching a "content moves down" convention. RN's contentOffset
+  // grows as you move DOWN a list. Passing GLFW's sign straight through gives a
+  // list that scrolls the wrong way -- which is a fully functional scroll
+  // implementation that every user calls broken, and which no assertion about
+  // "did the offset change" can catch. The flip happens at this boundary so
+  // both the real callback and the synthetic probe path share it.
+  void setScrollHandler(std::function<void(float x, float y, float dy)> handler);
+
   // The effective layout scale, kept in sync by the host on every resize so the
   // cursor conversion cannot drift from the painter's root transform. Set from
   // the SAME DeriveWindowPointScale result the layout uses; see the host's
@@ -140,6 +154,17 @@ class GlfwSurface {
   // coordinate assertions and drives a REAL XTest pointer click for the
   // registration assertion. See that gate's header.
   void synthesiseClick(double screenX, double screenY);
+
+  // <ScrollView>. ENG-02. Synthesises a wheel scroll of `dy` GLFW-convention
+  // units at a SCREEN-COORDINATE point, entering the same conversion and the
+  // same handler the real GLFW scroll callback does.
+  //
+  // ⚠️ SAME WARNING AS synthesiseClick, AND IT IS THE ONE THAT MATTERS FOR
+  // ENG-02: this is NOT proof glfwSetScrollCallback is registered. It calls
+  // the handler directly, so it passes with the registration deleted.
+  // tools/ci-scroll.sh uses it for the offset/emitter assertions and a REAL
+  // XTest button-4/5 press for the registration assertion.
+  void synthesiseScroll(double screenX, double screenY, double dy);
 
   // Drives a resize from inside the process, for gates. Produces the SAME
   // framebuffer-size callback a user drag produces; it is the identical code
@@ -224,6 +249,11 @@ class GlfwSurface {
   // human click does rather than a parallel copy of it.
   void dispatchCursorPoint(double screenX, double screenY, bool down);
 
+  // <ScrollView>. ENG-02. Same role for scroll that dispatchCursorPoint plays
+  // for clicks: the ONE place the screen->points conversion AND the GLFW sign
+  // flip happen, shared by the real callback and synthesiseScroll().
+  void dispatchScrollPoint(double screenX, double screenY, double glfwDy);
+
   int width_{0};
   int height_{0};
   int pointWidth_{0};
@@ -244,6 +274,9 @@ class GlfwSurface {
   // resolved. Same threading argument as refreshHandler_: installed once
   // before the loop, called only from the thread inside glfwPollEvents.
   std::function<void(float, float, bool)> mouseButtonHandler_;
+  // <ScrollView>. ENG-02. Invoked from the GLFW scroll callback with LAYOUT
+  // POINTS and an RN-convention dy. Same threading argument as the two above.
+  std::function<void(float, float, float)> scrollHandler_;
   // The layout scale the cursor conversion divides by. Mirrors the host's
   // pointScale; kept here so the conversion happens once, at the callback,
   // rather than at every caller.

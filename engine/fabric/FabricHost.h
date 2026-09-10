@@ -79,6 +79,16 @@ class FabricHost {
   // the event thread would race the mounting transaction that owns the node.
   int dispatchTouch(TouchPhase phase, float x, float y);
 
+  // <ScrollView>. ENG-02. Applies `dy` POINTS of scroll at (x, y) in points --
+  // the same coordinate space dispatchTouch takes -- and returns the tag of the
+  // ScrollView that took it, or 0 if the point was over nothing scrollable.
+  //
+  // A non-zero return means BOTH the offset moved (or was already clamped at
+  // the end) AND an onScroll was scheduled onto the JS thread. A zero means no
+  // scrollable node was under the point OR the node found could not emit
+  // scroll events, which is what an unregistered ScrollView looks like.
+  int dispatchScroll(float x, float y, float dy);
+
   // The component names this host can actually mount. Handed to ReactHost so
   // RN's NativeComponentRegistry and this registry cannot drift apart.
   static std::vector<std::string> knownComponentNames();

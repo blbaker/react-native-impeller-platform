@@ -2,6 +2,8 @@
 
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
 #include <react/renderer/components/root/RootComponentDescriptor.h>
+#include <react/renderer/components/scrollview/ScrollViewComponentDescriptor.h>
+#include <react/renderer/components/scrollview/ScrollViewEventEmitter.h>
 #include <react/renderer/components/text/ParagraphComponentDescriptor.h>
 #include <react/renderer/components/text/RawTextComponentDescriptor.h>
 #include <react/renderer/components/text/TextComponentDescriptor.h>
@@ -134,7 +136,7 @@ std::vector<std::string> FabricHost::knownComponentNames() {
   // the other fails in a way that looks exactly like "the engine does not
   // have it": RN takes a fallback path, nothing mounts, nothing logs.
   std::vector<std::string> names = {"View", "RootView", "Paragraph", "Text",
-                                     "RawText"};
+                                     "RawText", "ScrollView"};
 #if RNI_WITH_RNSVG
   names.insert(names.end(), {"RNSVGSvgView", "RNSVGGroup", "RNSVGPath",
                              "RNSVGRect", "RNSVGCircle", "RNSVGEllipse",
@@ -164,6 +166,15 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
       react::concreteComponentDescriptorProvider<react::TextComponentDescriptor>());
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::RawTextComponentDescriptor>());
+  // <ScrollView>. ENG-02.
+  //
+  // ⛔ REGISTRATION IS THE WHOLE FEATURE'S FLOOR, NOT A DETAIL.
+  // Without this line a <ScrollView> still MOUNTS -- as a plain View with
+  // ViewProps -- lays out, paints its children, and logs nothing wrong. It is
+  // indistinguishable from "scrolling is unimplemented" by reading paint code,
+  // which is why this add() is checked before any painter change.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::ScrollViewComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // RNSVGSvgView's ComponentDescriptor is OUR codegen output (react-native-svg's
   // Svg.js resolves to the platform-suffixed name, which only the codegen
@@ -415,6 +426,54 @@ int FabricHost::dispatchTouch(TouchPhase phase, float x, float y) {
         }
       });
   return (int)target;
+}
+
+// <ScrollView>. ENG-02.
+//
+// ⛔ TWO EFFECTS, AND THEY MUST BOTH HAPPEN OR THE FEATURE IS A LIE.
+//   1. The SceneGraph offset moves, so the next paint shows different rows.
+//   2. onScroll fires in JS, so React state that tracks scroll position (sticky
+//      headers, "load more" at the end, a progress bar) updates.
+// An engine that only does (1) scrolls beautifully and breaks every list that
+// reacts to scrolling; one that only does (2) reports motion that never
+// happened. Both are indistinguishable from working if you check only the
+// other one.
+int FabricHost::dispatchScroll(float x, float y, float dy) {
+  if (!sceneGraph_ || !runtimeScheduler_) return 0;
+
+  const auto res = sceneGraph_->scrollBy(x, y, dy);
+  if (res.tag == 0) return 0;
+
+  auto emitter = sceneGraph_->eventEmitterFor(res.tag);
+  if (!emitter) return 0;
+  // Same discrimination as dispatchTouch: an UNREGISTERED ScrollView mounts
+  // with a base ViewEventEmitter, so this cast is what separates "there is no
+  // scroll view here" from "there is one but it cannot report scrolling".
+  // Without the descriptor registration in setup() this cast fails every time
+  // while the offset above still moves -- pixels would scroll and JS would
+  // never hear about it.
+  auto scrollEmitter =
+      std::dynamic_pointer_cast<const react::ScrollViewEventEmitter>(emitter);
+  if (!scrollEmitter) return 0;
+
+  react::ScrollEvent event{};
+  event.contentOffset = {0.0f, (react::Float)res.offsetY};
+  event.contentSize = {(react::Float)0.0f, (react::Float)res.contentHeight};
+  event.containerSize = {(react::Float)0.0f, (react::Float)res.containerHeight};
+  event.zoomScale = 1.0f;
+  event.timestamp =
+      (react::Float)std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count() /
+      1000.0f;
+
+  // Hop to the JS thread, for the same reason dispatchTouch does: the emitter
+  // reaches into the runtime.
+  runtimeScheduler_->scheduleWork(
+      [scrollEmitter, event](facebook::jsi::Runtime&) {
+        scrollEmitter->onScroll(event);
+      });
+  return (int)res.tag;
 }
 
 }  // namespace rni

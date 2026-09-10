@@ -70,6 +70,22 @@ struct SceneNode {
 
   bool overflowHidden{false};
 
+  // <ScrollView>. ENG-02.
+  //
+  // ⛔ THE OFFSET IS THE HOST'S STATE, NOT THE SHADOW TREE'S.
+  // On a real platform the scroll position lives in the native scroll view and
+  // is REPORTED to React; RN's ScrollViewShadowNode carries a contentOffset for
+  // restoration, not as the frame-to-frame source of truth. This engine IS the
+  // platform, so the offset is owned here and survives mutation transactions --
+  // reading it back off props every commit would snap the list to the top on
+  // any unrelated re-render, which reads as "scrolling doesn't stick".
+  bool isScrollView{false};
+  float scrollY{0.0f};
+  // Content height as last laid out (the single child's frame height). Cached
+  // at paint/mutation time so clamping does not have to walk the tree from the
+  // event thread.
+  float scrollContentHeight{0.0f};
+
   // Text (Paragraph nodes). Laid out at mount time from ParagraphState so the
   // painted text is the same object that was measured.
   bool isParagraph{false};
@@ -207,6 +223,25 @@ class SceneGraph {
   explicit SceneGraph(ImpellerTypographyContext typography);
 
   // Applies one MountingTransaction's mutations, in order.
+  struct ScrollResult {
+    facebook::react::Tag tag{0};
+    float offsetY{0.0f};
+    float contentHeight{0.0f};
+    float containerHeight{0.0f};
+    bool moved{false};
+  };
+
+  // Finds the topmost ScrollView under (x, y) in POINTS -- same space as
+  // hitTest -- and adds `dy` points to its offset, clamped to
+  // [0, contentHeight - containerHeight].
+  //
+  // ⛔ CLAMPED HERE, NOT IN THE CALLER. The host does not know the content
+  // height, and an unclamped offset scrolls a 6-row list into empty space
+  // forever while still emitting perfectly plausible onScroll events -- the
+  // failure looks like "the list is blank" long after the wheel stopped.
+  facebook::react::Tag scrollViewAt(float x, float y);
+  ScrollResult scrollBy(float x, float y, float dy);
+
   void applyMutations(const facebook::react::ShadowViewMutation::List& mutations,
                       bool log = false);
 

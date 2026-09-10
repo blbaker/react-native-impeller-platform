@@ -261,6 +261,29 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
 
     node.overflowHidden = props->getClipsContentToBounds();
 
+    // <ScrollView>. ENG-02.
+    //
+    // ⛔ IDENTIFIED BY COMPONENT NAME, AND THE NAME IS ONLY CORRECT BECAUSE THE
+    // DESCRIPTOR IS REGISTERED. An unregistered ScrollView arrives here with
+    // componentName "ScrollView" too -- the name rides on the ShadowView -- but
+    // with plain ViewProps and, crucially, a base ViewEventEmitter, so the
+    // dynamic_cast in FabricHost::dispatchScroll fails and onScroll can never
+    // fire. Marking isScrollView is therefore necessary and NOT sufficient; the
+    // registration in FabricHost.cpp is the other half.
+    //
+    // ⚠️ scrollY IS NOT RESET HERE. This function runs on every Update
+    // mutation, and clearing the offset would scroll the list back to the top
+    // whenever any prop on it changed.
+    node.isScrollView = (node.componentName == "ScrollView");
+    if (node.isScrollView) {
+      // A ScrollView clips by definition. RN's ScrollViewProps does not set
+      // overflow:hidden by default the way a native scroll view implies it, so
+      // relying on getClipsContentToBounds alone leaves the off-screen rows
+      // painting over everything below the viewport -- content that scrolls
+      // correctly and is drawn outside its own frame.
+      node.overflowHidden = true;
+    }
+
     // TRANSFORM. resolveTransform() applies transform-origin and turns the
     // operation list into a matrix; reading props->transform.matrix directly
     // skips the origin translation, so a rotation would pivot about the node's
@@ -1094,10 +1117,29 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerDisplayListBuilderClipRect(builder, &rect,
                                        kImpellerClipOperationIntersect);
   }
+  // <ScrollView>. ENG-02. The offset shifts the CHILD ORIGIN, it does not move
+  // this node.
+  //
+  // ⛔ THE CLIP IS TAKEN BEFORE THE SHIFT, ON PURPOSE. The clip rect is this
+  // node's frame in the PARENT's space -- the viewport, which does not move --
+  // while the content slides underneath it. Applying the shift first (or
+  // translating the builder around both) would drag the clip rect along with
+  // the content, so rows would scroll and the window onto them would scroll
+  // too: nothing would ever appear to move, and every offset would still be
+  // arithmetically correct. That is the failure mode this ordering exists to
+  // prevent.
+  //
+  // ⚠️ Done by adjusting the child origin rather than by a builder translate so
+  // it composes with the SVG/transform saves above without a fourth save/
+  // restore pair to keep balanced.
+  float childOriginY = y;
+  if (node.isScrollView) {
+    childOriginY -= node.scrollY;
+  }
   for (auto childTag : node.children) {
     auto it = nodes_.find(childTag);
     if (it != nodes_.end()) {
-      paintNode(builder, it->second, x, y);
+      paintNode(builder, it->second, x, childOriginY);
     }
   }
 
@@ -1414,11 +1456,21 @@ facebook::react::Tag SceneGraph::hitTestNode(const SceneNode& node,
   // children do paint, so they must remain hittable.
   if (node.overflowHidden && !inside) return 0;
 
+  // ⛔ THE SCROLL OFFSET MUST BE APPLIED TO THE CHILD ORIGIN HERE TOO.
+  // paintNode shifts a ScrollView's children by -scrollY; if this walk did not,
+  // hit testing would use the UNSCROLLED positions and every press after a
+  // scroll would land on whichever row used to be there. That bug paints
+  // perfectly and logs nothing -- the only symptom is "tapping row 3 opens
+  // row 1" -- so the two shifts are deliberately written as the same
+  // expression and must be changed together.
+  //
   // Reverse paint order: last painted is topmost, so it is tested first.
+  const float childOriginY = node.isScrollView ? ny - node.scrollY : ny;
+
   for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
     auto child = nodes_.find(*it);
     if (child == nodes_.end()) continue;
-    if (auto hit = hitTestNode(child->second, nx, ny, x, y)) return hit;
+    if (auto hit = hitTestNode(child->second, nx, childOriginY, x, y)) return hit;
   }
 
   // Zero-sized nodes are never targets. This matters more than it looks: a
@@ -1466,6 +1518,98 @@ std::string SceneGraph::describe() {
     out += buf;
   }
   return out;
+}
+
+// <ScrollView>. ENG-02.
+//
+// Walks UP from whatever the point hit, rather than down looking for a
+// ScrollView. A wheel over a row must scroll the list that contains the row,
+// and the row is what hitTest resolves -- searching downward would find the
+// ScrollView only when the pointer happened to be over its background, i.e.
+// only on an empty list.
+facebook::react::Tag SceneGraph::scrollViewAt(float x, float y) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  facebook::react::Tag hit = 0;
+  for (auto it = roots_.rbegin(); it != roots_.rend(); ++it) {
+    auto root = nodes_.find(*it);
+    if (root == nodes_.end()) continue;
+    if ((hit = hitTestNode(root->second, 0, 0, x, y))) break;
+  }
+  if (hit == 0) return 0;
+
+  // Bounded: a corrupt parent chain that formed a cycle would hang the event
+  // thread, which is worse than missing a scroll.
+  int guard = 0;
+  facebook::react::Tag cur = hit;
+  while (cur != 0 && guard++ < 256) {
+    auto it = nodes_.find(cur);
+    if (it == nodes_.end()) return 0;
+    if (it->second.isScrollView) return cur;
+    cur = it->second.parent;
+  }
+  return 0;
+}
+
+SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dy) {
+  ScrollResult r{};
+  const facebook::react::Tag tag = scrollViewAt(x, y);
+  if (tag == 0) return r;
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end()) return r;
+  SceneNode& sv = it->second;
+
+  // ⛔ CONTENT HEIGHT IS THE UNION OF EVERY CHILD, NOT children.front().
+  //
+  // Measured on fixtures/p9-scroll: ScrollView tag 40 has TWO children --
+  // View 42 at 400x300 and the content container View 38 at 400x600 (six
+  // 100pt rows). front() returned the 300-tall one, so contentH == containerH,
+  // maxOffset == max(0, 300-300) == 0, and EVERY scroll clamped to zero.
+  //
+  // That failure is invisible to a presence check and nearly invisible to a
+  // human: dy arrives correct (the log says dy=80.0), scrollViewAt resolves the
+  // right tag, onScroll fires in JS with a real event, and the pixels never
+  // move. Three of the four signals are healthy. Only an assertion on the
+  // scroll DISTANCE catches it -- an inequality against the resting frame
+  // would have passed, which is exactly what the gate comment at
+  // tools/ci-scroll.sh:213 warns about for the opposite mistake.
+  //
+  // Union rather than "the tallest child" or "the last child": child order is
+  // not guaranteed and the container is not reliably front() or back(). The
+  // union of origin.y + height is correct for a single content container AND
+  // for a ScrollView whose children were laid out directly, and it cannot be
+  // fooled by sibling order changing between commits.
+  //
+  // Read live rather than from a paint-time cache: a headless run that never
+  // painted would otherwise clamp against zero and refuse to scroll at all,
+  // which reads as "scrolling is broken" when it is only "nothing has painted
+  // yet".
+  float contentH = 0.0f;
+  for (auto childTag : sv.children) {
+    auto content = nodes_.find(childTag);
+    if (content == nodes_.end()) continue;
+    const auto& cf = content->second.layoutMetrics.frame;
+    contentH = std::max(contentH, (float)(cf.origin.y + cf.size.height));
+  }
+  const float containerH = (float)sv.layoutMetrics.frame.size.height;
+
+  // Clamp to [0, contentH - containerH]. A content shorter than its container
+  // has NO scrollable range, and max would go negative -- std::max with 0 is
+  // what keeps a short list pinned at the top instead of drifting upward.
+  const float maxOffset = std::max(0.0f, contentH - containerH);
+  const float before = sv.scrollY;
+  float next = sv.scrollY + dy;
+  if (next < 0.0f) next = 0.0f;
+  if (next > maxOffset) next = maxOffset;
+  sv.scrollY = next;
+
+  r.tag = tag;
+  r.offsetY = next;
+  r.contentHeight = contentH;
+  r.containerHeight = containerH;
+  r.moved = (next != before);
+  return r;
 }
 
 }  // namespace rni
