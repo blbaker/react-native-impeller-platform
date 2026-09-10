@@ -16,6 +16,7 @@
 #include "modules/ModuleRegistry.h"
 #include "modules/NetworkingModule.h"
 #include "modules/PlatformModules.h"
+#include "modules/AppStorageModule.h"
 #include "runtime/DeviceEventSink.h"
 #include "runtime/JsThread.h"
 
@@ -55,6 +56,10 @@ class ReactHost {
   std::shared_ptr<AppearanceState> appearance() { return appearance_; }
   std::shared_ptr<AlertRecord> alerts() { return alerts_; }
   std::shared_ptr<std::string> initialUrl() { return initialUrl_; }
+  // ENG-04. The storage container path, resolved once by the host so the
+  // module cannot relocate its own sandbox and a gate can point it at a
+  // disposable directory without touching process-wide state.
+  std::shared_ptr<AppStorageConfig> storage() { return storage_; }
   // Network activity, so a headless run can wait for in-flight REQUESTS and
   // not only for an idle JS thread. See NetworkActivity in NetworkingModule.h.
   std::shared_ptr<NetworkActivity> network() { return network_; }
@@ -89,6 +94,7 @@ class ReactHost {
   std::shared_ptr<AlertRecord> alerts_;
   std::shared_ptr<NetworkActivity> network_;
   std::shared_ptr<std::string> initialUrl_;
+  std::shared_ptr<AppStorageConfig> storage_;
 };
 
 }  // namespace rni

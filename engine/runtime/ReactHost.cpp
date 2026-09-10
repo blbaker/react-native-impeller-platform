@@ -106,6 +106,35 @@ ReactHost::ReactHost() {
   alerts_ = std::make_shared<AlertRecord>();
   network_ = std::make_shared<NetworkActivity>();
   initialUrl_ = std::make_shared<std::string>();
+  // ENG-04. Container resolved ONCE, here, from the environment -- not inside
+  // the module, which must not be able to move its own sandbox.
+  //
+  // ⛔ THE OVERRIDE IS WHAT MAKES THIS TESTABLE, AND IT IS ALSO A RISK.
+  // RNI_STORAGE_DIR lets a gate point storage at a disposable directory so a
+  // two-run persistence test does not write into the developer's real home.
+  // It is read once at construction; nothing after boot can change it.
+  storage_ = std::make_shared<AppStorageConfig>();
+  if (const char* override = std::getenv("RNI_STORAGE_DIR");
+      override != nullptr && *override != '\0') {
+    storage_->container = std::filesystem::path(override);
+  } else {
+    // Default: an app-scoped directory under the user's data location. NOT the
+    // cwd -- a storage container that moves when you run the binary from a
+    // different directory looks like "settings randomly reset".
+    const char* home = std::getenv("HOME");
+#if defined(_WIN32)
+    if (home == nullptr) home = std::getenv("USERPROFILE");
+#endif
+    std::filesystem::path base =
+        home != nullptr ? std::filesystem::path(home) : std::filesystem::path(".");
+#if defined(__APPLE__)
+    // The darwin app container, which is what the ledger row asked for.
+    base = base / "Library" / "Application Support";
+#else
+    base = base / ".local" / "share";
+#endif
+    storage_->container = base / "rn-impeller" / "storage";
+  }
 
   auto jsRuntime = react::HermesInstance::createJSRuntime(
       /*crashManager*/ nullptr, jsThread_, /*allocInOldGenBeforeTTI*/ false);
@@ -200,6 +229,18 @@ ReactHost::ReactHost() {
   // ran fine and every request failed. See NetworkingModule.h.
   modules_->add("Networking", [n = network_](auto inv) {
     return std::make_shared<NetworkingModule>(inv, n);
+  });
+  // ENG-04 shape B. ONE narrow file primitive; the AsyncStorage-shaped API is
+  // a JS shim on top. See AppStorageModule.h for why the engine does not vend
+  // a Storage API itself -- short version: persistence is not a renderer
+  // concern, and every future syscall need would otherwise become its own
+  // hand-written engine surface.
+  //
+  // ⚠️ NOT getEnforcing'd by anything in RN, so its absence would be SILENT --
+  // the same trap Networking documents two lines up. The gate therefore asserts
+  // a real round trip, not that the module resolves.
+  modules_->add("AppStorage", [s = storage_](auto inv) {
+    return std::make_shared<AppStorageModule>(inv, s);
   });
 
   auto moduleProvider = [jsInvoker, modules = modules_](
