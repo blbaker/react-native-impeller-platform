@@ -92,22 +92,40 @@ for x in xs[1:]:
     else: groups.append(cur); cur=[x]
 groups.append(cur)
 print("   shapes found: %d" % len(groups))
-want=[6400,3200,4800,4800,3000]
-hull=[6400,3200,6400,6400,3200]
-name=["A square ","B diamond","C the L  ","D arrow  ","E notched"]
+# true areas by shoelace; hull by convex hull of the same vertices.
+# E's old notched pentagon had true 3100 vs hull 3200 -- a 3.2% gap that NO
+# workable tolerance could separate, so that arm passed either way. E is now a
+# deep V: true 4600, hull 6400, bbox 6400. Both wrong answers are +39%.
+want=[6400,3200,4800,4800,4600]
+hull=[6400,3200,5600,6400,6400]
+bbox=[6400,3200,6400,6400,6400]
+name=["A square ","B diamond","C the L  ","D arrow  ","E deep-V "]
 bad=0
 for i,g in enumerate(groups):
     if i>=len(want): break
     sel=[(x,y) for x,y in lit if g[0]<=x<=g[-1]]
     ys=[y for x,y in sel]; a=len(sel)
     err=100.0*(a-want[i])/want[i]
-    verdict="TRUE-AREA" if abs(err)<=8 else ("CONVEX-HULL" if abs(a-hull[i])<=0.08*hull[i] else "NEITHER")
+    # every concave arm now has >=16% clearance to both wrong answers, so 8%
+    # cannot reach either one. Assert that, rather than trusting it.
+    if want[i] != hull[i] and abs(hull[i]-want[i]) <= 0.16*want[i]:
+        print("CONCAVE_FAIL: arm %d cannot distinguish true from hull" % i); sys.exit(1)
+    if want[i] != bbox[i] and abs(bbox[i]-want[i]) <= 0.16*want[i]:
+        print("CONCAVE_FAIL: arm %d cannot distinguish true from bbox" % i); sys.exit(1)
+    if abs(err)<=8:
+        verdict="TRUE-AREA"
+    elif abs(a-hull[i])<=0.08*hull[i]:
+        verdict="CONVEX-HULL"
+    elif abs(a-bbox[i])<=0.08*bbox[i]:
+        verdict="BOUNDING-BOX"
+    else:
+        verdict="NEITHER"
     if verdict!="TRUE-AREA": bad+=1
-    print("   %s w=%3d h=%3d area=%5d true=%5d hull=%5d err=%+6.1f%%  %s"
-          % (name[i], g[-1]-g[0]+1, max(ys)-min(ys)+1, a, want[i], hull[i], err, verdict))
+    print("   %s w=%3d h=%3d area=%5d true=%5d hull=%5d bbox=%5d err=%+6.1f%%  %s"
+          % (name[i], g[-1]-g[0]+1, max(ys)-min(ys)+1, a, want[i], hull[i], bbox[i], err, verdict))
 if len(groups)!=5:
     print("CONCAVE_FAIL: found %d shapes, want 5" % len(groups)); sys.exit(1)
 if bad:
     print("CONCAVE_FAIL: %d case(s) did not paint their true area" % bad); sys.exit(1)
-print("CONCAVE_PASS (C, D and E each paint within 8% of true area)")
+print("CONCAVE_PASS (C, D and E paint true area; hull and bbox both excluded)")
 PY
