@@ -17,6 +17,7 @@
 #endif
 
 #include <cstdio>
+#include <cstdlib>
 
 namespace rni {
 
@@ -182,6 +183,39 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
 #endif
 
+  // ⛔ ENG-05b: THE GLFW_SAMPLES EXPERIMENT, BEHIND A FLAG, AND EXPECTED TO DO
+  // NOTHING. Set RNI_GLFW_SAMPLES=N to request an N-sample default framebuffer.
+  //
+  // The macOS peer proposed this as the remaining ENG-05b lead: GlfwSurface
+  // draws into fbo 0, whose sample count comes from the window's framebuffer
+  // config, and nothing here ever asked for multisampling. That reasoning is
+  // sound and the request is now real -- but the spike already answered the
+  // question it is asking, and the answer was no.
+  //
+  // engine/spike/aa_sample_count.cpp arm B hands Impeller a 4x MSAA
+  // renderbuffer through ImpellerSurfaceCreateWrappedFBONew -- the SAME call
+  // this file makes for fbo 0 -- and the readback is BYTE-IDENTICAL to the
+  // single-sample arm A (FILL 3.2% partial / 50 distinct, STROKE 26.7% / 82,
+  // both arms). Impeller resolves its own AA internally into an offscreen MSAA
+  // texture and the sample count of the target we hand it is not consulted.
+  // Re-measured on this binary 2026-09-11, unchanged.
+  //
+  // So this hint is kept OFF by default and exists to be FALSIFIED on hardware:
+  // it costs one env var to re-run the matched pair on a real GPU, where
+  // GL_EXT_multisampled_render_to_texture exists and llvmpipe's behaviour may
+  // not hold. Turning it on by default would be shipping a config change with
+  // no measured effect, which is how a placebo ends up load-bearing.
+  if (const char* samples = std::getenv("RNI_GLFW_SAMPLES")) {
+    const int n = std::atoi(samples);
+    if (n > 0) {
+      glfwWindowHint(GLFW_SAMPLES, n);
+      // Printed, not silent: an unhonoured hint is indistinguishable from an
+      // ignored one, and the whole point of the flag is knowing which.
+      std::printf("rn-impeller: glfw_samples_requested=%d\n", n);
+      std::fflush(stdout);
+    }
+  }
+
   window_ = glfwCreateWindow(width, height, "React Native (Impeller)", nullptr,
                              nullptr);
   if (!window_) return fail("glfwCreateWindow failed");
@@ -316,6 +350,16 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   if (!typography_) return fail("ImpellerTypographyContextNew returned null");
 
   std::printf("rn-impeller: GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
+  // ⛔ REPORT WHAT GL GRANTED, NOT WHAT WE ASKED FOR. GLFW_SAMPLES is a HINT:
+  // a driver may silently hand back a single-sample config, and then "MSAA
+  // changed nothing" and "MSAA was never enabled" are the same observation.
+  // GL_SAMPLES on the live default framebuffer is the only honest number, and
+  // it is what turns a null result into evidence.
+  if (std::getenv("RNI_GLFW_SAMPLES") != nullptr) {
+    GLint granted = 0;
+    glGetIntegerv(GL_SAMPLES, &granted);
+    std::printf("rn-impeller: glfw_samples_granted=%d\n", (int)granted);
+  }
   std::fflush(stdout);
   return true;
 }
