@@ -98,7 +98,7 @@ print("   shapes found: %d" % len(groups))
 # deep V: true 4600, hull 6400, bbox 6400. Both wrong answers are +39%.
 want=[6400,3200,4800,4800,4600]
 hull=[6400,3200,5600,6400,6400]
-bbox=[6400,3200,6400,6400,6400]
+bbox=[6400,6400,6400,6400,6400]
 name=["A square ","B diamond","C the L  ","D arrow  ","E deep-V "]
 bad=0
 for i,g in enumerate(groups):
