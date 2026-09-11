@@ -10,22 +10,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
-
-# ⛔ THE DEFAULT ENGINE PACKAGE IS PER-HOST.
-# This defaulted to engine-linux-x64 unconditionally. npm refuses that package
-# on darwin (os mismatch) and the refusal surfaces here as the misleading
-# "npm install failed" — which reads as a broken probe rather than "you picked
-# the wrong platform tarball". Default per host; RNI_ENGINE_PKG still overrides.
-case "$(uname -s)/$(uname -m)" in
-  Darwin/arm64)  DEFAULT_PKG="engine-darwin-arm64" ;;
-  Darwin/x86_64) DEFAULT_PKG="engine-darwin-x64"   ;;
-  *)             DEFAULT_PKG="engine-linux-x64"    ;;
-esac
-RNI_ENGINE_PKG="${RNI_ENGINE_PKG:-$ROOT/packages-engine/$DEFAULT_PKG}"
+RNI_ENGINE_PKG="${RNI_ENGINE_PKG:-$ROOT/packages-engine/engine-linux-x64}"
 
 fail() { echo "ENG05_AA_FAIL: $*" >&2; exit 1; }
-
-[ -d "$RNI_ENGINE_PKG" ] || fail "no engine package at $RNI_ENGINE_PKG (host $(uname -s)/$(uname -m)); set RNI_ENGINE_PKG to override"
 
 [ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP"
 
