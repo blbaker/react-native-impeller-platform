@@ -158,6 +158,34 @@ void Usage() {
 // It boots a real ReactHost, so it also proves every module CONSTRUCTS.
 int ListModules() {
   rni::ReactHost host;
+
+  // ⛔ FABRIC MUST BE UP BEFORE ANY MODULE IS TOUCHED, AND ONLY ENG-06 MADE
+  // THAT TRUE. Enumerating the registry evaluates JS that reads
+  // `nativeModuleProxy[name]`, which CONSTRUCTS each module. Every module
+  // before NativeAnimatedModule was self-contained, so a bare ReactHost with
+  // no renderer was enough. AnimatedModule is not: its
+  // installJSIBindingsWithRuntime calls provider->getOrCreate(), which does
+  //
+  //     UIManagerBinding::getBinding(runtime)->getUIManager()
+  //
+  // and dereferences the result. With no Scheduler there IS no binding, so
+  // that is a null dereference -- the manifest died mid-list with SIGSEGV and
+  // no message, taking the ci-p4 / ci-p10 MODULE_MANIFEST_END assertion with
+  // it. Bringing up a real surface + SceneGraph + FabricHost here is not
+  // scaffolding for the sake of it: it makes --list-modules enumerate modules
+  // under the same conditions a real app gives them, which is the only version
+  // of the manifest worth diffing against the shipped JS.
+  PlatformSurface surface;
+  std::string surfaceError;
+  if (!surface.init(64, 64, &surfaceError)) {
+    fprintf(stderr, "rn-impeller: --list-modules: surface init failed: %s\n",
+            surfaceError.c_str());
+    return 1;
+  }
+  rni::SceneGraph sceneGraph(surface.typography());
+  rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
+                         /*logMutations*/ false, host.displayMetrics());
+
   auto registry = host.modules();
 
   // Build the name list as a JS array literal from the registry, so the
@@ -623,6 +651,11 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       fflush(stdout);
     }
 
+    // ENG-06: advance RN's animation engine once per frame, BEFORE painting,
+    // so this frame shows the value this tick produced. Near-free when nothing
+    // is animating (one atomic load) -- see ReactHost::pumpNativeAnimated.
+    host.pumpNativeAnimated();
+
     int painted = paintFrame();
     ++frameIndex;
     if (frameIndex == 1) printf("rn-impeller: painted_nodes=%d\n", painted);
@@ -673,7 +706,11 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // identical pixels forever. Two captures from ONE run, compared, can.
     // Taken AFTER the first paint so it is a real rendered frame rather than
     // an uninitialised buffer.
-    if (!capturedFirst && frameIndex == 1) {
+    // ⛔ ENG-06: guard the EMPTY path. `capture()` was called unconditionally
+    // at frame 1, so with no --screenshot-first the windowed run tried to write
+    // a file named "". Also: the flag is now honoured in the HEADLESS path too
+    // (see the frame loop in main()), which is where CI can actually use it.
+    if (!capturedFirst && frameIndex == 1 && !screenshotFirstPath.empty()) {
       capture(screenshotFirstPath, "screenshot_first");
       capturedFirst = true;
     }
@@ -1183,6 +1220,62 @@ int main(int argc, char** argv) {
       printf("rn-impeller: scene=%s\n", sceneGraph.describe().c_str());
     }
     fflush(stdout);
+
+    // ⛔ ENG-06: THE HEADLESS ANIMATION ARM.
+    // Until now headless was strictly single-shot: evaluate, settle, paint
+    // once, read pixels, exit. That is why --frames and --screenshot-first
+    // were accepted and did nothing here -- the only code that honoured them
+    // lived in RunWindowed(), which needs a GLFW window and therefore cannot
+    // run on CI. An animation cannot be proven by one frame no matter how good
+    // that frame is, so headless needs a real stepped loop.
+    //
+    // The clock is the LOOP COUNTER, not wall time: pumping the NativeAnimated
+    // engine once per iteration means `--frames N` advances the animation by
+    // exactly N steps on a fast machine and a slow one alike.
+    if (frames > 0) {
+      for (int frameIndex = 1; frameIndex <= frames; ++frameIndex) {
+        // One NativeAnimated step. Posts to the JS thread, so drain it before
+        // painting or the capture races the value update it is meant to show.
+        host.pumpNativeAnimated();
+        host.waitForJsIdle(5000);
+
+        ImpellerDisplayListBuilder fb = ImpellerDisplayListBuilderNew(nullptr);
+        sceneGraph.paint(fb, pointScale);
+        ImpellerDisplayList fdl =
+            ImpellerDisplayListBuilderCreateDisplayListNew(fb);
+        if (fdl != nullptr) {
+          surface.drawDisplayList(fdl);
+          ImpellerDisplayListRelease(fdl);
+        }
+        ImpellerDisplayListBuilderRelease(fb);
+
+        // Frame-0 capture, taken AFTER the first real paint so it is a
+        // rendered frame and not an uninitialised buffer. This plus the final
+        // --screenshot is what lets one run be diffed against itself, which is
+        // the only way to tell a live animation from a static engine redrawing
+        // identical pixels forever.
+        if (frameIndex == 1 && !screenshotFirst.empty()) {
+          std::vector<rni::Px> fpx;
+          if (surface.readPixels(&fpx) &&
+              PlatformSurface::writePpm(screenshotFirst, fpx, width, height)) {
+            printf("rn-impeller: screenshot_first=%s\n",
+                   screenshotFirst.c_str());
+          } else {
+            fprintf(stderr,
+                    "rn-impeller: WARN: cannot write screenshot-first %s\n",
+                    screenshotFirst.c_str());
+          }
+        }
+      }
+      // The half of the ENG-06 proof that lives on THIS side of the boundary.
+      // RN's Animated silently falls back to its JS driver when the native
+      // module is missing, and both drivers move the same pixels -- so a
+      // pixel diff alone would stay green with the entire C++ animation engine
+      // removed. A gate must assert this is non-zero too.
+      printf("rn-impeller: nativeanimated_ticks=%lu\n",
+             host.nativeAnimatedTicks());
+      fflush(stdout);
+    }
 
     ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
     painted = sceneGraph.paint(builder, pointScale);

@@ -19,6 +19,9 @@
 #include "modules/AppStorageModule.h"
 #include "runtime/DeviceEventSink.h"
 #include "runtime/JsThread.h"
+#include "runtime/NativeAnimatedPump.h"
+
+#include <react/renderer/animated/NativeAnimatedNodesManagerProvider.h>
 
 namespace rni {
 
@@ -79,6 +82,16 @@ class ReactHost {
   // fails in a way that looks exactly like "the engine does not have it".
   void setKnownComponents(std::vector<std::string> names);
 
+  // ENG-06. One NativeAnimated tick, driven by the host's frame loop so the
+  // clock IS the frame counter and `--frames N` is deterministic. Safe and
+  // near-free to call every frame: a relaxed atomic load when nothing is
+  // animating. Hops to the JS thread itself -- call it from the render loop.
+  void pumpNativeAnimated();
+
+  // How many times RN's animation engine actually ran, for gates. See
+  // NativeAnimatedPump.h for why a pixel diff alone cannot prove ENG-06.
+  unsigned long nativeAnimatedTicks() const;
+
  private:
   std::shared_ptr<JsThread> jsThread_;
   std::unique_ptr<facebook::react::ReactInstance> instance_;
@@ -95,6 +108,12 @@ class ReactHost {
   std::shared_ptr<NetworkActivity> network_;
   std::shared_ptr<std::string> initialUrl_;
   std::shared_ptr<AppStorageConfig> storage_;
+  // ENG-06. The provider owns the NativeAnimatedNodesManager; the pump is the
+  // clock the manager does not have. Both outlive the module, which is created
+  // lazily by the registry on first JS access.
+  std::shared_ptr<NativeAnimatedPump> nativeAnimatedPump_;
+  std::shared_ptr<facebook::react::NativeAnimatedNodesManagerProvider>
+      nativeAnimatedProvider_;
 };
 
 }  // namespace rni

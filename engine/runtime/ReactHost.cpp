@@ -5,6 +5,8 @@
 #include <jserrorhandler/JsErrorHandler.h>
 #include <react/nativemodule/defaults/DefaultTurboModules.h>
 #include <react/renderer/runtimescheduler/RuntimeSchedulerCallInvoker.h>
+#include <react/renderer/animated/AnimatedModule.h>
+#include <react/renderer/animated/NativeAnimatedNodesManagerProvider.h>
 #include <react/runtime/PlatformTimerRegistry.h>
 #include <react/runtime/TimerManager.h>
 #include <react/runtime/hermes/HermesInstance.h>
@@ -243,6 +245,39 @@ ReactHost::ReactHost() {
     return std::make_shared<AppStorageModule>(inv, s);
   });
 
+  // ENG-06. RN's own C++ NativeAnimated engine (ReactCommon/react/renderer/
+  // animated/), already compiled by cmake/ReactCommonFabric.cmake and, until
+  // now, linked into the binary and reachable by nothing.
+  //
+  // The name is exactly NativeAnimatedModuleCxxSpec::kModuleName. It is the
+  // name JS resolves only because ImpellerFeatureFlags::cxxNativeAnimatedEnabled
+  // is true; with that flag false, NativeAnimatedHelper asks for
+  // "NativeAnimatedTurboModule" instead and this registration is dead code.
+  //
+  // ⚠️ ITS ABSENCE IS NOT SILENT, AND THAT IS WHY THIS IS A REGISTRATION AND
+  // NOT A SHIM. `useNativeDriver: true` with no module THROWS an Invariant
+  // Violation, after which Fabric REMOVEs and DELETEs every tag and the surface
+  // paints solid background -- one black RootView, no error on screen. So the
+  // failure mode looked like "the renderer painted nothing" rather than "a
+  // module is missing", which is how this survived to ENG-06.
+  //
+  // The provider is built ONCE and captured, not created per lookup: it owns
+  // the NativeAnimatedNodesManager and the manager holds every animated node.
+  // A fresh provider per lookup would silently start a second, empty graph.
+  nativeAnimatedPump_ = std::make_shared<NativeAnimatedPump>();
+  nativeAnimatedProvider_ =
+      std::make_shared<react::NativeAnimatedNodesManagerProvider>(
+          [pump = nativeAnimatedPump_](std::function<void()>&& onRender,
+                                       bool isAsync) {
+            pump->start(std::move(onRender), isAsync);
+          },
+          [pump = nativeAnimatedPump_](bool isAsync) { pump->stop(isAsync); },
+          /*frameRateListenerCallback*/ nullptr);
+  modules_->add("NativeAnimatedModule",
+                [provider = nativeAnimatedProvider_](auto inv) {
+                  return std::make_shared<react::AnimatedModule>(inv, provider);
+                });
+
   auto moduleProvider = [jsInvoker, modules = modules_](
                             jsi::Runtime&, const std::string& name)
       -> std::shared_ptr<react::TurboModule> {
@@ -321,6 +356,36 @@ ReactHost::~ReactHost() {
   if (jsThread_) {
     jsThread_->quitSynchronous();
   }
+}
+
+// ENG-06. Called once per frame from the host's render loop, so the animation
+// clock IS the frame counter: `--frames N` advances the animation the same
+// number of steps on every machine. Wall-clock driving would make every
+// animation gate a race.
+//
+// ⛔ THE EARLY-OUT IS LOAD-BEARING, NOT AN OPTIMISATION. scheduleWork() on an
+// idle app would post a JS task every single frame, which keeps the JS thread
+// permanently non-idle and makes waitForJsIdle() -- the thing every headless
+// gate blocks on -- never return. Two acquire loads and out.
+void ReactHost::pumpNativeAnimated() {
+  if (!nativeAnimatedPump_ || !instance_) {
+    return;
+  }
+  if (!nativeAnimatedPump_->isActive()) {
+    return;
+  }
+  auto scheduler = instance_->getRuntimeScheduler();
+  if (!scheduler) {
+    return;
+  }
+  // Hop to the JS thread: tick() walks the animated node graph and touches the
+  // shadow tree and JSI, which is JS-thread work in this engine.
+  scheduler->scheduleWork(
+      [pump = nativeAnimatedPump_](facebook::jsi::Runtime&) { pump->tick(); });
+}
+
+unsigned long ReactHost::nativeAnimatedTicks() const {
+  return nativeAnimatedPump_ ? nativeAnimatedPump_->ticks() : 0UL;
 }
 
 void ReactHost::setKnownComponents(std::vector<std::string> names) {

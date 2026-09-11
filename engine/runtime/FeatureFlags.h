@@ -19,6 +19,14 @@ class ImpellerFeatureFlags
   bool enableBridgelessArchitecture() override { return true; }
   // Live Fabric — gates the renderer's transaction-mounting paths.
   bool enableFabricRenderer() override { return true; }
+  // ENG-06. Selects RN's C++ NativeAnimated engine (renderer/animated/), which
+  // this engine links, over the ObjC/Java TurboModule this platform does not
+  // have. With this TRUE, JS's shouldUseTurboAnimatedModule() returns false and
+  // NativeAnimatedHelper resolves the module name "NativeAnimatedModule" —
+  // which is exactly the name ReactHost registers. Flip this to false and the
+  // registration below becomes unreachable under a different name, so the two
+  // are a matched pair, not two independent switches.
+  bool cxxNativeAnimatedEnabled() override { return true; }
 };
 
 // Idempotent, but must run before the first flag read.

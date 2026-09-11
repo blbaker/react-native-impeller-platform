@@ -188,6 +188,12 @@ const SPEC_FOR = {
   // has a different method map (it assumes a JNI-backed handler), so mapping
   // to it here would fail this guard for the right reason on the wrong axis.
   Networking:         'src/private/specs_DEPRECATED/modules/NativeNetworkingIOS.js',
+  // ENG-06. NativeAnimatedModule.js, NOT NativeAnimatedTurboModule.js: the
+  // engine sets cxxNativeAnimatedEnabled() true, so JS's
+  // shouldUseTurboAnimatedModule() is false and NativeAnimatedHelper resolves
+  // THIS spec. Mapping to the Turbo flavour would check the method map the
+  // engine does not serve -- green or red for the wrong reason either way.
+  NativeAnimatedModule: 'src/private/specs_DEPRECATED/modules/NativeAnimatedModule.js',
 };
 // Inherited from RN's TurboModule base, not declared per-spec.
 const INHERITED = new Set(['addListener', 'removeListeners']);
