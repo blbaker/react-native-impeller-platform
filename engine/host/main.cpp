@@ -1274,6 +1274,20 @@ int main(int argc, char** argv) {
       // removed. A gate must assert this is non-zero too.
       printf("rn-impeller: nativeanimated_ticks=%lu\n",
              host.nativeAnimatedTicks());
+      // ⛔ THE OTHER HALF OF THE PROOF, AND THE ONE THAT WAS MISSING.
+      //
+      // nativeanimated_ticks says the PUMP ran. It says nothing about whether
+      // anything downstream consumed the props, and for one full commit it did
+      // not: ticks read 60/60 while every animated pixel stayed frozen, because
+      // schedulerShouldSynchronouslyUpdateViewOnUIThread was an empty stub and
+      // the computed opacity was discarded. A gate on ticks alone is green
+      // through that entire defect.
+      //
+      // This counts props APPLIED to real nodes. ticks>0 with updates==0 is the
+      // exact signature of that bug and is now distinguishable from both "no
+      // animation ran" and "the animation worked".
+      printf("rn-impeller: directprop_updates=%lu\n",
+             sceneGraph.directPropUpdates());
       fflush(stdout);
     }
 

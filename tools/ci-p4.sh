@@ -150,6 +150,11 @@ for (const required of [
   // P4. Dropping this from `files` would leave Alert.js branching itself out
   // of existence again — a silent no-op with no error anywhere.
   'src/metro-shims/shims/Alert.impeller.js',
+  // ENG-04. The engine vends AppStorage's four file primitives and NOTHING
+  // shapes them into an API but this file. Dropping it from the tarball leaves
+  // four reachable native methods with no caller — the same silent no-op as a
+  // missing shim, one layer up.
+  'src/storage/index.js',
   'src/cli/index.js',
 ]) {
   if (!listing.includes(required)) fails.push(`LAYER1: tarball is missing ${required}`);
@@ -195,11 +200,56 @@ const SPEC_FOR = {
   // engine does not serve -- green or red for the wrong reason either way.
   NativeAnimatedModule: 'src/private/specs_DEPRECATED/modules/NativeAnimatedModule.js',
 };
+
+// ⛔ SOME MODULES HAVE NO RN CORE SPEC, AND THAT IS NOT AN ESCAPE HATCH.
+//
+// ENG-04's AppStorage is ours, not React Native's, so no file under
+// node_modules/react-native declares it and SPEC_FOR can never map it. The
+// first version of this guard therefore just went red with "a new module was
+// added without extending the guard" — correct, but the only two ways to
+// answer that are (a) map it to an unrelated RN spec, which makes the guard
+// lie, or (b) allowlist the name, which makes the guard blind to exactly the
+// failure it exists to catch.
+//
+// So these are checked against the JS THIS PACKAGE SHIPS, installed in the
+// consumer app, with the same rule: every native method must have a caller.
+// A native method nothing calls is unreachable from an app whether the
+// declaration was supposed to come from RN or from us.
+const OWN_SPEC_FOR = {
+  AppStorage: 'src/storage/index.js',
+};
+// Where OWN_SPEC_FOR paths resolve: our installed package, not react-native.
+const OWN_PKG = 'node_modules/@react-native-impeller/core';
 // Inherited from RN's TurboModule base, not declared per-spec.
 const INHERITED = new Set(['addListener', 'removeListeners']);
 
 let checked = 0;
+let checkedOwn = 0;
 for (const {name, methods} of manifest) {
+  // Our own modules first: they are checked by CALL SITE, not by declaration,
+  // because the JS that consumes them is ours and has no Spec file.
+  const own = OWN_SPEC_FOR[name];
+  if (own) {
+    const ownPath = path.join(app, OWN_PKG, own);
+    if (!fs.existsSync(ownPath)) {
+      fails.push(`LAYER2: installed app has no ${OWN_PKG}/${own} — the JS half of '${name}' did not ship`);
+      continue;
+    }
+    const src = fs.readFileSync(ownPath, 'utf8');
+    for (const m of methods) {
+      if (INHERITED.has(m)) continue;
+      // A CALL anchor, `.method(`, not a declaration anchor. Deliberately
+      // different from the RN branch below: there the JS declares and the
+      // native implements, here the native implements and the JS calls. Using
+      // the declaration regex would match nothing and fail every method.
+      const re = new RegExp(`\\.${m}\\s*\\(`);
+      if (!re.test(src)) {
+        fails.push(`LAYER2: native method ${name}.${m}() has no caller in the SHIPPED ${own} — vended by the engine and unreachable from any app`);
+      }
+      checkedOwn++;
+    }
+    continue;
+  }
   const rel = SPEC_FOR[name];
   if (!rel) { fails.push(`LAYER2: no spec mapping for module '${name}' — a new module was added without extending the guard`); continue; }
   const specPath = path.join(app, 'node_modules/react-native', rel);
@@ -224,7 +274,7 @@ for (const {name, methods} of manifest) {
     checked++;
   }
 }
-console.log(`   LAYER2 ok — ${checked} native methods each declared in the installed spec`);
+console.log(`   LAYER2 ok — ${checked} native methods each declared in the installed spec, ${checkedOwn} each called by this package's own installed JS`);
 
 // ---- LAYER 3: the installed copy must be the tarball's copy. A correct
 // tarball with a stale node_modules is a green gate over a broken install.

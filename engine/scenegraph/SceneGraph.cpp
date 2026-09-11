@@ -731,6 +731,72 @@ void SceneGraph::applyMutations(
                roots_.end());
 }
 
+// ENG-06. The direct-manipulation prop path -- see the comment on the
+// declaration in SceneGraph.h for why animation does not use mounting
+// transactions.
+//
+// ⛔ WHY THIS IS A HAND-WRITTEN KEY SWITCH AND NOT A ViewProps CONSTRUCTION.
+// The payload is a PARTIAL dynamic: {"opacity": 0.37} and nothing else. Round-
+// tripping it through ViewProps would fill every key the caller did NOT send
+// with prop DEFAULTS and then write all of them onto the node -- so animating
+// opacity would silently reset backgroundColor, borders and the transform to
+// their defaults. The bug that produces is a view that goes transparent and
+// loses its background at the same time, which reads as a paint bug.
+//
+// Unknown keys are IGNORED ON PURPOSE but are not silent: they do not increment
+// the applied counter, so a gate asserting directPropUpdates_ > 0 goes red when
+// a future RN drives a prop shape this switch does not know. Unsupported and
+// unnoticed are different things.
+bool SceneGraph::updateViewProps(facebook::react::Tag tag,
+                                 const folly::dynamic& props) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end()) {
+    return false;
+  }
+  SceneNode& node = it->second;
+  if (!props.isObject()) {
+    return true;
+  }
+
+  for (const auto& entry : props.items()) {
+    if (!entry.first.isString()) continue;
+    const auto key = entry.first.asString();
+    const folly::dynamic& value = entry.second;
+
+    if (key == "opacity") {
+      // By VALUE, never by storage class: JSON has one number type and folly
+      // picks int64 for a whole 0 or 1 and double for everything between, so
+      // an isDouble() guard drops exactly the endpoints of every 0->1 ramp.
+      if (!value.isNumber()) continue;
+      node.opacity = (float)value.asDouble();
+      ++directPropUpdates_;
+      continue;
+    }
+
+    if (key == "transform") {
+      // RN sends the resolved 4x4 as a flat 16-element array, column-major,
+      // the same layout SceneNode::transform already holds.
+      if (!value.isArray() || value.size() != 16) continue;
+      std::array<float, 16> m{};
+      bool ok = true;
+      for (size_t i = 0; i < 16 && ok; ++i) {
+        if (!value[i].isNumber()) { ok = false; break; }
+        m[i] = (float)value[i].asDouble();
+      }
+      // ⛔ STAGE THEN COMMIT. Writing straight into node.transform and bailing
+      // partway through a malformed array would leave the node holding half a
+      // new matrix and half the old one -- not identity, not the previous
+      // transform, and not anything the caller sent.
+      if (!ok) continue;
+      node.transform = m;
+      ++directPropUpdates_;
+      continue;
+    }
+  }
+  return true;
+}
+
 void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                            const SceneNode& node, float originX,
                            float originY) {

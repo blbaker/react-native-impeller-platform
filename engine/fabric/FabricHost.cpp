@@ -84,8 +84,35 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
                                           const std::string&) override {}
   void schedulerDidSetIsJSResponder(const react::ShadowView&, bool,
                                     bool) override {}
+  // ⛔ ENG-06: THIS IS THE ANIMATION PROP PATH. IT WAS AN EMPTY STUB.
+  //
+  // RN's C++ NativeAnimated engine does NOT drive per-frame props through a
+  // mounting transaction -- committing a shadow-tree revision 60 times a second
+  // is exactly what it exists to avoid. It calls
+  // UIManager::synchronouslyUpdateViewOnUIThread(tag, partialProps), which
+  // arrives here and nowhere else.
+  //
+  // While this override did nothing, an animation was indistinguishable from a
+  // working one on every instrument we had: NativeAnimatedModule registered
+  // with all 25 methods, the frame pump ticked exactly 1:1 with --frames, the
+  // animated node graph evaluated, opacity was computed per frame -- and then
+  // dropped here. No error, no log line, no GL warning. The only observable was
+  // that the pixels never moved, which reads as "the animation did not run".
+  //
+  // An empty override is a worse failure than a missing one: the compiler is
+  // satisfied, the interface looks implemented, and the silence is total.
   void schedulerShouldSynchronouslyUpdateViewOnUIThread(
-      react::Tag, const folly::dynamic&) override {}
+      react::Tag tag, const folly::dynamic& props) override {
+    if (sceneGraph_ == nullptr) {
+      return;
+    }
+    if (!sceneGraph_->updateViewProps(tag, props) && logMutations_) {
+      // Not a failure of this path: an update can legitimately race a REMOVE.
+      // Logged only under --log-mutations so it cannot be mistaken for normal
+      // output, but never silently swallowed.
+      std::printf("[fabric] SYNC-UPDATE for unmounted tag=%d\n", tag);
+    }
+  }
   void schedulerDidUpdateShadowTree(
       const std::unordered_map<react::Tag, folly::dynamic>&) override {}
   void schedulerDidCaptureViewSnapshot(react::Tag, react::SurfaceId) override {}

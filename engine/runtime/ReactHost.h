@@ -92,6 +92,16 @@ class ReactHost {
   // NativeAnimatedPump.h for why a pixel diff alone cannot prove ENG-06.
   unsigned long nativeAnimatedTicks() const;
 
+  // ENG-06. Replace RN's animation clock with a FRAME COUNTER, and step it.
+  //
+  // Ticking the pump alone is not enough: RN's drivers interpolate on elapsed
+  // milliseconds read from a global `g_now`, so on a ~1000fps headless loop all
+  // 60 frames sample the curve at t≈0 and the animation is frozen while the
+  // tick count looks perfect. Install this before the frame loop; the pump
+  // advances it. See ReactHost.cpp for the one-clock-per-process caveat.
+  static void installFrameCountedAnimationClock();
+  static void advanceAnimationClock();
+
  private:
   std::shared_ptr<JsThread> jsThread_;
   std::unique_ptr<facebook::react::ReactInstance> instance_;

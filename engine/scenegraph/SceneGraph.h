@@ -245,6 +245,31 @@ class SceneGraph {
   void applyMutations(const facebook::react::ShadowViewMutation::List& mutations,
                       bool log = false);
 
+  // ⛔ ENG-06: THE SECOND WAY PROPS ARRIVE, AND THE ONE ANIMATION USES.
+  //
+  // Mounting transactions are not the only prop path. RN's C++ NativeAnimated
+  // engine deliberately BYPASSES the shadow tree for the properties it drives
+  // every frame -- it calls UIManager::synchronouslyUpdateViewOnUIThread(tag,
+  // props) with a folly::dynamic of just the changed keys, precisely so a
+  // 60fps opacity ramp does not commit a shadow-tree revision per frame.
+  //
+  // That lands on SchedulerDelegate::schedulerShouldSynchronouslyUpdateView-
+  // OnUIThread. While that override was an empty stub, an animation looked
+  // EXACTLY like a working one from every angle we had: the module registered,
+  // the pump ticked 1:1 with --frames, the node graph evaluated, props were
+  // computed -- and then dropped on the floor. Nothing errored, nothing logged,
+  // and the only observable was that the pixels never moved.
+  //
+  // Returns true if `tag` was found. The caller distinguishes "applied" from
+  // "no such node", because an update for an unmounted tag is a real and
+  // different defect from an update that was ignored.
+  bool updateViewProps(facebook::react::Tag tag, const folly::dynamic& props);
+
+  // How many props updateViewProps() actually APPLIED (not how many calls it
+  // received). A gate needs this: a call that finds the node and then matches
+  // no known key is indistinguishable, from the outside, from no call at all.
+  unsigned long directPropUpdates() const { return directPropUpdates_; }
+
   // Paints the whole tree into `builder`. Returns the number of nodes drawn —
   // a caller can tell "painted nothing" from "painted an empty-looking frame",
   // which are different bugs.
@@ -340,6 +365,8 @@ class SceneGraph {
   ImpellerColorSource makeGradientSource(const SceneNode* def, float x, float y,
                                          float w, float h, float alpha) const;
   int painted_{0};  // reset per paint(); incremented in paintNode()
+  // ENG-06. Count of PROPS applied by updateViewProps(), not calls made.
+  unsigned long directPropUpdates_{0};
   std::unordered_map<facebook::react::Tag, SceneNode> nodes_;
   std::vector<facebook::react::Tag> roots_;
   ImpellerTypographyContext typography_{nullptr};

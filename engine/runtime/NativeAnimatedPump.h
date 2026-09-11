@@ -20,6 +20,20 @@
 // every animation gate a race, which is precisely the shape of flake this
 // project has paid for elsewhere.
 //
+// ⚠️ TICKING THE PUMP IS NOT ENOUGH ON ITS OWN, AND THAT COST A WHOLE COMMIT.
+// RN's animation drivers do not measure progress in ticks -- FrameAnimationDriver
+// interpolates on `timeDeltaMs`, taken from NativeAnimatedNodesManager's
+// `g_now()`, which defaults to steady_clock. A headless run renders ~1000fps,
+// so 60 pumped frames elapse under 60 REAL milliseconds: every driver sampled
+// its curve at t≈0, produced the same start value 60 times, and the animation
+// was frozen while ticks read a perfect 60/60. The pump and the clock are two
+// separate seams and only one of them was wired.
+//
+// So the host also installs a frame-counted `now` via
+// g_setNativeAnimatedNowTimestampFunction (RN's own test seam): one pump call
+// advances the clock by exactly one 60fps frame interval. See
+// ReactHost::advanceAnimationClock().
+//
 // The onRender callback is invoked ON THE JS THREAD (hopped via
 // RuntimeScheduler::scheduleWork) because it walks the animated node graph and
 // calls uiManager->synchronouslyUpdateViewOnUIThread / updateShadowTree --

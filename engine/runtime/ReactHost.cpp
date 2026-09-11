@@ -11,6 +11,7 @@
 #include <react/runtime/TimerManager.h>
 #include <react/runtime/hermes/HermesInstance.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -265,6 +266,11 @@ ReactHost::ReactHost() {
   // the NativeAnimatedNodesManager and the manager holds every animated node.
   // A fresh provider per lookup would silently start a second, empty graph.
   nativeAnimatedPump_ = std::make_shared<NativeAnimatedPump>();
+  // The clock is installed with the pump, not with the frame loop: RN latches a
+  // start timestamp the first time a driver runs, and a driver can start before
+  // the host's stepped loop begins. Installing late would give that first
+  // animation a start time on the WALL clock and a delta on the frame clock.
+  installFrameCountedAnimationClock();
   nativeAnimatedProvider_ =
       std::make_shared<react::NativeAnimatedNodesManagerProvider>(
           [pump = nativeAnimatedPump_](std::function<void()>&& onRender,
@@ -378,6 +384,14 @@ void ReactHost::pumpNativeAnimated() {
   if (!scheduler) {
     return;
   }
+  // ⛔ ADVANCE THE CLOCK BEFORE THE TICK, NOT AFTER.
+  //
+  // RN's drivers interpolate on elapsed MILLISECONDS, not on tick count. The
+  // first thing a driver does is latch startFrameTimeMs_ from the clock, so if
+  // the clock is advanced after the tick, frame 1 and frame 2 both read the
+  // same timestamp, the delta is 0, and the animation holds its start value
+  // for one extra frame on every restart.
+  advanceAnimationClock();
   // Hop to the JS thread: tick() walks the animated node graph and touches the
   // shadow tree and JSI, which is JS-thread work in this engine.
   scheduler->scheduleWork(
@@ -386,6 +400,47 @@ void ReactHost::pumpNativeAnimated() {
 
 unsigned long ReactHost::nativeAnimatedTicks() const {
   return nativeAnimatedPump_ ? nativeAnimatedPump_->ticks() : 0UL;
+}
+
+// ⛔ ENG-06: THE FRAME-COUNTED ANIMATION CLOCK.
+//
+// RN's NativeAnimatedNodesManager reads the current time through a single
+// global function pointer, g_now, which it exposes for injection precisely so
+// its own tests are not races. We install a frame counter into it.
+//
+// One call == one 60fps frame interval (16.667ms). That is what makes
+// `--frames N` mean "advance the animation N frames" on every machine, and it
+// is what the peer's ENG-06 acceptance item (c) asks for: the delegate's time
+// source is the frame counter, not wall time.
+//
+// ⚠️ THE COUNTER IS static, BECAUSE THE SEAM IS. g_now is a bare function
+// pointer with no user-data parameter, so the state it reads cannot live on a
+// ReactHost instance. That is a real constraint of RN's API, not a shortcut:
+// two ReactHosts in one process would share this clock. The engine host runs
+// exactly one, and this comment exists so the next person to embed two knows
+// what they are walking into before the symptom (two surfaces animating at
+// double speed) has to teach them.
+namespace {
+std::atomic<uint64_t> g_animationFrames{0};
+
+std::chrono::steady_clock::time_point frameCountedNow() {
+  // 16667us, not 16ms: a 16ms frame is 4% fast, which over a 1000ms loop is a
+  // 40ms drift -- more than two frames. Small enough to look like rounding,
+  // big enough to make a "does the loop end on its start value" assertion
+  // flaky in a way nobody would trace back to a clock.
+  constexpr auto kFrameInterval = std::chrono::microseconds(16667);
+  return std::chrono::steady_clock::time_point(
+      kFrameInterval * g_animationFrames.load(std::memory_order_relaxed));
+}
+}  // namespace
+
+void ReactHost::installFrameCountedAnimationClock() {
+  g_animationFrames.store(0, std::memory_order_relaxed);
+  facebook::react::g_setNativeAnimatedNowTimestampFunction(&frameCountedNow);
+}
+
+void ReactHost::advanceAnimationClock() {
+  g_animationFrames.fetch_add(1, std::memory_order_relaxed);
 }
 
 void ReactHost::setKnownComponents(std::vector<std::string> names) {
