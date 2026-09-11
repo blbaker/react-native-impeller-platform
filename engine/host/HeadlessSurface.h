@@ -51,6 +51,10 @@ class HeadlessSurface {
   void* eglContext_{nullptr};// EGLContext
   uint32_t texture_{0};
   uint32_t fbo_{0};
+  // Packed depth+stencil. Impeller's non-convex fills are stencil-then-cover;
+  // without this attachment they paint their bounding box. See the comment at
+  // the attachment site in HeadlessSurface.cpp.
+  uint32_t depthStencil_{0};
   ImpellerContext context_{nullptr};
   ImpellerSurface surface_{nullptr};
   ImpellerTypographyContext typography_{nullptr};

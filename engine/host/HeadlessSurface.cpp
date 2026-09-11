@@ -121,6 +121,37 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                          texture_, 0);
+
+  // ⛔ A COLOUR-ONLY FBO SILENTLY BREAKS EVERY CONCAVE FILL.
+  //
+  // Impeller fills a path one of two ways. A CONVEX path is tessellated
+  // directly and needs no auxiliary buffer. A NON-CONVEX path goes through
+  // stencil-then-cover: the coverage is accumulated into the STENCIL buffer,
+  // then a cover geometry — the path's BOUNDING BOX — is drawn masked by it.
+  //
+  // With no stencil attachment the accumulate pass is a no-op and the cover
+  // pass is unmasked, so the shape paints AS ITS BOUNDING BOX. That is not a
+  // crash, not a GL error, and not a log line: convex shapes stay pixel-exact,
+  // so squares, diamonds, circles and every STROKE (stroking tessellates its
+  // own convex quads) all look perfect. Only filled concave geometry is wrong.
+  //
+  // Measured 2026-09-11 against a 5-case probe at 700x300 (tools/ci-concave.sh):
+  //   square 6400/6400 and diamond 3200/3200 exact, while the L, the arrowhead
+  //   and the notched diamond each painted 6400 — their 80x80 box — instead of
+  //   4800, 4800 and 3000. A diamond with one vertex pushed 0.001 units inward
+  //   becomes non-convex and jumps from 3200 to the full 6400.
+  //
+  // GL_DEPTH24_STENCIL8 rather than a stencil-only renderbuffer: Impeller's GLES
+  // backend also uses depth for its clip/coverage bookkeeping, and packed
+  // depth-stencil is the combination guaranteed renderable in core GLES3.
+  glGenRenderbuffers(1, &depthStencil_);
+  glBindRenderbuffer(GL_RENDERBUFFER, depthStencil_);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width_, height_);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                            GL_RENDERBUFFER, depthStencil_);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+                            GL_RENDERBUFFER, depthStencil_);
+
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
     return fail("FBO incomplete");
   }

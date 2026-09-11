@@ -105,10 +105,22 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
   // ⛔ EGL_WINDOW_BIT, NOT EGL_PBUFFER_BIT. This is the only substantive
   // difference from the headless config: a pbuffer config will be returned
   // happily by eglChooseConfig and then rejected by eglCreateWindowSurface.
+  //
+  // ⛔ AND EGL_STENCIL_SIZE 8 IS NOT OPTIONAL. Unlike HeadlessSurface, which
+  // owns its FBO and can attach a renderbuffer, this path draws into the
+  // window's DEFAULT framebuffer (fbo 0) — so its stencil comes from the
+  // EGLConfig and from nowhere else. Impeller fills non-convex paths with
+  // stencil-then-cover; with no stencil bits the accumulate pass is a no-op and
+  // the unmasked cover geometry paints the path's BOUNDING BOX. Convex fills
+  // and all strokes stay pixel-exact, so this presents as "concave SVG paths
+  // paint as slabs" with a clean log and no GL error. Measured 2026-09-11 on
+  // the headless twin of this bug: an L, an arrowhead and a notched diamond
+  // each painted 6400 (their 80x80 box) instead of 4800/4800/3000.
   const EGLint cfgAttrs[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
                              EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
                              EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
-                             EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
+                             EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+                             EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE};
   EGLConfig cfg;
   EGLint n = 0;
   if (!eglChooseConfig(display_, cfgAttrs, &cfg, 1, &n) || n != 1) {
