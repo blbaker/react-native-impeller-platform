@@ -60,4 +60,25 @@ void GlfwCocoaSetLayerScale(GLFWwindow* window) {
   layer.contentsScale = [nsWindow backingScaleFactor];
 }
 
+// Reads back the layer's ACTUAL contentsScale — not the value we intended, the
+// value the layer currently holds. The ENG-08 gate asserts this equals
+// backingScaleFactor; reading real state (default 1.0 when nobody set it) is
+// what lets the gate go red if GlfwCocoaSetLayerScale is ever dropped.
+double GlfwCocoaLayerContentsScale(GLFWwindow* window) {
+  NSWindow* nsWindow = glfwGetCocoaWindow(window);
+  if (!nsWindow) return 0.0;
+  NSView* view = [nsWindow contentView];
+  if (!view) return 0.0;
+  CALayer* layer = [view layer];
+  if (!layer) return 0.0;
+  return layer.contentsScale;
+}
+
+// The display's physical backing scale — the number contentsScale MUST match.
+double GlfwCocoaBackingScale(GLFWwindow* window) {
+  NSWindow* nsWindow = glfwGetCocoaWindow(window);
+  if (!nsWindow) return 0.0;
+  return [nsWindow backingScaleFactor];
+}
+
 }  // namespace rni

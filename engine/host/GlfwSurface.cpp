@@ -28,6 +28,10 @@ void* GlfwCocoaLayer(GLFWwindow* window);
 // Defined in GlfwCocoaView.mm — sets the CALayer contentsScale to the window's
 // backingScaleFactor so the drawable matches the physical framebuffer.
 void GlfwCocoaSetLayerScale(GLFWwindow* window);
+// Defined in GlfwCocoaView.mm — reads back the layer's actual contentsScale and
+// the window's backingScaleFactor; the ENG-08 gate asserts they are equal.
+double GlfwCocoaLayerContentsScale(GLFWwindow* window);
+double GlfwCocoaBackingScale(GLFWwindow* window);
 #endif
 
 namespace {
@@ -139,6 +143,13 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
   // callback that drives consumeDirty() can never fire. Set contentsScale here,
   // before the first present, or frame one paints a quarter window on hi-dpi.
   GlfwCocoaSetLayerScale(window_);
+  // ENG-08 OBSERVABLE. Print the layer's ACTUAL contentsScale (read back, not
+  // the value we intended) beside the window's backingScaleFactor, ONCE, before
+  // the first present. The gate asserts these are equal; reading real state is
+  // what makes it go red if GlfwCocoaSetLayerScale is ever dropped.
+  fprintf(stderr,
+          "rn-impeller: layer contents_scale=%.2f backing_scale=%.2f\n",
+          GlfwCocoaLayerContentsScale(window_), GlfwCocoaBackingScale(window_));
 
   eglSurface_ = eglCreateWindowSurface(display_, cfg,
                                        (EGLNativeWindowType)layer, nullptr);
