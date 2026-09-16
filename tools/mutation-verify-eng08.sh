@@ -93,13 +93,23 @@ open(p, "w").write(s.replace(anchor, "// M1: frame-one setter removed (pre-fix s
 PY
 bash tools/engine-build.sh > /dev/null 2>&1 || fail "M1 tree did not build"
 if run_gate "$BAK/m1.log"; then
-  fail "M1 SURVIVED: the gate passes with the frame-one contentsScale setter deleted. That IS the pre-fix bug — the window under-renders to a quarter on frame one."
+  fail "M1 SURVIVED: the gate passes with the frame-one contentsScale setter deleted. That IS the pre-fix bug -- the window under-renders to a quarter on frame one. The number arm alone cannot see this (AppKit/consumeDirty auto-correct the read-back); the EXTENT arm must."
 fi
-grep -q 'does not match backing_scale' "$BAK/m1.log" || {
+# ⛔ M1 MUST DIE ON THE EXTENT ARM, NOT THE NUMBER ARM. Measured on the Mac's 5K
+# panel: with init()'s setter deleted the read-back number STILL read equal, so
+# the equality assertion could not kill M1 -- only the frame-one painted extent
+# (a quarter of the window) can. If M1 dies on 'does not match backing_scale'
+# instead, the extent arm is not doing the work and a future edit that removes
+# it would silently let M1 survive again.
+if grep -q 'does not match backing_scale' "$BAK/m1.log"; then
   tail -25 "$BAK/m1.log" >&2
-  fail "M1 killed, but NOT by the equality assertion. See the tail above."
+  fail "M1 was killed by the NUMBER arm, not the extent arm. On a real 2x-Main display the number is auto-corrected, so this kill is display-dependent and the extent arm is unproven. See the tail above."
+fi
+grep -q 'fills hspan=.* below' "$BAK/m1.log" || grep -q 'frame-one paint fills' "$BAK/m1.log" || {
+  tail -25 "$BAK/m1.log" >&2
+  fail "M1 killed, but NOT by the frame-one extent assertion. See the tail above."
 }
-echo "   OK: M1 killed (equality: contents_scale fell to the 1.0 default)"
+echo "   OK: M1 killed (frame-one painted extent is a quarter of the window)"
 cp "$BAK/GlfwSurface.cpp" "$SRC_SURF"
 
 echo "== M2: the setter is called but its body is inert =="
