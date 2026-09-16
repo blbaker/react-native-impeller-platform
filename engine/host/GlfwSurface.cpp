@@ -25,6 +25,9 @@ namespace rni {
 // Defined in GlfwCocoaView.mm — returns the window's layer-backed CALayer,
 // which is what ANGLE/Metal accepts as a native window.
 void* GlfwCocoaLayer(GLFWwindow* window);
+// Defined in GlfwCocoaView.mm — sets the CALayer contentsScale to the window's
+// backingScaleFactor so the drawable matches the physical framebuffer.
+void GlfwCocoaSetLayerScale(GLFWwindow* window);
 #endif
 
 namespace {
@@ -131,6 +134,11 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
 
   void* layer = GlfwCocoaLayer(window_);
   if (!layer) return fail("glfwGetCocoaWindow/contentView layer was null");
+
+  // FRAME-ONE SCALE. HostApp.app opens on 1x and may never resize, so the resize
+  // callback that drives consumeDirty() can never fire. Set contentsScale here,
+  // before the first present, or frame one paints a quarter window on hi-dpi.
+  GlfwCocoaSetLayerScale(window_);
 
   eglSurface_ = eglCreateWindowSurface(display_, cfg,
                                        (EGLNativeWindowType)layer, nullptr);
@@ -404,6 +412,12 @@ bool GlfwSurface::consumeDirty() {
   // ANGLE's window surface tracks the CALayer, which AppKit has already
   // resized by the time this callback runs, so there is nothing to rebuild on
   // the EGL side. The viewport is ours and must follow.
+  //
+  // The framebuffer-size callback also fires when the backing scale changes
+  // (drag between a 1x and 2x display), so re-assert contentsScale here — this
+  // is the single change-time home for backing state; do NOT add a second
+  // observer that could disagree.
+  GlfwCocoaSetLayerScale(window_);
 #endif
   glViewport(0, 0, width_, height_);
 

@@ -38,4 +38,26 @@ void* GlfwCocoaLayer(GLFWwindow* window) {
   return (__bridge void*)[view layer];
 }
 
+// ⛔ contentsScale DEFAULTS TO 1.0 — MEASURED, NOT ASSUMED.
+// A CAMetalLayer opens at contentsScale=1 regardless of the display. On a 2x
+// screen the drawableSize is then bounds×1 while glfwGetFramebufferSize reports
+// bounds×2 pixels, so glViewport fills the whole framebuffer but the layer only
+// presents a quarter of it — the "quarter window" read. AppKit only fixes this
+// for you if the view is in a window it laid out for hi-dpi; ANGLE's layer is
+// not on that path, so we set it ourselves.
+//
+// ⛔ USE backingScaleFactor, NOT pointScale_. contentsScale must match the
+// PHYSICAL backing store or the drawable desyncs from the default framebuffer.
+// pointScale_ can be overridden by --scale (PointScale.h doctrine: display is
+// source of truth, --scale is override-only), so it is the wrong number here.
+void GlfwCocoaSetLayerScale(GLFWwindow* window) {
+  NSWindow* nsWindow = glfwGetCocoaWindow(window);
+  if (!nsWindow) return;
+  NSView* view = [nsWindow contentView];
+  if (!view) return;
+  CALayer* layer = [view layer];
+  if (!layer) return;
+  layer.contentsScale = [nsWindow backingScaleFactor];
+}
+
 }  // namespace rni
