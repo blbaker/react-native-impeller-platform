@@ -96,6 +96,45 @@ const IOS_BRANCHED_IMPORTERS = {
     'Platform.impeller-as-ios.js',
 };
 
+// ---------------------------------------------------------------------------
+// ENG-01c. MATCH ON THE ORIGIN *FOLDER*, NOT JUST THE FILE.
+//
+// The file table above is a lie in the presence of Metro's resolution cache.
+// metro/src/node-haste/DependencyGraph.js resolveDependency() keys the cache on
+// `(resolverOptions, originKey, targetKey, platform)` where, for a specifier
+// that contains "/" (ours is `../../Utilities/Platform`), originKey is
+// `path.dirname(originModulePath)` -- the origin FOLDER, not the file. It also
+// splits targetKey by import kind (`\0esm` vs `\0cjs`). resolveRequest runs
+// ONLY on a cache miss.
+//
+// Components/TextInput/ has three siblings importing ../../Utilities/Platform:
+//   TextInput.js          (ESM import) -- must get as-ios or it mounts null
+//   InputAccessoryView.js (ESM import) -- shares TextInput.js's exact cache key
+//   TextInputState.js     (CJS require) -- its own cache bucket
+// Because TextInput.js and InputAccessoryView.js share one ESM cache entry for
+// the whole folder, whichever resolves first fills it for both. When
+// InputAccessoryView wins, TextInput.js is handed the cached plain-impeller
+// Platform without resolveRequest ever running for it, branches itself out of
+// existence, and mounts no native field. Build order decides the winner, which
+// is why it flaked ~15% here and 6/6 in the HostApp app.
+//
+// FIX: key the origin rule on the FOLDER. Every importer in
+// Components/TextInput/ gets as-ios. This is forced, not chosen -- the shared
+// ESM cache key means TextInput.js and InputAccessoryView.js CANNOT be given
+// different answers. It is also correct:
+//   - TextInputState.js only reads OS to pick focus/blur commands, and the
+//     iOS commands are exactly what the native field TextInput.js now mounts
+//     expects (previously, with plain impeller, focus/blur silently no-op'd).
+//   - InputAccessoryView.js is iOS-only API. as-ios makes it try to mount
+//     RCTInputAccessoryViewNativeComponent, which is NOT registered in
+//     FabricHost -- but that path only runs if an app actually mounts
+//     <InputAccessoryView>, the pre-fix code already leaked as-ios to it ~50%
+//     of the time with no reported breakage, and registering that component is
+//     a separate future ticket, not a regression introduced here.
+const IOS_BRANCHED_ORIGIN_DIRS = {
+  'react-native/Libraries/Components/TextInput': 'Platform.impeller-as-ios.js',
+};
+
 // The module specifier TextInput.js actually writes is RELATIVE
 // (`import Platform from '../../Utilities/Platform'`), so this is checked
 // against the RESOLVED Platform path, gated by the origin file.
@@ -112,6 +151,13 @@ function shimForOrigin(originModulePath, resolvedFilePath) {
   const origin = toPosix(originModulePath);
   for (const [suffix, shim] of Object.entries(IOS_BRANCHED_IMPORTERS)) {
     if (origin.endsWith(suffix)) return path.join(SHIM_DIR, shim);
+  }
+  // ENG-01c: folder-scoped fallback. Metro's resolution cache is keyed on the
+  // origin FOLDER, so a file-only rule loses the race for siblings that share
+  // the cache entry. Match the containing directory of the importer.
+  const originDir = toPosix(path.dirname(originModulePath));
+  for (const [dirSuffix, shim] of Object.entries(IOS_BRANCHED_ORIGIN_DIRS)) {
+    if (originDir.endsWith(dirSuffix)) return path.join(SHIM_DIR, shim);
   }
   return null;
 }
@@ -168,5 +214,6 @@ module.exports = {
   SHIM_TARGETS,
   PLATFORM_FORKED,
   IOS_BRANCHED_IMPORTERS,
+  IOS_BRANCHED_ORIGIN_DIRS,
   SHIM_DIR,
 };
