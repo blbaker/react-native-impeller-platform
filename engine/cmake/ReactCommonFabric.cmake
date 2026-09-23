@@ -25,6 +25,15 @@ file(GLOB rr_comp_root_SRC         ${RR}/components/root/*.cpp)
 file(GLOB rr_comp_view_SRC         ${RR}/components/view/*.cpp)
 file(GLOB rr_comp_scrollview_SRC   ${RR}/components/scrollview/*.cpp)
 file(GLOB rr_comp_text_SRC         ${RR}/components/text/*.cpp)
+# <TextInput>. ENG-01b. The base sources (props/eventemitter) plus the iOS
+# platform variant — the metro shim redirects TextInput.js down its iOS arm, so
+# RCTSinglelineTextInputView's descriptor is iostextinput/, exactly as <Text>
+# takes text/platform/cxx. Without these the "TextInput" name has no registered
+# ComponentDescriptor and the field mounts as a plain View: it lays out, paints
+# its border, and swallows every keystroke — indistinguishable from a read-only
+# surface, which is the ENG-01 disease this closes.
+file(GLOB rr_comp_textinput_SRC    ${RR}/components/textinput/*.cpp)
+file(GLOB rr_comp_iostextinput_SRC ${RR}/components/textinput/platform/ios/react/renderer/components/iostextinput/*.cpp)
 file(GLOB rr_mounting_SRC          ${RR}/mounting/*.cpp)
 file(GLOB rr_mounting_internal_SRC ${RR}/mounting/internal/*.cpp)
 file(GLOB rr_mounting_stubs_SRC    ${RR}/mounting/stubs/*.cpp)
@@ -84,6 +93,7 @@ set(reactcommon_fabric_SRC
   ${rr_core_SRC} ${rr_graphics_SRC}
   ${rr_componentregistry_SRC} ${rr_componentregistry_native_SRC}
   ${rr_comp_root_SRC} ${rr_comp_view_SRC} ${rr_comp_scrollview_SRC} ${rr_comp_text_SRC}
+  ${rr_comp_textinput_SRC} ${rr_comp_iostextinput_SRC}
   ${rr_mounting_SRC} ${rr_mounting_internal_SRC} ${rr_mounting_stubs_SRC}
   ${rr_scheduler_SRC} ${rr_uimanager_SRC} ${rr_uimanager_consistency_SRC}
   ${rr_attributedstring_SRC} ${rr_tlm_SRC} ${rr_tlm_cxx_SRC}
@@ -113,6 +123,10 @@ target_include_directories(reactcommon_fabric SYSTEM PUBLIC
   ${RR}/imagemanager/platform/cxx
   ${RR}/components/scrollview/platform/cxx
   ${RR}/components/text/platform/cxx
+  # <TextInput>: the iOS variant's headers are addressed as
+  # <react/renderer/components/iostextinput/...>, so its platform root joins the
+  # path exactly as text/scrollview's cxx roots do above.
+  ${RR}/components/textinput/platform/ios
   ${RC}/react/utils/platform/cxx
 )
 # imagemanager/platform/cxx/.../ImageManager.cpp does #include "ImageManager.h"

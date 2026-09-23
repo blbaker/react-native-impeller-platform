@@ -118,6 +118,27 @@ class FabricHost {
   // tag that was left, or 0 if nothing was hovered.
   int clearHover();
 
+  // <TextInput>. ENG-01b. Focus the field under (x, y) in POINTS, or blur if
+  // the point is over no TextInput. Returns the focused tag, or 0. Focusing
+  // seeds the edit buffer from the field's value and schedules onFocus.
+  int focusTextInputAt(float x, float y);
+
+  // A single editing keystroke, applied to the focused field's buffer. `phase`
+  // is one of the KeyAction values below; for InsertChar, `codepoint` is the
+  // ASCII character to insert at the caret. Returns the focused tag the edit
+  // was applied to, or 0 if nothing is focused. Mutates the SceneGraph edit
+  // buffer AND schedules the matching JS event (onChange/onChangeText on an
+  // edit, onSubmitEditing on Enter) so the pixels and the JS state agree.
+  enum class KeyAction { InsertChar, Backspace, Submit, Newline };
+  int dispatchKey(KeyAction action, unsigned int codepoint);
+
+  // True when a field is focused, so the windowed host knows whether to route a
+  // character/key event here at all.
+  bool hasTextInputFocus();
+  // Non-mutating probe: is a real TextInput field under (x,y)? Used by the
+  // --type harness to settle the mount before the first focus. See the .cpp.
+  bool isTextInputAt(float x, float y);
+
   // The component names this host can actually mount. Handed to ReactHost so
   // RN's NativeComponentRegistry and this registry cannot drift apart.
   static std::vector<std::string> knownComponentNames();
@@ -140,6 +161,13 @@ class FabricHost {
   // the event thread (both callers are), so it needs no lock of its own; the
   // SceneGraph reads it drives ARE locked.
   int hoveredTag_{0};
+
+  // <TextInput>. ENG-01b. Monotonic native event counter. RN's TextInput.js
+  // discards a native onChange whose eventCount is <= the last it saw, to drop
+  // events that raced a controlled-value round-trip. It must therefore strictly
+  // increase across every event this field emits, so it lives on the host, not
+  // per-dispatch.
+  int tiEventCount_{0};
 
   // ENG-09. Emits a pointerenter or pointerleave to `tag` through its
   // TouchEventEmitter, hopping to the JS thread exactly as dispatchTouch does.

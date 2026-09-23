@@ -1,6 +1,7 @@
 #include "scenegraph/SceneGraph.h"
 
 #include <react/renderer/core/ConcreteState.h>
+#include <react/renderer/components/textinput/BaseTextInputProps.h>
 #include <react/renderer/graphics/BackgroundImage.h>
 #include <react/renderer/graphics/Color.h>
 #include <react/renderer/graphics/LinearGradient.h>
@@ -435,6 +436,30 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     // in one and the transformed case in the other.
     if (fragTransform == 1 || fragTransform == 2 || fragTransform == 3) {
       node.text = applyTextTransform(node.text, fragTransform);
+    }
+  }
+
+  // <TextInput>. ENG-01b. The component name RN gives the iOS single-line input
+  // is "TextInput" (iostextinput's TextInputComponentName). Its controlled value
+  // rides on BaseTextInputProps::text; placeholder and its colour are siblings.
+  // Font size/colour come from the effective TextAttributes, the SAME resolver
+  // <Text> uses, so an input and a label at one fontSize paint identically.
+  if (node.componentName == "TextInput") {
+    node.isTextInput = true;
+    node.tiValue.clear();
+    node.tiPlaceholder.clear();
+    if (const auto* tp =
+            dynamic_cast<const react::BaseTextInputProps*>(view.props.get())) {
+      node.tiValue = tp->text;
+      node.tiPlaceholder = tp->placeholder;
+      const auto attrs = tp->getEffectiveTextAttributes(1.0f);
+      if (attrs.fontSize > 0) node.fontSize = (float)attrs.fontSize;
+      if (attrs.foregroundColor) {
+        colorToFloats(attrs.foregroundColor, node.textColor);
+      }
+      if (tp->placeholderTextColor) {
+        colorToFloats(tp->placeholderTextColor, node.tiPlaceholderColor);
+      }
     }
   }
 
@@ -1238,6 +1263,77 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerParagraphStyleRelease(style);
   }
 
+  // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
+  // field is focused, else its controlled value), or the placeholder when the
+  // field is empty, plus a caret when focused. Uses the SAME Impeller paragraph
+  // path as <Text> so metrics match; a single line, no wrapping constraint.
+  if (node.isTextInput && typography_ != nullptr) {
+    const bool focused = (tiFocused_ == node.tag);
+    const std::string shown = focused ? tiEditValue_ : node.tiValue;
+    const bool showPlaceholder = shown.empty() && !node.tiPlaceholder.empty();
+    const std::string& drawStr = showPlaceholder ? node.tiPlaceholder : shown;
+    // Vertically centre the single line in the field's height.
+    const float lineH = node.fontSize * 1.2f;
+    const float ty = y + (h - lineH) * 0.5f;
+    // A small left inset so the glyphs (and caret) do not sit on the border.
+    const float pad = 4.0f;
+    float caretX = x + pad;
+    if (!drawStr.empty()) {
+      ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
+      ImpellerParagraphStyleSetFontSize(style, node.fontSize);
+      ImpellerPaint tPaint = ImpellerPaintNew();
+      const float* col = showPlaceholder ? node.tiPlaceholderColor : node.textColor;
+      ImpellerColor tc = impellerColor(col, node.opacity);
+      ImpellerPaintSetColor(tPaint, &tc);
+      ImpellerParagraphStyleSetForeground(style, tPaint);
+      ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
+      ImpellerParagraphBuilderPushStyle(pb, style);
+      ImpellerParagraphBuilderAddText(pb, (const uint8_t*)drawStr.c_str(),
+                                      drawStr.size());
+      ImpellerParagraph paragraph =
+          ImpellerParagraphBuilderBuildParagraphNew(pb, w > pad ? w - pad : 1e6f);
+      if (paragraph != nullptr) {
+        ImpellerPoint at = {x + pad, ty};
+        ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
+        // The caret sits after the edit buffer up to the caret index. When the
+        // caret is at end (the common case: typing appends), the paragraph's
+        // max intrinsic width is the advance to place it at. Placeholder text
+        // is not editable, so no caret offset is taken from it.
+        if (focused && !showPlaceholder) {
+          const std::string upto = tiEditValue_.substr(0, tiCaret_);
+          if (!upto.empty()) {
+            ImpellerParagraphBuilder cb = ImpellerParagraphBuilderNew(typography_);
+            ImpellerParagraphBuilderPushStyle(cb, style);
+            ImpellerParagraphBuilderAddText(cb, (const uint8_t*)upto.c_str(),
+                                            upto.size());
+            ImpellerParagraph cpar =
+                ImpellerParagraphBuilderBuildParagraphNew(cb, 1e6f);
+            if (cpar != nullptr) {
+              caretX = x + pad + ImpellerParagraphGetMaxIntrinsicWidth(cpar);
+              ImpellerParagraphRelease(cpar);
+            }
+            ImpellerParagraphBuilderRelease(cb);
+          }
+        }
+        ImpellerParagraphRelease(paragraph);
+      }
+      ImpellerParagraphBuilderRelease(pb);
+      ImpellerPaintRelease(tPaint);
+      ImpellerParagraphStyleRelease(style);
+    }
+    // The caret: a 1-point-wide vertical bar at the insertion point, painted
+    // only while focused. Drawn last so it sits over the text. This is the
+    // visible proof of focus a read-only surface can never show.
+    if (focused) {
+      ImpellerPaint caretPaint = ImpellerPaintNew();
+      ImpellerColor cc = impellerColor(node.textColor, node.opacity);
+      ImpellerPaintSetColor(caretPaint, &cc);
+      ImpellerRect caretRect = {caretX, ty, 1.0f, lineH};
+      ImpellerDisplayListBuilderDrawRect(builder, &caretRect, caretPaint);
+      ImpellerPaintRelease(caretPaint);
+    }
+  }
+
   ImpellerPaintRelease(paint);
 
   // Children are positioned relative to this node's frame origin.
@@ -1640,6 +1736,62 @@ int SceneGraph::cursorKindFor(facebook::react::Tag tag) {
   auto it = nodes_.find(tag);
   if (it == nodes_.end()) return 0;  // arrow
   return it->second.cursorKind;
+}
+
+// <TextInput>. ENG-01b. Editing state, all under mutex_ so the paint (which
+// reads tiFocused_/tiEditValue_/tiCaret_) never sees a half-applied edit.
+void SceneGraph::setTextInputFocus(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  tiFocused_ = tag;
+  // Seed the edit buffer from the field's controlled value so a click into an
+  // already-populated field edits its existing text rather than blanking it.
+  auto it = nodes_.find(tag);
+  tiEditValue_ = (it != nodes_.end()) ? it->second.tiValue : std::string();
+  tiCaret_ = tiEditValue_.size();
+}
+
+void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
+                                  const std::string& value, size_t caret) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (tiFocused_ != tag) return;  // ignore edits for a field that lost focus
+  tiEditValue_ = value;
+  tiCaret_ = caret > value.size() ? value.size() : caret;
+}
+
+void SceneGraph::clearTextInputFocus() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  tiFocused_ = 0;
+  tiEditValue_.clear();
+  tiCaret_ = 0;
+}
+
+facebook::react::Tag SceneGraph::focusedTextInput() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return tiFocused_;
+}
+
+std::string SceneGraph::textInputValueFor(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (tiFocused_ == tag) return tiEditValue_;
+  auto it = nodes_.find(tag);
+  return (it != nodes_.end()) ? it->second.tiValue : std::string();
+}
+
+size_t SceneGraph::textInputCaretFor(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return (tiFocused_ == tag) ? tiCaret_ : 0;
+}
+
+std::string SceneGraph::paragraphTextReport() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::string out;
+  for (const auto& [tag, node] : nodes_) {
+    if (node.isParagraph) {
+      out += "rn-impeller: paragraph_text tag=" + std::to_string((int)tag) +
+             " \"" + node.text + "\"\n";
+    }
+  }
+  return out;
 }
 
 std::string SceneGraph::describe() {

@@ -541,6 +541,13 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                             : rni::FabricHost::TouchPhase::Up;
     const int hit = fabric.dispatchTouch(phase, x, y);
     if (down) {
+      // <TextInput>. ENG-01b. A press also (re)assigns keyboard focus: click a
+      // field to edit it, click elsewhere to blur. This must run on the DOWN so
+      // the caret appears on the same click that a user expects it to, and is
+      // separate from the touch dispatch above -- a field both receives the
+      // press (for onPressIn-style handlers) AND takes focus.
+      const int focused = fabric.focusTextInputAt(x, y);
+      printf("rn-impeller: textinput_focus=%d at=%.1f,%.1f\n", focused, x, y);
       ++touchDowns;
       if (hit) ++touchHits;
       // Machine-readable, and printed for the DOWN only: a gate asserting on
@@ -624,6 +631,37 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       }
       fflush(stdout);
     }
+  });
+
+  // <TextInput>. ENG-01b. Keyboard -> focused field. The char handler carries a
+  // decoded codepoint (a real typed character); the key handler carries the
+  // control keys (Backspace, Enter) that never reach the char callback. Both
+  // route into FabricHost::dispatchKey, which no-ops when no field is focused --
+  // so a keystroke with nothing focused is silently ignored, exactly as a
+  // desktop app does. Both print a machine-readable line for the gate.
+  surface.setCharHandler([&](unsigned int codepoint) {
+    if (!fabric.hasTextInputFocus()) return;
+    const int tag =
+        fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar, codepoint);
+    printf("rn-impeller: key_char cp=%u tag=%d\n", codepoint, tag);
+    fflush(stdout);
+  });
+  surface.setKeyHandler([&](rni::GlfwSurface::EditKey key, bool shift) {
+    if (!fabric.hasTextInputFocus()) return;
+    rni::FabricHost::KeyAction act;
+    if (key == rni::GlfwSurface::EditKey::Backspace) {
+      act = rni::FabricHost::KeyAction::Backspace;
+    } else {
+      // Shift+Enter is the multiline newline (chat composer, comments); a bare
+      // Enter submits. The multiline buffer path is a later arm -- for now the
+      // shift case is routed as Newline and dispatchKey treats it as submit,
+      // called out rather than silently swallowed.
+      act = shift ? rni::FabricHost::KeyAction::Newline
+                  : rni::FabricHost::KeyAction::Submit;
+    }
+    const int tag = fabric.dispatchKey(act, 0);
+    printf("rn-impeller: key_ctrl key=%d tag=%d\n", (int)key, tag);
+    fflush(stdout);
   });
 
   // Reads the framebuffer and writes a PPM. Shared by the frame-0 and the
@@ -842,6 +880,11 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // event into freed memory.
   surface.setHoverHandler(nullptr);
   surface.setCursorLeaveHandler(nullptr);
+  // <TextInput>. ENG-01b. Same lifetime argument: both keyboard handlers
+  // capture `fabric`, and glfwDestroyWindow can dispatch a queued char/key
+  // event, which would dispatch an edit into freed memory.
+  surface.setCharHandler(nullptr);
+  surface.setKeyHandler(nullptr);
 
 
   // Machine-readable evidence that the modal-loop repaint path executed. A
@@ -892,6 +935,15 @@ int main(int argc, char** argv) {
   bool windowMode = false;
   int frames = 0;              // 0 = unbounded, run until window closes
   std::string tapSpec;         // "X,Y" in points; empty = no input probe
+  // <TextInput>. ENG-01b. Headless editing probe. "--type X,Y:SEQ" focuses the
+  // field under (X,Y) POINTS, then replays SEQ one token at a time through the
+  // SAME FabricHost::focusTextInputAt / dispatchKey path the GLFW callbacks use,
+  // so the whole editing loop (focus -> keystroke -> buffer -> onChange) is
+  // gate-provable with no window. SEQ is literal ASCII plus the escapes <BS>
+  // (backspace) and <CR> (submit/Enter). Exists for exactly the reason --tap
+  // does: the geometry and event wiring are platform-independent and gating them
+  // on a working macOS window would leave the input tier unverified on Linux.
+  std::string typeSpec;
   int screenshotAfterMs = -1;  // -1 = no timed capture
   std::string screenshotFirst;  // empty = no frame-0 capture
   int resizeAfterFrames = 0;    // 0 = no scripted resize
@@ -972,6 +1024,7 @@ int main(int argc, char** argv) {
     // emitter wiring are platform-independent, and gating them on a working
     // macOS window would leave the whole input tier unverified on Linux.
     else if (a == "--tap") tapSpec = next("--tap");
+    else if (a == "--type") typeSpec = next("--type");
     else if (a == "--screenshot-after") screenshotAfterMs = atoi(next("--screenshot-after").c_str());
     // Frame-0 capture. Pairs with --screenshot/--screenshot-after so ONE run
     // yields two frames to compare; see tools/ci-animate.sh for why a single
@@ -1381,6 +1434,86 @@ int main(int argc, char** argv) {
         return 1;
       }
     }
+
+    // <TextInput>. ENG-01b. Headless editing probe. Focus the field, replay the
+    // keystroke sequence, drain JS after each, then report what the SceneGraph
+    // holds and what the emitter reached. This drives the SAME
+    // FabricHost::focusTextInputAt / dispatchKey the GLFW callbacks call, so a
+    // green --type run proves the whole loop without a window.
+    if (!typeSpec.empty()) {
+      auto colon = typeSpec.find(':');
+      float fx = 0, fy = 0;
+      if (colon == std::string::npos ||
+          std::sscanf(typeSpec.substr(0, colon).c_str(), "%f,%f", &fx, &fy) != 2) {
+        fprintf(stderr, "rn-impeller: FATAL: --type wants X,Y:SEQ (got '%s')\n",
+                typeSpec.c_str());
+        return 1;
+      }
+      // ⛔ SETTLE THE MOUNT BEFORE THE FIRST HIT TEST.
+      // startSurface + waitForJsIdle above drains the JS thread, but under load
+      // (a gate packs+installs+bundles immediately before launch) the delegate
+      // can apply the mount transaction that POSITIONS this field a beat after
+      // JS goes idle. Focusing then finds no field and returns 0 -- a focus=0
+      // flake measured in ci-textedit.sh, indistinguishable from an
+      // unregistered field. A real window never has this problem: a human
+      // clicks long after layout. So poll for a REAL TextInput at the target
+      // point (isTextInputAt, not a bare hitTest -- the full-surface background
+      // <View> hits everywhere and resolves the instant the root mounts, long
+      // before the field), pumping JS idle each turn, until it appears or a
+      // bounded deadline expires. Same drain-then-verify discipline the network
+      // wait uses; a tree that never lays out must fail the gate, not hang.
+      auto mountStart = std::chrono::steady_clock::now();
+      auto mountDeadline = mountStart + std::chrono::seconds(10);
+      while (!fabric.isTextInputAt(fx, fy) &&
+             std::chrono::steady_clock::now() < mountDeadline) {
+        host.waitForJsIdle(200);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      // Report the settle so a slow mount (field resolved late) and a
+      // never-mount (deadline hit, still no field) are DISTINGUISHABLE in the
+      // log -- the gate's focus=0 message otherwise blames hit-testing for a
+      // timeout. field=1 means a TextInput is under the point and focus WILL
+      // succeed; field=0 after ~10000ms means the field never laid out.
+      auto settleMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - mountStart)
+                          .count();
+      printf("rn-impeller: type_mount_settle_ms=%lld field=%d\n",
+             (long long)settleMs, (int)fabric.isTextInputAt(fx, fy));
+      fflush(stdout);
+      int focused = fabric.focusTextInputAt(fx, fy);
+      printf("rn-impeller: type_focus=%d at=%.1f,%.1f\n", focused, fx, fy);
+      host.waitForJsIdle(5000);
+      const std::string seq = typeSpec.substr(colon + 1);
+      for (size_t i = 0; i < seq.size();) {
+        if (seq.compare(i, 4, "<BS>") == 0) {
+          fabric.dispatchKey(rni::FabricHost::KeyAction::Backspace, 0);
+          i += 4;
+        } else if (seq.compare(i, 4, "<CR>") == 0) {
+          fabric.dispatchKey(rni::FabricHost::KeyAction::Submit, 0);
+          i += 4;
+        } else {
+          fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar,
+                             (unsigned char)seq[i]);
+          i += 1;
+        }
+        host.waitForJsIdle(5000);
+      }
+      // The engine's own view of the field: buffer, length, caret. This is the
+      // painted truth. A gate asserts len/v here AND checks the JS-side label
+      // (the fixture renders `len=${v.length} v=${v}`) matches, so buffer and
+      // JS state cannot silently disagree.
+      std::string v = sceneGraph.textInputValueFor(focused);
+      size_t caret = sceneGraph.textInputCaretFor(focused);
+      printf("rn-impeller: textinput_value tag=%d len=%zu caret=%zu v=%s\n",
+             focused, v.size(), caret, v.c_str());
+      // The JS-side truth: every Paragraph's painted text. The fixture's
+      // controlled label renders `len=N v=...`, so this line proves onChangeText
+      // actually ran in JS and re-rendered -- not merely that the native buffer
+      // changed. A gate diffs this against textinput_value above.
+      fputs(sceneGraph.paragraphTextReport().c_str(), stdout);
+      fflush(stdout);
+    }
+
     if (logMutations) {
       printf("rn-impeller: scene=%s\n", sceneGraph.describe().c_str());
     }

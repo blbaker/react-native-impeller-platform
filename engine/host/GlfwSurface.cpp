@@ -389,6 +389,42 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
     }
   });
 
+  // <TextInput>. ENG-01b. THE KEYBOARD REGISTRATIONS THAT WERE ABSENT.
+  // glfwSetCharCallback and glfwSetKeyCallback were measured at ZERO occurrences
+  // in this tree before this, exactly as the mouse/scroll/cursor callbacks each
+  // were in turn. Same failure shape: a focused field paints its caret, the JS
+  // has onChangeText wired, and not one keystroke ever arrives.
+  //
+  // The CHAR callback carries a DECODED codepoint (layout- and dead-key-aware);
+  // it is the only correct source of a typed character. Control keys never reach
+  // it, which is why Backspace/Enter go through the KEY callback below.
+  glfwSetCharCallback(window_, [](GLFWwindow* w, unsigned int codepoint) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (!self || !self->charHandler_) return;
+    self->charHandler_(codepoint);
+  });
+  // The KEY callback delivers Backspace and Enter -- not characters, so absent
+  // from the char callback. GLFW_PRESS and GLFW_REPEAT both act (holding
+  // Backspace should keep deleting); GLFW_RELEASE is ignored so one keypress is
+  // one edit. GLFW_KEY_* is translated to the neutral EditKey enum HERE -- the
+  // only place <GLFW/glfw3.h> is in scope -- so the host never sees a GLFW code.
+  // Non-editing keys are dropped at this boundary, never forwarded.
+  glfwSetKeyCallback(window_, [](GLFWwindow* w, int key, int /*scancode*/,
+                                 int action, int mods) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (!self || !self->keyHandler_) return;
+    if (action == GLFW_RELEASE) return;
+    EditKey ek;
+    if (key == GLFW_KEY_BACKSPACE) {
+      ek = EditKey::Backspace;
+    } else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
+      ek = EditKey::Enter;
+    } else {
+      return;  // not an editing control key
+    }
+    self->keyHandler_(ek, (mods & GLFW_MOD_SHIFT) != 0);
+  });
+
   // ENG-09 hover/cursor. The three standard cursors, created ONCE (not per
   // move). glfwCreateStandardCursor returns null if the platform lacks the
   // shape; applyCursorKind tolerates a null by leaving the cursor unchanged,
@@ -570,6 +606,15 @@ void GlfwSurface::setHoverHandler(std::function<int(float, float)> handler) {
 
 void GlfwSurface::setCursorLeaveHandler(std::function<void()> handler) {
   cursorLeaveHandler_ = std::move(handler);
+}
+
+// <TextInput>. ENG-01b. Keyboard handler setters.
+void GlfwSurface::setCharHandler(std::function<void(unsigned int)> handler) {
+  charHandler_ = std::move(handler);
+}
+void GlfwSurface::setKeyHandler(
+    std::function<void(EditKey, bool)> handler) {
+  keyHandler_ = std::move(handler);
 }
 
 // ENG-09 hover/cursor. The one place a hover's screen->points conversion

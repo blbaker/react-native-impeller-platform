@@ -1,6 +1,9 @@
 #include "fabric/FabricHost.h"
 
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
+#include <react/renderer/components/iostextinput/TextInputComponentDescriptor.h>
+#include <react/renderer/components/iostextinput/TextInputShadowNode.h>
+#include <react/renderer/components/textinput/TextInputEventEmitter.h>
 #include <react/renderer/components/root/RootComponentDescriptor.h>
 #include <react/renderer/components/scrollview/ScrollViewComponentDescriptor.h>
 #include <react/renderer/components/scrollview/ScrollViewEventEmitter.h>
@@ -163,7 +166,7 @@ std::vector<std::string> FabricHost::knownComponentNames() {
   // the other fails in a way that looks exactly like "the engine does not
   // have it": RN takes a fallback path, nothing mounts, nothing logs.
   std::vector<std::string> names = {"View", "RootView", "Paragraph", "Text",
-                                     "RawText", "ScrollView"};
+                                     "RawText", "ScrollView", "TextInput"};
 #if RNI_WITH_RNSVG
   names.insert(names.end(), {"RNSVGSvgView", "RNSVGGroup", "RNSVGPath",
                              "RNSVGRect", "RNSVGCircle", "RNSVGEllipse",
@@ -202,6 +205,18 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
   // which is why this add() is checked before any painter change.
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::ScrollViewComponentDescriptor>());
+  // <TextInput>. ENG-01b.
+  //
+  // ⛔ REGISTRATION IS THE FLOOR, AND FOR TextInput IT IS ALSO WHERE MEASUREMENT
+  // COMES FROM. BaseTextInputShadowNode::measureContent asks for a
+  // TextLayoutManager via getManagerByName, so this descriptor MUST see the same
+  // ImpellerTextLayoutManager that <Text> uses (inserted into contextContainer
+  // below) or the field measures 0x0 and its own value text never lays out.
+  // Unregistered, <TextInput> mounts as a plain View: it paints its border,
+  // swallows every keystroke, and logs nothing wrong -- byte-for-byte the
+  // read-only surface the Mac gate is currently pinned to.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::TextInputComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // RNSVGSvgView's ComponentDescriptor is OUR codegen output (react-native-svg's
   // Svg.js resolves to the platform-suffixed name, which only the codegen
@@ -602,6 +617,146 @@ int FabricHost::clearHover() {
   emitPointer(was, /*enter=*/false, 0.0f, 0.0f);
   hoveredTag_ = 0;
   return was;
+}
+
+// <TextInput>. ENG-01b. Focus the field under the point, or blur.
+//
+// ⛔ A TextInput IS identified by its emitter type, not its component name.
+// hitTest returns the topmost tag; a TextInputEventEmitter downcast is what
+// separates a real editable field (registered descriptor -> concrete emitter)
+// from a plain View that merely happens to sit under the cursor. Same
+// discrimination discipline as dispatchTouch/dispatchHover.
+int FabricHost::focusTextInputAt(float x, float y) {
+  if (!sceneGraph_) return 0;
+  react::Tag target = sceneGraph_->hitTest(x, y);
+  bool isField = false;
+  if (target != 0) {
+    auto emitter = sceneGraph_->eventEmitterFor(target);
+    isField = (bool)std::dynamic_pointer_cast<
+        const react::TextInputEventEmitter>(emitter);
+  }
+  if (!isField) {
+    // A click outside any field blurs the current one, matching every desktop
+    // text field: onBlur fires and the caret disappears.
+    if (react::Tag prev = sceneGraph_->focusedTextInput()) {
+      auto emitter = sceneGraph_->eventEmitterFor(prev);
+      if (auto te = std::dynamic_pointer_cast<
+              const react::TextInputEventEmitter>(emitter)) {
+        react::TextInputEventEmitter::Metrics m{};
+        m.text = sceneGraph_->textInputValueFor(prev);
+        m.eventCount = ++tiEventCount_;
+        runtimeScheduler_->scheduleWork(
+            [te, m](facebook::jsi::Runtime&) { te->onBlur(m); });
+      }
+    }
+    sceneGraph_->clearTextInputFocus();
+    return 0;
+  }
+  sceneGraph_->setTextInputFocus(target);
+  auto emitter = sceneGraph_->eventEmitterFor(target);
+  if (auto te = std::dynamic_pointer_cast<
+          const react::TextInputEventEmitter>(emitter)) {
+    react::TextInputEventEmitter::Metrics m{};
+    m.text = sceneGraph_->textInputValueFor(target);
+    m.eventCount = ++tiEventCount_;
+    runtimeScheduler_->scheduleWork(
+        [te, m](facebook::jsi::Runtime&) { te->onFocus(m); });
+  }
+  return (int)target;
+}
+
+bool FabricHost::hasTextInputFocus() {
+  return sceneGraph_ && sceneGraph_->focusedTextInput() != 0;
+}
+
+// <TextInput>. ENG-01b. Non-mutating: is there a REAL text field under (x,y)?
+// The headless --type harness polls this to settle the mount before its first
+// focus. hitTest alone is not enough -- a full-surface background <View> hits at
+// every point, so a bare "hitTest != 0" resolves the instant the root mounts,
+// long before the field does. This checks the hit node is actually a
+// TextInputEventEmitter, i.e. focusTextInputAt would succeed here.
+bool FabricHost::isTextInputAt(float x, float y) {
+  if (!sceneGraph_) return false;
+  react::Tag target = sceneGraph_->hitTest(x, y);
+  if (target == 0) return false;
+  auto emitter = sceneGraph_->eventEmitterFor(target);
+  return (bool)std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
+      emitter);
+}
+
+// <TextInput>. ENG-01b. One editing keystroke.
+//
+// ⛔ TWO EFFECTS, BOTH REQUIRED (the same rule as dispatchScroll):
+//   1. The SceneGraph edit buffer changes, so the next paint shows the new
+//      glyphs and the caret at the new index.
+//   2. onChange fires in JS carrying the new text, so a controlled field's
+//      onChangeText runs and React state (the len=/v= label) updates.
+// Effect (1) alone types beautifully into a field JS never hears about;
+// effect (2) alone reports text that is not on screen. Enter is the exception:
+// it emits onSubmitEditing and does NOT alter the buffer.
+int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint) {
+  if (!sceneGraph_ || !runtimeScheduler_) return 0;
+  react::Tag tag = sceneGraph_->focusedTextInput();
+  if (tag == 0) return 0;
+  std::string value = sceneGraph_->textInputValueFor(tag);
+  size_t caret = value.size();  // caret tracked at end (single-line append/erase)
+
+  bool submit = false;
+  switch (action) {
+    case KeyAction::InsertChar:
+      // Single-line ASCII: printable range only. A control byte here would
+      // corrupt the buffer and paint a tofu box.
+      if (codepoint >= 0x20 && codepoint < 0x7F) {
+        value.push_back((char)codepoint);
+        caret = value.size();
+      }
+      break;
+    case KeyAction::Backspace:
+      if (!value.empty()) {
+        value.pop_back();
+        caret = value.size();
+      }
+      break;
+    case KeyAction::Submit:
+      submit = true;
+      break;
+    case KeyAction::Newline:
+      // Single-line field: a bare Enter submits rather than inserting. The
+      // multiline path (Shift+Enter) is a later arm; called out, not silently
+      // swallowed.
+      submit = true;
+      break;
+  }
+
+  auto emitter = sceneGraph_->eventEmitterFor(tag);
+  auto te =
+      std::dynamic_pointer_cast<const react::TextInputEventEmitter>(emitter);
+  if (!te) return 0;
+
+  if (submit) {
+    react::TextInputEventEmitter::Metrics m{};
+    m.text = value;
+    m.eventCount = ++tiEventCount_;
+    runtimeScheduler_->scheduleWork(
+        [te, m](facebook::jsi::Runtime&) { te->onSubmitEditing(m); });
+    return (int)tag;
+  }
+
+  // Apply to the paint buffer first so a paint scheduled by the JS re-render
+  // below never briefly shows the pre-edit string.
+  sceneGraph_->setTextInputEdit(tag, value, caret);
+
+  react::TextInputEventEmitter::Metrics m{};
+  m.text = value;
+  m.eventCount = ++tiEventCount_;
+  runtimeScheduler_->scheduleWork([te, m](facebook::jsi::Runtime&) {
+    // onChange is what RN's TextInput.js turns into onChangeText(text): its
+    // _onChange reads nativeEvent.text and calls props.onChangeText. Firing
+    // onChange alone drives a controlled field; onChangeText is not a separate
+    // native event.
+    te->onChange(m);
+  });
+  return (int)tag;
 }
 
 }  // namespace rni

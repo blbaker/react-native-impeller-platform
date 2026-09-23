@@ -159,6 +159,32 @@ class GlfwSurface {
   // window's cursor is reset to arrow here regardless.
   void setCursorLeaveHandler(std::function<void()> handler);
 
+  // <TextInput>. ENG-01b. Keyboard delivery, the SAME registration gap the
+  // mouse/scroll/cursor callbacks each closed in turn: glfwSetCharCallback and
+  // glfwSetKeyCallback were measured at ZERO occurrences in this tree before
+  // this. Without them a focused field paints its caret and never accepts a
+  // keystroke -- every one of the ~20 HostApp v5 fields is a dead box.
+  //
+  // TWO callbacks, deliberately:
+  //   - the CHAR handler receives a decoded Unicode codepoint (GLFW's
+  //     glfwSetCharCallback), which is the ONLY correct source of a typed
+  //     character: it honours the keyboard layout and dead keys, whereas
+  //     mapping GLFW_KEY_* to ASCII hardcodes a US QWERTY layout.
+  //   - the KEY handler receives Backspace/Enter, which are NOT characters and
+  //     never reach the char callback at all.
+  void setCharHandler(std::function<void(unsigned int codepoint)> handler);
+  // The editing control keys the single-line field acts on. GLFW_KEY_* codes
+  // are translated to this NEUTRAL enum inside GlfwSurface.cpp (the only TU that
+  // includes <GLFW/glfw3.h>), so the host never names a GLFW symbol -- the same
+  // encapsulation the forward-declared GLFWwindow keeps for the window handle.
+  enum class EditKey { Backspace, Enter };
+  // Fires only for the editing control keys above, on press/repeat (release is
+  // dropped so one keypress is one edit). `shift` carries the Shift modifier so
+  // the host can distinguish a submit from a multiline newline. Printable
+  // characters do NOT come through here -- they arrive layout-decoded via the
+  // char handler above.
+  void setKeyHandler(std::function<void(EditKey key, bool shift)> handler);
+
   // The effective layout scale, kept in sync by the host on every resize so the
   // cursor conversion cannot drift from the painter's root transform. Set from
   // the SAME DeriveWindowPointScale result the layout uses; see the host's
@@ -335,6 +361,11 @@ class GlfwSurface {
   // ENG-09 hover/cursor. Invoked from the GLFW cursor-ENTER callback when the
   // cursor leaves the window. Same threading argument.
   std::function<void()> cursorLeaveHandler_;
+  // <TextInput>. ENG-01b. Keyboard handlers. Same threading discipline as the
+  // pointer handlers: they run on the GLFW event thread and the host hops to the
+  // JS thread inside them.
+  std::function<void(unsigned int)> charHandler_;
+  std::function<void(EditKey, bool)> keyHandler_;
   // ENG-09 hover/cursor. The three standard cursors, created ONCE at init()
   // and destroyed in the destructor. arrowCursor_ is applied on creation and
   // whenever a point resolves to arrow; keeping the objects rather than

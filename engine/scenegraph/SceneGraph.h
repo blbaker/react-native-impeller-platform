@@ -129,6 +129,20 @@ struct SceneNode {
   // raw case and painting the transformed case would disagree on width.
   int textTransform{0};  // react::TextTransform: 0 None,1 Upper,2 Lower,3 Capitalize,4 Unset
 
+  // <TextInput>. ENG-01b. A TextInput is NOT a Paragraph: it paints a single
+  // editable line from a native-held buffer, a placeholder when that buffer is
+  // empty, and a caret when focused. isParagraph stays false so the Paragraph
+  // paint path (which reads ParagraphState, a state a TextInput does not carry)
+  // is never entered for it.
+  bool isTextInput{false};
+  // The controlled `value`/`defaultValue` prop, captured at mutation time. The
+  // LIVE edited string during focus is held by FabricHost and pushed in through
+  // setTextInputEdit; this is the fallback the paint uses when the field is not
+  // being edited, so an unfocused controlled field still shows its value.
+  std::string tiValue;
+  std::string tiPlaceholder;
+  float tiPlaceholderColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
+
   // RNSVGPath (P9-B2). `d` is re-parsed into geometry only when it changes —
   // see SvgPath.h. fillOpacity is kept SEPARATE from node.opacity (which
   // already holds the resolved ViewProps opacity for this node): the paint
@@ -366,6 +380,34 @@ class SceneGraph {
   // removing the node between the hit test and this read.
   int cursorKindFor(facebook::react::Tag tag);
 
+  // <TextInput>. ENG-01b. The editing state the PAINT reads: which field has
+  // focus, the live edited string, and the caret index within it. FabricHost
+  // owns the editing logic (keystroke -> buffer -> event); these setters are the
+  // one channel by which that logic reaches the painter, so the caret and the
+  // glyphs on screen cannot disagree with the buffer JS is being told about.
+  // Held here, not in the node, because focus is a singleton (one field at a
+  // time) and lives across the mounting transactions that rebuild the nodes.
+  void setTextInputFocus(facebook::react::Tag tag);
+  void setTextInputEdit(facebook::react::Tag tag, const std::string& value,
+                        size_t caret);
+  void clearTextInputFocus();
+  facebook::react::Tag focusedTextInput();
+  // The value a field should display: the live edit buffer if it is focused,
+  // else its controlled tiValue prop. Used by the paint and returned to
+  // FabricHost so a click that focuses an already-populated field seeds its
+  // edit buffer from the value already on screen.
+  std::string textInputValueFor(facebook::react::Tag tag);
+  // The caret index within the focused field's edit buffer. Returns 0 when the
+  // tag is not the focused field (an unfocused field paints no caret). Exposed
+  // so a gate can assert the caret ADVANCED with the typed characters, not just
+  // that the buffer changed -- a buffer that grows while the caret stays at 0
+  // is a real editing bug the value-only check cannot see.
+  size_t textInputCaretFor(facebook::react::Tag tag);
+  // One `paragraph_text tag=<t> "<text>"` line per Paragraph node, for the
+  // ENG-01b edit gate: the fixture's controlled label renders `len=N v=...`, so
+  // this exposes the JS re-render result to a headless assertion.
+  std::string paragraphTextReport();
+
  private:
   // Returns the hit tag, or 0. `originX/originY` accumulate exactly as in
   // paintNode: frames are PARENT-RELATIVE, so absolute position is the running
@@ -413,6 +455,14 @@ class SceneGraph {
   std::unordered_map<facebook::react::Tag, SceneNode> nodes_;
   std::vector<facebook::react::Tag> roots_;
   ImpellerTypographyContext typography_{nullptr};
+  // <TextInput>. ENG-01b. Focus is a singleton: at most one field edits at a
+  // time. tiFocused_==0 means no field is focused (caret not painted anywhere).
+  // tiEditValue_ is the live buffer the keystroke loop mutates; tiCaret_ is the
+  // insertion index within it (0..len). All three are read by paintNode under
+  // mutex_, written by FabricHost's setters under the same lock.
+  facebook::react::Tag tiFocused_{0};
+  std::string tiEditValue_;
+  size_t tiCaret_{0};
 };
 
 }  // namespace rni
