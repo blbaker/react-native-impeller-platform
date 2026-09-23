@@ -18,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <chrono>
 #include <unordered_map>
 #include <vector>
 
@@ -463,6 +464,15 @@ class SceneGraph {
   facebook::react::Tag tiFocused_{0};
   std::string tiEditValue_;
   size_t tiCaret_{0};
+  // <TextInput>. ENG-01b item 5: caret blink. The steady_clock instant the
+  // caret was last RESET to visible -- set on focus, on a click into the field,
+  // and on EVERY keystroke. paintNode blinks the caret from the time elapsed
+  // since this (see CaretBlink.h): visible for the first half-period after a
+  // reset, so a burst of typing can never leave the insertion point behind an
+  // off phase. steady_clock, not system_clock: the blink must not jump when the
+  // wall clock is stepped (NTP, DST), and it is a duration, not a date.
+  std::chrono::steady_clock::time_point tiCaretResetAt_{
+      std::chrono::steady_clock::now()};
 };
 
 }  // namespace rni

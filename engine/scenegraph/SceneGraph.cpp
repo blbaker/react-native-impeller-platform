@@ -1,5 +1,7 @@
 #include "scenegraph/SceneGraph.h"
 
+#include "scenegraph/CaretBlink.h"
+
 #include <react/renderer/core/ConcreteState.h>
 #include <react/renderer/components/textinput/BaseTextInputProps.h>
 #include <react/renderer/graphics/BackgroundImage.h>
@@ -1322,15 +1324,25 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerParagraphStyleRelease(style);
     }
     // The caret: a 1-point-wide vertical bar at the insertion point, painted
-    // only while focused. Drawn last so it sits over the text. This is the
-    // visible proof of focus a read-only surface can never show.
+    // only while focused AND in an ON blink phase. Drawn last so it sits over
+    // the text. This is the visible proof of focus a read-only surface can
+    // never show. item 5: the blink phase is a pure function of the time since
+    // the last caret reset (focus/click/keystroke) -- see CaretBlink.h -- so a
+    // burst of typing always re-shows it and a screenshot in an off phase is a
+    // real off phase, not a missing caret.
     if (focused) {
-      ImpellerPaint caretPaint = ImpellerPaintNew();
-      ImpellerColor cc = impellerColor(node.textColor, node.opacity);
-      ImpellerPaintSetColor(caretPaint, &cc);
-      ImpellerRect caretRect = {caretX, ty, 1.0f, lineH};
-      ImpellerDisplayListBuilderDrawRect(builder, &caretRect, caretPaint);
-      ImpellerPaintRelease(caretPaint);
+      const long long msSinceReset =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - tiCaretResetAt_)
+              .count();
+      if (caretVisible(msSinceReset)) {
+        ImpellerPaint caretPaint = ImpellerPaintNew();
+        ImpellerColor cc = impellerColor(node.textColor, node.opacity);
+        ImpellerPaintSetColor(caretPaint, &cc);
+        ImpellerRect caretRect = {caretX, ty, 1.0f, lineH};
+        ImpellerDisplayListBuilderDrawRect(builder, &caretRect, caretPaint);
+        ImpellerPaintRelease(caretPaint);
+      }
     }
   }
 
@@ -1776,6 +1788,10 @@ void SceneGraph::setTextInputFocus(facebook::react::Tag tag) {
   auto it = nodes_.find(tag);
   tiEditValue_ = (it != nodes_.end()) ? it->second.tiValue : std::string();
   tiCaret_ = tiEditValue_.size();
+  // item 5: focusing a field shows the caret immediately, then blinks from
+  // here. Without this reset the caret's phase would be whatever the free clock
+  // happened to be at, so a field could focus into an off phase and look dead.
+  tiCaretResetAt_ = std::chrono::steady_clock::now();
 }
 
 void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
@@ -1784,6 +1800,11 @@ void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
   if (tiFocused_ != tag) return;  // ignore edits for a field that lost focus
   tiEditValue_ = value;
   tiCaret_ = caret > value.size() ? value.size() : caret;
+  // item 5: EVERY keystroke re-shows the caret. This is the half a free-running
+  // `(now/500)%2` blink gets wrong -- typing during an off phase would land the
+  // character next to an invisible caret. Resetting the phase here guarantees
+  // the caret is on for the first half-period after any edit.
+  tiCaretResetAt_ = std::chrono::steady_clock::now();
 }
 
 void SceneGraph::clearTextInputFocus() {

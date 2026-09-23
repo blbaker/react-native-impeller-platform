@@ -56,6 +56,7 @@
 // Header-only and platform-free on purpose: the backing-scale decision has to
 // be testable (--test-pointscale) on hosts that have no window at all.
 #include "host/PointScale.h"
+#include "scenegraph/CaretBlink.h"
 #include "impeller.h"
 #include "runtime/FeatureFlags.h"
 #include "runtime/ReactHost.h"
@@ -930,6 +931,7 @@ int main(int argc, char** argv) {
   bool listModules = false;
   bool testOpenUrl = false;
   bool testPointScale = false;
+  bool testCaretBlink = false;
   bool testUrlParse = false;
   bool testHttp = false;
   bool windowMode = false;
@@ -1215,6 +1217,7 @@ int main(int argc, char** argv) {
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
     else if (a == "--test-pointscale") testPointScale = true;
+    else if (a == "--test-caret-blink") testCaretBlink = true;
     else if (a == "--test-urlparse") testUrlParse = true;
     else if (a == "--test-http") testHttp = true;
     else if (a == "--color-scheme") colorScheme = next("--color-scheme");
@@ -1274,6 +1277,13 @@ int main(int argc, char** argv) {
   // decision whose WRONG answer only shows up on hardware CI does not have
   // (a Retina display), on the platform that actually builds today.
   if (testPointScale) return rni::runPointScaleSelfTest();
+  // Same shape as --test-pointscale, same reason: the caret blink decision
+  // (visible for the first half-period after each keystroke, so typing never
+  // lands next to an invisible caret) is a wrong-answer-invisible-on-CI bug --
+  // a screenshot might catch an on phase either way. --test-caret-blink
+  // exercises the pure predicate directly, on a host with no window and no
+  // clock skew.
+  if (testCaretBlink) return rni::runCaretBlinkSelfTest();
   // The Networking transport, proven WITHOUT a JS runtime. --test-http stands
   // up a loopback server on an ephemeral port and drives a real GET and a real
   // POST-with-headers through the same performRequest() the TurboModule calls,
