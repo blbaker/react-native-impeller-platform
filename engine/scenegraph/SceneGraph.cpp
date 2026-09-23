@@ -1733,9 +1733,37 @@ facebook::react::EventEmitter::Shared SceneGraph::eventEmitterFor(
 
 int SceneGraph::cursorKindFor(facebook::react::Tag tag) {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = nodes_.find(tag);
-  if (it == nodes_.end()) return 0;  // arrow
-  return it->second.cursorKind;
+  // ⛔ THE CURSOR IS AN INHERITED PROPERTY, SO RESOLVE IT FROM THE ANCESTRY,
+  // NOT FROM THE HIT LEAF ALONE. hitTest returns the topmost node under the
+  // point, which is almost never the node that carried cursor:'pointer': a
+  // Pressable wraps a Text or an inner View, and THOSE are what the point
+  // lands on. Reading only the leaf's cursorKind therefore reported arrow for
+  // every control whose clickable surface has any child — the icon inside a
+  // button, the label inside a Pressable — even though the author set the
+  // cursor on the wrapper. That is CSS's own rule (cursor inherits, and
+  // `cursor:auto` on a child means "ask my ancestors"), and it is what makes
+  // "hovering anywhere on a button shows the hand" true.
+  //
+  // Walk UP from the leaf; the NEAREST explicit (non-arrow) cursor wins, so a
+  // Text field (cursor:text) nested inside a card (no cursor) still reads
+  // ibeam, and a plain <Text> label inside a Pressable (cursor:pointer) reads
+  // hand. A node whose own cursorKind is arrow is treated as "inherit", NOT as
+  // an explicit arrow request — Cursor::Auto and Cursor::Default both collapse
+  // to 0 at mount (see the switch in applyProps), so there is no explicit
+  // arrow to honour here anyway; an author who wants to FORCE arrow inside a
+  // hand region is a case RN's three-shape cursor model cannot express and
+  // this engine does not claim to. The loop is bounded by the tree depth and
+  // guarded against a cycle by the visited-parent check the tree can never
+  // actually trip, so a corrupt parent link fails safe to arrow.
+  facebook::react::Tag cur = tag;
+  while (cur != 0) {
+    auto it = nodes_.find(cur);
+    if (it == nodes_.end()) break;
+    if (it->second.cursorKind != 0) return it->second.cursorKind;  // explicit
+    if (it->second.parent == cur) break;  // self-parent: fail safe to arrow
+    cur = it->second.parent;
+  }
+  return 0;  // arrow — no ancestor set an explicit cursor
 }
 
 // <TextInput>. ENG-01b. Editing state, all under mutex_ so the paint (which
