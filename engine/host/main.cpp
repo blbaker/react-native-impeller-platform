@@ -978,6 +978,16 @@ int main(int argc, char** argv) {
   std::vector<std::pair<double, double>> hoverPoints;
   bool hoverLeaveAtEnd = false;
   int width = 400, height = 300;
+  // ⛔ WINDOWED DEFAULT IS THE DISPLAY, NOT THESE NUMBERS — SEE GlfwSurface::init.
+  // 400x300 is the HEADLESS default and every headless gate depends on it byte
+  // for byte, so it stays. On the windowed path an unspecified size means "size
+  // to the monitor" (glfwGetMonitorWorkarea, ~70%, centred, floored near
+  // 1024x700), not a 400x300 postage stamp: a real app opens at a usable size.
+  // These two flags are what let the windowed path tell "user asked for 400"
+  // from "user asked for nothing" -- the same defaulted-vs-explicit distinction
+  // pointScaleGiven draws for --scale. When false, RunWindowed passes 0 (the
+  // auto sentinel) to GlfwSurface::init; --width/--height still override.
+  bool widthGiven = false, heightGiven = false;
   // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
   // The surface is allocated at width x height PIXELS; layout then happens in
   // POINTS = pixels / scale, exactly as a real display works. `--width 800
@@ -1210,8 +1220,8 @@ int main(int argc, char** argv) {
     else if (a == "--color-scheme") colorScheme = next("--color-scheme");
     else if (a == "--initial-url") initialUrl = next("--initial-url");
     else if (a == "--probe-banner") probeBanner = (next("--probe-banner") != "off");
-    else if (a == "--width") width = atoi(next("--width").c_str());
-    else if (a == "--height") height = atoi(next("--height").c_str());
+    else if (a == "--width") { width = atoi(next("--width").c_str()); widthGiven = true; }
+    else if (a == "--height") { height = atoi(next("--height").c_str()); heightGiven = true; }
     else if (a == "--scale") {
       pointScale = (float)atof(next("--scale").c_str());
       if (!(pointScale > 0.0f)) {
@@ -1302,7 +1312,9 @@ int main(int argc, char** argv) {
   if (windowMode) {
 #if RNI_WITH_WINDOW
     return RunWindowed(bundlePath, appName, std::move(bundle), 0, bundleSize,
-                       colorScheme, initialUrl, width, height, pointScale,
+                       colorScheme, initialUrl,
+                       widthGiven ? width : 0, heightGiven ? height : 0,
+                       pointScale,
                        logMutations, frames, screenshotAfterMs, screenshot,
                        screenshotFirst, pointScaleGiven, resizeAfterFrames,
                        resizeToW, resizeToH, stallAfterFrames, stallMs,

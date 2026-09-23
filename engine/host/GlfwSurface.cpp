@@ -242,9 +242,63 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
     }
   }
 
+  // ⛔ ITEM 3: A ZERO WIDTH/HEIGHT MEANS "SIZE TO THE DISPLAY", NOT A ZERO
+  // WINDOW. The host passes 0 for either axis when the user gave no --width/
+  // --height (see main.cpp's widthGiven/heightGiven). glfwCreateWindow(0,0)
+  // would fail or open a degenerate window, so resolve the auto axes here,
+  // AFTER glfwInit (glfwGetPrimaryMonitor needs it) and BEFORE the window is
+  // created. The default is ~70% of the monitor's WORK AREA -- not the full
+  // monitor size, which would sit under the menu bar / taskbar -- centred in
+  // that work area, with a floor near 1024x700 so a tiny or unreported monitor
+  // still yields a usable window. --width/--height override per-axis: a given
+  // axis arrives non-zero and is used verbatim, so `--width 800` with no
+  // --height gets an 800-wide window at the derived height.
+  bool autoSized = false;
+  if (width <= 0 || height <= 0) {
+    // Work area excludes OS chrome (macOS menu bar, Linux/Win taskbar); the
+    // monitor's full mode would put our title bar off-screen on some WMs.
+    int waX = 0, waY = 0, waW = 0, waH = 0;
+    if (GLFWmonitor* mon = glfwGetPrimaryMonitor()) {
+      glfwGetMonitorWorkarea(mon, &waX, &waY, &waW, &waH);
+    }
+    // A monitor that reports nothing (headless X, some VMs) must not collapse
+    // the window to 0; fall back to the floor so the app still opens.
+    const int kFloorW = 1024, kFloorH = 700;
+    auto derive = [&](int given, int workExtent, int floor) -> int {
+      if (given > 0) return given;                 // explicit axis wins
+      int seventy = workExtent > 0 ? (workExtent * 7) / 10 : 0;
+      return seventy > floor ? seventy : floor;    // ~70%, never below floor
+    };
+    width = derive(width, waW, kFloorW);
+    height = derive(height, waH, kFloorH);
+    autoSized = true;
+    std::printf("rn-impeller: window_default size=%dx%d workarea=%dx%d\n",
+                width, height, waW, waH);
+    std::fflush(stdout);
+  }
+
   window_ = glfwCreateWindow(width, height, "React Native (Impeller)", nullptr,
                              nullptr);
   if (!window_) return fail("glfwCreateWindow failed");
+
+  // ⛔ CENTRE IN THE MONITOR WORK AREA WHEN WE CHOSE THE SIZE OURSELVES.
+  // GLFW places a new window wherever the WM decides (often 0,0 -> under the
+  // menu bar). When the size came from the display we also own the position:
+  // centre the window in the work area so it opens where a real app would,
+  // not jammed into a corner. Skipped when both axes were explicit -- a caller
+  // that asked for an exact size is not asking us to move it.
+  if (autoSized) {
+    if (GLFWmonitor* mon = glfwGetPrimaryMonitor()) {
+      int waX = 0, waY = 0, waW = 0, waH = 0;
+      glfwGetMonitorWorkarea(mon, &waX, &waY, &waW, &waH);
+      if (waW > 0 && waH > 0) {
+        int winW = 0, winH = 0;
+        glfwGetWindowSize(window_, &winW, &winH);
+        glfwSetWindowPos(window_, waX + (waW - winW) / 2,
+                         waY + (waH - winH) / 2);
+      }
+    }
+  }
 
   int fbWidth = 0, fbHeight = 0;
   glfwGetFramebufferSize(window_, &fbWidth, &fbHeight);
