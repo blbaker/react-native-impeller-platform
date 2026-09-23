@@ -15,6 +15,7 @@
 #include <shellapi.h>
 #include <climits>  // INT_PTR comparison bound
 #else
+#include <cerrno>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -222,6 +223,42 @@ jsi::Value LinkingManagerModule::openURL(jsi::Runtime& rt, jsi::String url) {
                  (long long)(INT_PTR)rc, target.c_str());
     std::fflush(stderr);
     return resolvedPromise(rt, jsi::Value(false));
+  }
+#elif defined(__APPLE__)
+  // macOS: /usr/bin/open, by ABSOLUTE PATH not a PATH lookup. `open` returns
+  // promptly after handing the URL to LaunchServices (it does NOT block for the
+  // browser's lifetime the way xdg-open can), so unlike the Linux branch we CAN
+  // waitpid and report the real launch result to JS. A non-zero exit means
+  // LaunchServices refused the URL (no handler, malformed) — that must settle
+  // the promise `false`, not the optimistic `true` the fall-through returns.
+  //
+  // fork+execl, never system(): system() runs /bin/sh -c and would reintroduce
+  // exactly the shell interpretation the allowlist predicate exists to prevent.
+  // The absolute path also means a hostile PATH cannot shadow `open`.
+  {
+    pid_t pid = fork();
+    if (pid == 0) {
+      execl("/usr/bin/open", "open", target.c_str(), (char*)nullptr);
+      _exit(127);
+    }
+    if (pid < 0) {
+      std::fprintf(stderr, "rn-impeller: openURL FAILED (fork): %s\n",
+                   target.c_str());
+      std::fflush(stderr);
+      return resolvedPromise(rt, jsi::Value(false));
+    }
+    int status = 0;
+    // Restart on EINTR; any other waitpid failure is treated as a failed open.
+    pid_t w;
+    do {
+      w = waitpid(pid, &status, 0);
+    } while (w < 0 && errno == EINTR);
+    if (w < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      std::fprintf(stderr, "rn-impeller: openURL FAILED (open exit=%d): %s\n",
+                   WIFEXITED(status) ? WEXITSTATUS(status) : -1, target.c_str());
+      std::fflush(stderr);
+      return resolvedPromise(rt, jsi::Value(false));
+    }
   }
 #else
   // fork+exec, never system(): system() runs /bin/sh -c and would reintroduce
