@@ -55,6 +55,13 @@ GlfwSurface::~GlfwSurface() {
   if (typography_) ImpellerTypographyContextRelease(typography_);
   if (surface_) ImpellerSurfaceRelease(surface_);
   if (context_) ImpellerContextRelease(context_);
+  // ENG-09 hover/cursor. Destroy the standard cursors before glfwTerminate,
+  // which would otherwise leak them (GLFW frees its own on terminate, but
+  // being explicit keeps the ownership obvious and survives a future move to
+  // not calling glfwTerminate here).
+  if (arrowCursor_) glfwDestroyCursor(arrowCursor_);
+  if (handCursor_) glfwDestroyCursor(handCursor_);
+  if (ibeamCursor_) glfwDestroyCursor(ibeamCursor_);
 #if defined(__APPLE__)
   if (display_ != EGL_NO_DISPLAY) {
     eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -337,14 +344,58 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   // button callback: GLFW guarantees glfwGetCursorPos is current here, and a
   // wheel event can arrive with no preceding cursor-move to have recorded
   // (wheel over a window that just gained focus).
-  glfwSetScrollCallback(window_, [](GLFWwindow* w, double /*xoffset*/,
+  glfwSetScrollCallback(window_, [](GLFWwindow* w, double xoffset,
                                     double yoffset) {
     auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
     if (!self || !self->scrollHandler_) return;
     double cx = 0.0, cy = 0.0;
     glfwGetCursorPos(w, &cx, &cy);
-    self->dispatchScrollPoint(cx, cy, yoffset);
+    self->dispatchScrollPoint(cx, cy, xoffset, yoffset);
   });
+
+  // ENG-09 hover/cursor. THE THIRD REGISTRATION THAT WAS ABSENT.
+  // glfwSetCursorPosCallback was measured at ZERO occurrences in this tree
+  // before this line (see the header's P9 note, which recorded it absent
+  // alongside the mouse-button one). Same failure shape as clicks and scroll:
+  // pointerenter/leave and the cursor shape have been implementable in
+  // FabricHost and paintable all along, and nothing moved the mouse. A view
+  // with an onPointerEnter hover style would mount, paint its resting state
+  // and never light up, and no line would log.
+  //
+  // ⛔ UNLIKE THE BUTTON CALLBACK, THE POSITION IS THE CALLBACK'S ARGUMENT.
+  // glfwSetCursorPosCallback delivers x/y directly, so there is no
+  // glfwGetCursorPos here -- the argument IS the current position, by
+  // definition. dispatchHoverPoint does the one-place screen->points
+  // conversion, exactly as the click and scroll paths do.
+  glfwSetCursorPosCallback(window_, [](GLFWwindow* w, double x, double y) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (!self || !self->hoverHandler_) return;
+    self->dispatchHoverPoint(x, y);
+  });
+
+  // ENG-09 hover/cursor. THE OTHER HALF: clear the hovered control when the
+  // cursor LEAVES the window. Without this a control the mouse was over when
+  // it exited the window stays visually hovered forever -- glfwSetCursorPos
+  // stops firing at the edge, so the last hovered tag never gets its
+  // pointerleave. GLFW_TRUE on enter, GLFW_FALSE on leave; only the leave is
+  // acted on (an enter's first move fires the position callback anyway).
+  glfwSetCursorEnterCallback(window_, [](GLFWwindow* w, int entered) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (!self) return;
+    if (entered == GLFW_FALSE && self->cursorLeaveHandler_) {
+      self->cursorLeaveHandler_();
+      // Reset to arrow: the next window the cursor is over owns its own shape.
+      self->applyCursorKind(0);
+    }
+  });
+
+  // ENG-09 hover/cursor. The three standard cursors, created ONCE (not per
+  // move). glfwCreateStandardCursor returns null if the platform lacks the
+  // shape; applyCursorKind tolerates a null by leaving the cursor unchanged,
+  // so a missing hand cursor degrades to "no shape change", never a crash.
+  arrowCursor_ = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
+  handCursor_ = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
+  ibeamCursor_ = glfwCreateStandardCursor(GLFW_IBEAM_CURSOR);
 
 #if defined(__APPLE__)
   if (!initAngleForWindow(error)) return false;
@@ -473,14 +524,14 @@ void GlfwSurface::dispatchCursorPoint(double screenX, double screenY,
 }
 
 void GlfwSurface::setScrollHandler(
-    std::function<void(float, float, float)> handler) {
+    std::function<void(float, float, float, float)> handler) {
   scrollHandler_ = std::move(handler);
 }
 
 // <ScrollView>. ENG-02. The one place screen->points AND the GLFW sign flip
 // happen; see the header for why the flip is not optional.
 void GlfwSurface::dispatchScrollPoint(double screenX, double screenY,
-                                      double glfwDy) {
+                                      double glfwDx, double glfwDy) {
   if (!scrollHandler_) return;
   // Re-read the sizes for the same reason dispatchCursorPoint does: the cached
   // values are refreshed by the frame loop, which is blocked during a modal
@@ -494,18 +545,78 @@ void GlfwSurface::dispatchScrollPoint(double screenX, double screenY,
   const float py = CursorPointsFromScreen(screenY, fbH, winH, pointScale_);
   // Wheel notches are not points. A notch of 1 that moved the list by one point
   // would be indistinguishable from a dead scroll to a human, so it is scaled
-  // to a conventional line height. The sign flips here: GLFW positive = wheel
-  // away = scroll UP, RN contentOffset grows going DOWN.
+  // to a conventional line height. Both signs flip here: GLFW positive-y = wheel
+  // away = scroll UP, RN contentOffset grows going DOWN; GLFW positive-x = push
+  // right, RN contentOffset grows going RIGHT. dx is carried through with the
+  // same treatment dy gets rather than dropped, which is the whole fix -- a
+  // y-only handler could never move a horizontal list.
   constexpr float kPointsPerNotch = 40.0f;
-  scrollHandler_(px, py, (float)(-glfwDy) * kPointsPerNotch);
+  scrollHandler_(px, py, (float)(-glfwDx) * kPointsPerNotch,
+                 (float)(-glfwDy) * kPointsPerNotch);
 }
 
-void GlfwSurface::synthesiseScroll(double screenX, double screenY, double dy) {
+void GlfwSurface::synthesiseScroll(double screenX, double screenY, double dx,
+                                   double dy) {
   // Through dispatchScrollPoint, NOT scrollHandler_ directly, so the probe
   // exercises the same conversion and the same sign flip a real wheel does. A
   // synthetic path that called the handler with raw numbers would pass while
   // the real wheel scrolled backwards.
-  dispatchScrollPoint(screenX, screenY, dy);
+  dispatchScrollPoint(screenX, screenY, dx, dy);
+}
+
+void GlfwSurface::setHoverHandler(std::function<int(float, float)> handler) {
+  hoverHandler_ = std::move(handler);
+}
+
+void GlfwSurface::setCursorLeaveHandler(std::function<void()> handler) {
+  cursorLeaveHandler_ = std::move(handler);
+}
+
+// ENG-09 hover/cursor. The one place a hover's screen->points conversion
+// happens; see the header. Applies the cursor shape the handler resolved so
+// the shape decision rides with the hit test rather than being recomputed.
+void GlfwSurface::dispatchHoverPoint(double screenX, double screenY) {
+  if (!hoverHandler_) return;
+  // Re-read the sizes for the same reason dispatchCursorPoint does: the cached
+  // values are refreshed by the frame loop, which is blocked during a modal
+  // resize drag, and a hover that arrives just after a resize must use the
+  // geometry that exists now.
+  int fbW = 0, fbH = 0, winW = 0, winH = 0;
+  if (window_) {
+    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    glfwGetWindowSize(window_, &winW, &winH);
+  }
+  const float px = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
+  const float py = CursorPointsFromScreen(screenY, fbH, winH, pointScale_);
+  const int kind = hoverHandler_(px, py);
+  applyCursorKind(kind);
+}
+
+// ENG-09 hover/cursor. Set the window cursor for `kind`, skipping the GLFW
+// call when it is already that shape so a per-move stream does not thrash it.
+void GlfwSurface::applyCursorKind(int kind) {
+  if (kind == appliedCursorKind_) return;
+  if (!window_) return;
+  GLFWcursor* c = arrowCursor_;
+  if (kind == 1) c = handCursor_;
+  else if (kind == 2) c = ibeamCursor_;
+  // A null standard cursor (platform did not provide the shape) means "leave
+  // the current cursor alone" rather than resetting to the platform default,
+  // which would flicker to arrow over a hand-requesting view on such a host.
+  if (!c) return;
+  glfwSetCursor(window_, c);
+  appliedCursorKind_ = kind;
+}
+
+void GlfwSurface::synthesiseHover(double screenX, double screenY) {
+  // Through dispatchHoverPoint, NOT hoverHandler_ directly, so the probe
+  // exercises the same conversion and the same cursor-apply a real move does.
+  dispatchHoverPoint(screenX, screenY);
+}
+
+void GlfwSurface::synthesiseCursorLeave() {
+  if (cursorLeaveHandler_) cursorLeaveHandler_();
+  applyCursorKind(0);
 }
 
 void GlfwSurface::synthesiseClick(double screenX, double screenY) {

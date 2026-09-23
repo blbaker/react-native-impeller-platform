@@ -465,10 +465,10 @@ int FabricHost::dispatchTouch(TouchPhase phase, float x, float y) {
 // reacts to scrolling; one that only does (2) reports motion that never
 // happened. Both are indistinguishable from working if you check only the
 // other one.
-int FabricHost::dispatchScroll(float x, float y, float dy) {
+int FabricHost::dispatchScroll(float x, float y, float dx, float dy) {
   if (!sceneGraph_ || !runtimeScheduler_) return 0;
 
-  const auto res = sceneGraph_->scrollBy(x, y, dy);
+  const auto res = sceneGraph_->scrollBy(x, y, dx, dy);
   if (res.tag == 0) return 0;
 
   auto emitter = sceneGraph_->eventEmitterFor(res.tag);
@@ -484,9 +484,14 @@ int FabricHost::dispatchScroll(float x, float y, float dy) {
   if (!scrollEmitter) return 0;
 
   react::ScrollEvent event{};
-  event.contentOffset = {0.0f, (react::Float)res.offsetY};
-  event.contentSize = {(react::Float)0.0f, (react::Float)res.contentHeight};
-  event.containerSize = {(react::Float)0.0f, (react::Float)res.containerHeight};
+  // Both axes reported: a horizontal list drives contentOffset.x, and a JS
+  // handler reading nativeEvent.contentOffset.x for a sticky column header or a
+  // paged carousel index would otherwise always read zero while the pixels slid.
+  event.contentOffset = {(react::Float)res.offsetX, (react::Float)res.offsetY};
+  event.contentSize = {(react::Float)res.contentWidth,
+                       (react::Float)res.contentHeight};
+  event.containerSize = {(react::Float)res.containerWidth,
+                         (react::Float)res.containerHeight};
   event.zoomScale = 1.0f;
   event.timestamp =
       (react::Float)std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -501,6 +506,102 @@ int FabricHost::dispatchScroll(float x, float y, float dy) {
         scrollEmitter->onScroll(event);
       });
   return (int)res.tag;
+}
+
+// ENG-09 hover/cursor.
+bool FabricHost::emitPointer(int tag, bool enter, float x, float y) {
+  if (tag == 0 || !sceneGraph_ || !runtimeScheduler_) return false;
+
+  auto emitter = sceneGraph_->eventEmitterFor((react::Tag)tag);
+  if (!emitter) return false;
+  // Same discrimination as dispatchTouch: only a TouchEventEmitter can carry a
+  // pointer event. A base EventEmitter (unregistered / non-view node) cannot,
+  // and dispatching to it would be a silent no-op that looks like a delivered
+  // hover -- which is exactly the ambiguity the touch path already refuses.
+  auto touchEmitter =
+      std::dynamic_pointer_cast<const react::TouchEventEmitter>(emitter);
+  if (!touchEmitter) return false;
+
+  react::PointerEvent event{};
+  // W3C: a mouse pointer's primary id is 1 in RN. Stable across enter/leave.
+  event.pointerId = 1;
+  event.pointerType = "mouse";
+  event.clientPoint = {x, y};
+  event.screenPoint = {x, y};
+  // offsetPoint is target-relative; left equal to clientPoint for the same
+  // reason dispatchTouch leaves it equal to pagePoint -- the hit walk knows the
+  // target origin but does not return it yet, and onPointerEnter/Leave do not
+  // read it. Called out rather than silently wrong.
+  event.offsetPoint = {x, y};
+  event.pressure = 0.0f;
+  // No button is held during a hover. RN's buttons bitmask: 0 = none.
+  event.buttons = 0;
+  event.width = 1.0f;
+  event.height = 1.0f;
+
+  runtimeScheduler_->scheduleWork(
+      [touchEmitter, event, enter](facebook::jsi::Runtime&) {
+        if (enter) {
+          touchEmitter->onPointerEnter(event);
+        } else {
+          touchEmitter->onPointerLeave(event);
+        }
+      });
+  return true;
+}
+
+// ENG-09 hover/cursor. Move the retained hovered tag; emit leave/enter only on
+// a transition. The two effects that must both hold: (1) the OLD view gets a
+// pointerleave so its hover styling clears, (2) the NEW view gets a
+// pointerenter so its hover styling applies. A move within the same view emits
+// NEITHER -- that is what keeps the per-move path quiet.
+FabricHost::HoverResult FabricHost::dispatchHover(float x, float y) {
+  HoverResult result{};
+  if (!sceneGraph_) return result;
+
+  react::Tag target = sceneGraph_->hitTest(x, y);
+  // A hit that lands on a node with no touch emitter cannot be a hover target:
+  // it can neither receive a pointerenter nor, later, a pointerleave, so
+  // retaining it would strand a leave forever. Collapse it to "nothing", the
+  // same as hovering empty space -- and let the cursor fall back to arrow.
+  if (target != 0) {
+    auto emitter = sceneGraph_->eventEmitterFor(target);
+    if (!std::dynamic_pointer_cast<const react::TouchEventEmitter>(emitter)) {
+      target = 0;
+    }
+  }
+
+  result.tag = (int)target;
+  result.cursorKind = sceneGraph_->cursorKindFor(target);
+
+  if ((int)target == hoveredTag_) {
+    // No transition. Silent by construction: this is the common per-move case.
+    return result;
+  }
+
+  // Leave the old, enter the new -- in that order, matching the DOM, so a view
+  // that reacts to both sees leave-then-enter rather than an interleaving.
+  if (hoveredTag_ != 0 && emitPointer(hoveredTag_, /*enter=*/false, x, y)) {
+    result.left = hoveredTag_;
+  }
+  if (target != 0 && emitPointer((int)target, /*enter=*/true, x, y)) {
+    result.entered = (int)target;
+  }
+  hoveredTag_ = (int)target;
+  return result;
+}
+
+// ENG-09 hover/cursor. Cursor left the window: leave the hovered view (if any)
+// and forget it.
+int FabricHost::clearHover() {
+  if (hoveredTag_ == 0) return 0;
+  const int was = hoveredTag_;
+  // Coordinates are meaningless here (the cursor is outside), but a
+  // pointerleave still carries the last-known point; 0,0 is as good as any and
+  // no handler reads it on a leave.
+  emitPointer(was, /*enter=*/false, 0.0f, 0.0f);
+  hoveredTag_ = 0;
+  return was;
 }
 
 }  // namespace rni

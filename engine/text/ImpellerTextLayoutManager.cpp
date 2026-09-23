@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "text/TextTransform.h"
+
 namespace rni {
 
 namespace react = facebook::react;
@@ -57,10 +59,23 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
     if (paragraphAttributes.maximumNumberOfLines > 0) {
       ImpellerParagraphStyleSetMaxLines(
           style, (uint32_t)paragraphAttributes.maximumNumberOfLines);
+      // Ellipsis must be present at MEASURE time too, not just paint: an
+      // ellipsized single line is measured to the clamp width, and omitting the
+      // "…" here would let measure report a wider box than paint fills.
+      if (paragraphAttributes.ellipsizeMode != react::EllipsizeMode::Clip) {
+        ImpellerParagraphStyleSetEllipsis(style, "\xE2\x80\xA6");  // U+2026 …
+      }
     }
     ImpellerParagraphBuilderPushStyle(builder, style);
+    // textTransform is applied to the SAME string the painter draws (see
+    // text/TextTransform.h). Measuring the raw case while painting the
+    // transformed case would let an uppercased label clip its last glyphs.
+    int transform = fragment.textAttributes.textTransform.has_value()
+                        ? (int)fragment.textAttributes.textTransform.value()
+                        : 0;
+    const std::string measured = applyTextTransform(fragment.string, transform);
     ImpellerParagraphBuilderAddText(
-        builder, (const uint8_t*)fragment.string.c_str(), fragment.string.size());
+        builder, (const uint8_t*)measured.c_str(), measured.size());
     ImpellerParagraphBuilderPopStyle(builder);
     ImpellerParagraphStyleRelease(style);
   }

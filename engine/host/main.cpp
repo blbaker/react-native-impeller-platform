@@ -308,9 +308,10 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 int resizeToH, int stallAfterFrames, int stallMs,
                 int clickAfterFrames, double clickX, double clickY,
                 int scrollAfterFrames, double scrollX, double scrollY,
-                double scrollDx, double scrollDy) {
-  (void)scrollDx;  // horizontal scroll is out of scope for ENG-02; parsed and
-                   // carried so the flag's shape does not change when it lands.
+                double scrollDx, double scrollDy,
+                int hoverAfterFrames,
+                const std::vector<std::pair<double, double>>& hoverPoints,
+                bool hoverLeaveAtEnd) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -560,12 +561,69 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // facts, and suppressing the first makes them look identical to a gate.
   int scrollHits = 0;
   int scrollEvents = 0;
-  surface.setScrollHandler([&](float x, float y, float dy) {
-    const int hit = fabric.dispatchScroll(x, y, dy);
+  surface.setScrollHandler([&](float x, float y, float dx, float dy) {
+    const int hit = fabric.dispatchScroll(x, y, dx, dy);
     ++scrollEvents;
     if (hit) ++scrollHits;
-    printf("rn-impeller: scroll hit=%d at=%.1f,%.1f dy=%.1f\n", hit, x, y, dy);
+    printf("rn-impeller: scroll hit=%d at=%.1f,%.1f dx=%.1f dy=%.1f\n", hit, x, y,
+           dx, dy);
     fflush(stdout);
+  });
+
+  // ENG-09 hover/cursor. The windowed path's only route into dispatchHover,
+  // same shape and threading argument as the touch and scroll handlers above:
+  // resolve on the event thread, dispatch onto the JS thread, return.
+  //
+  // ⛔ THE PER-MOVE PATH IS QUIET. A machine-readable line is printed ONLY on a
+  // transition -- hover_enter when a new tag is entered, hover_leave when the
+  // old one is left, cursor= when the shape changes -- never once per
+  // mouse-move event. A mouse dragged across one button emits one enter line,
+  // not hundreds, so a gate can count transitions and a human's move does not
+  // flood the log. dispatchHover returns 0/0 for entered/left when the tag did
+  // not change, which is what makes the common case silent.
+  int lastLoggedCursor = -1;
+  surface.setHoverHandler([&](float x, float y) -> int {
+    const auto r = fabric.dispatchHover(x, y);
+    bool logged = false;
+    if (r.left) {
+      printf("rn-impeller: hover_leave tag=%d\n", r.left);
+      logged = true;
+    }
+    if (r.entered) {
+      printf("rn-impeller: hover_enter tag=%d\n", r.entered);
+      logged = true;
+    }
+    // Cursor line only when the shape actually changes, for the same reason
+    // the transitions are: a gate wants "the shape became a hand", not a line
+    // per pixel of travel. The names are the ones the peer's gate parses.
+    if (r.cursorKind != lastLoggedCursor) {
+      const char* name = r.cursorKind == 1   ? "hand"
+                         : r.cursorKind == 2 ? "ibeam"
+                                             : "arrow";
+      printf("rn-impeller: cursor=%s\n", name);
+      lastLoggedCursor = r.cursorKind;
+      logged = true;
+    }
+    if (logged) fflush(stdout);
+    return r.cursorKind;
+  });
+
+  // ENG-09 hover/cursor. The other half: clear the hovered tag when the cursor
+  // leaves the window, so a control does not stay hovered after the mouse
+  // exits. Logs the leave as a transition, same format as the move path.
+  surface.setCursorLeaveHandler([&]() {
+    const int left = fabric.clearHover();
+    if (left) {
+      printf("rn-impeller: hover_leave tag=%d\n", left);
+      // Only emit a cursor line if the shape actually changes to arrow -- if
+      // the box being left was already arrow, a redundant cursor=arrow would
+      // be a per-event line, the exact noise this path avoids elsewhere.
+      if (lastLoggedCursor != 0) {
+        printf("rn-impeller: cursor=arrow\n");
+        lastLoggedCursor = 0;
+      }
+      fflush(stdout);
+    }
   });
 
   // Reads the framebuffer and writes a PPM. Shared by the frame-0 and the
@@ -688,15 +746,50 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // registration leaves this hook green. tools/ci-scroll.sh pairs it with a
     // REAL XTest wheel event for the registration arm.
     if (scrollAfterFrames > 0 && frameIndex == scrollAfterFrames) {
-      printf("rn-impeller: scroll_requested at=%.1f,%.1f dy=%.1f (screen coords, "
-             "GLFW notch convention)\n",
-             scrollX, scrollY, scrollDy);
+      printf("rn-impeller: scroll_requested at=%.1f,%.1f dx=%.1f dy=%.1f (screen "
+             "coords, GLFW notch convention)\n",
+             scrollX, scrollY, scrollDx, scrollDy);
       fflush(stdout);
-      surface.synthesiseScroll(scrollX, scrollY, scrollDy);
+      surface.synthesiseScroll(scrollX, scrollY, scrollDx, scrollDy);
       // Same reason the click hook waits: onScroll is dispatched onto the JS
       // thread, so exiting at --frames without draining it would make a working
       // emitter look dead.
       host.waitForJsIdle(5000);
+    }
+
+    // ENG-09 hover/cursor. Synthetic-hover hook, and DELIBERATELY THE WEAKER
+    // EVIDENCE, exactly like the click and scroll hooks. It routes through
+    // GlfwSurface::synthesiseHover, so it proves the conversion, the retained
+    // hovered-tag transition logic, the pointerenter/leave dispatch and the
+    // cursor-kind resolution. It does NOT prove glfwSetCursorPosCallback is
+    // registered -- deleting that registration leaves this hook passing.
+    // The gate's NEGATIVE ARM (registration removed, a REAL OS motion event
+    // over the same point, asserting NO hover lines) is what proves the
+    // registration; this hook is the half that runs where there is no display.
+    //
+    // One point is consumed per frame starting at hoverAfterFrames, so a
+    // sequence walks enter -> move-within -> move-to-another as distinct frames
+    // rather than a single warp, which is how the "quiet within one view"
+    // property becomes observable: a mid-view move emits no line.
+    if (hoverAfterFrames > 0 && frameIndex >= hoverAfterFrames &&
+        !hoverPoints.empty()) {
+      const size_t idx = (size_t)(frameIndex - hoverAfterFrames);
+      if (idx < hoverPoints.size()) {
+        const auto& p = hoverPoints[idx];
+        printf("rn-impeller: hover_requested at=%.1f,%.1f (screen coords)\n",
+               p.first, p.second);
+        fflush(stdout);
+        surface.synthesiseHover(p.first, p.second);
+        host.waitForJsIdle(5000);
+      } else if (idx == hoverPoints.size() && hoverLeaveAtEnd) {
+        // After the last point, optionally drive the cursor OUT of the window,
+        // exercising the cursor-enter(leave) path and asserting the hovered
+        // control does not stay hovered.
+        printf("rn-impeller: hover_leave_requested (cursor exits window)\n");
+        fflush(stdout);
+        surface.synthesiseCursorLeave();
+        host.waitForJsIdle(5000);
+      }
     }
 
 
@@ -743,6 +836,12 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // captures `fabric`, and a queued wheel event delivered by glfwDestroyWindow
   // would dispatch into freed memory.
   surface.setScrollHandler(nullptr);
+  // ENG-09 hover/cursor. Same lifetime argument: the hover and cursor-leave
+  // handlers capture `fabric`, and glfwDestroyWindow can dispatch a queued
+  // cursor-position or cursor-enter event, which would then dispatch a pointer
+  // event into freed memory.
+  surface.setHoverHandler(nullptr);
+  surface.setCursorLeaveHandler(nullptr);
 
 
   // Machine-readable evidence that the modal-loop repaint path executed. A
@@ -817,6 +916,15 @@ int main(int argc, char** argv) {
   double scrollY = 0.0;
   double scrollDx = 0.0;
   double scrollDy = 0.0;
+  // ENG-09 hover/cursor. Screen coordinates, same units as the click/scroll
+  // hooks and for the same reason: the hook exercises the screen->points
+  // conversion, so it must be fed the coordinates GLFW itself reports. A
+  // sequence of points is consumed one-per-frame from hoverAfterFrames, so a
+  // single run can walk enter -> within-view -> another-view and, optionally,
+  // out of the window.
+  int hoverAfterFrames = 0;
+  std::vector<std::pair<double, double>> hoverPoints;
+  bool hoverLeaveAtEnd = false;
   int width = 400, height = 300;
   // ⛔ --width/--height ARE DEVICE PIXELS, AND --scale IS NOT A ZOOM.
   // The surface is allocated at width x height PIXELS; layout then happens in
@@ -984,6 +1092,62 @@ int main(int argc, char** argv) {
         return 2;
       }
     }
+    // ENG-09 hover/cursor. "--hover-after-frames N:X1,Y1;X2,Y2;..." synthesises
+    // a cursor MOVE to each SCREEN-COORDINATE point, one per frame starting at
+    // frame N. Append ";leave" as a final segment to drive the cursor OUT of
+    // the window after the last point. Named to match the other frame-anchored
+    // hooks; the sequence is what lets one run show enter, a quiet within-view
+    // move, a transition to another view, and a window-exit leave.
+    else if (a == "--hover-after-frames") {
+      std::string spec = next("--hover-after-frames");
+      auto colon = spec.find(':');
+      if (colon == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --hover-after-frames wants N:X1,Y1;X2,Y2;... "
+                "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      hoverAfterFrames = atoi(spec.substr(0, colon).c_str());
+      if (hoverAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --hover-after-frames needs N > 0 (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      std::string rest = spec.substr(colon + 1);
+      size_t pos = 0;
+      while (pos < rest.size()) {
+        size_t semi = rest.find(';', pos);
+        std::string seg =
+            rest.substr(pos, semi == std::string::npos ? std::string::npos
+                                                       : semi - pos);
+        if (seg == "leave") {
+          hoverLeaveAtEnd = true;
+        } else if (!seg.empty()) {
+          auto comma = seg.find(',');
+          if (comma == std::string::npos) {
+            fprintf(stderr,
+                    "rn-impeller: --hover-after-frames point wants X,Y "
+                    "(got %s)\n",
+                    seg.c_str());
+            return 2;
+          }
+          double hx = atof(seg.substr(0, comma).c_str());
+          double hy = atof(seg.substr(comma + 1).c_str());
+          hoverPoints.emplace_back(hx, hy);
+        }
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+      }
+      if (hoverPoints.empty()) {
+        fprintf(stderr,
+                "rn-impeller: --hover-after-frames needs at least one X,Y "
+                "point (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
@@ -1090,7 +1254,8 @@ int main(int argc, char** argv) {
                        screenshotFirst, pointScaleGiven, resizeAfterFrames,
                        resizeToW, resizeToH, stallAfterFrames, stallMs,
                        clickAfterFrames, clickX, clickY,
-                       scrollAfterFrames, scrollX, scrollY, scrollDx, scrollDy);
+                       scrollAfterFrames, scrollX, scrollY, scrollDx, scrollDy,
+                       hoverAfterFrames, hoverPoints, hoverLeaveAtEnd);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "

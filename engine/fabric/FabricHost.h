@@ -87,7 +87,36 @@ class FabricHost {
   // the end) AND an onScroll was scheduled onto the JS thread. A zero means no
   // scrollable node was under the point OR the node found could not emit
   // scroll events, which is what an unregistered ScrollView looks like.
-  int dispatchScroll(float x, float y, float dy);
+  int dispatchScroll(float x, float y, float dx, float dy);
+
+  // ENG-09 hover/cursor. Result of a hover motion at a point.
+  struct HoverResult {
+    // The tag now under the cursor (0 = nothing / non-touch target).
+    int tag{0};
+    // The cursor shape for that tag: 0 arrow, 1 hand, 2 ibeam.
+    int cursorKind{0};
+    // The tag a pointerenter was dispatched to this move, or 0 if the hovered
+    // tag did not change (a move within the same view).
+    int entered{0};
+    // The tag a pointerleave was dispatched to this move, or 0 if none.
+    int left{0};
+  };
+
+  // Hit-tests (x, y) in POINTS and moves the retained hovered tag to whatever
+  // is under it, dispatching pointerleave to the OLD tag and pointerenter to
+  // the NEW one -- and NOTHING when the tag is unchanged, so a stream of
+  // mouse-moves within one view is silent. Same coordinate contract and same
+  // TouchEventEmitter downcast discipline as dispatchTouch: a hit on a
+  // non-touch (e.g. unregistered) node yields no emitter, so its tag is
+  // treated as "no hovered target" -- it cannot receive pointer events, and
+  // pretending it is hovered would strand a leave that can never be delivered.
+  HoverResult dispatchHover(float x, float y);
+
+  // ENG-09 hover/cursor. Clears the hovered tag, dispatching pointerleave to
+  // it if one was set. Called when the cursor leaves the window entirely, so a
+  // control does not stay visually hovered after the mouse exits. Returns the
+  // tag that was left, or 0 if nothing was hovered.
+  int clearHover();
 
   // The component names this host can actually mount. Handed to ReactHost so
   // RN's NativeComponentRegistry and this registry cannot drift apart.
@@ -102,6 +131,22 @@ class FabricHost {
   bool logMutations_{false};
   std::unique_ptr<facebook::react::Scheduler> scheduler_;
   std::unique_ptr<facebook::react::SurfaceHandler> surfaceHandler_;
+
+  // ENG-09 hover/cursor. The tag the cursor is currently over, retained across
+  // moves so dispatchHover can emit a leave/enter PAIR only on a transition.
+  // Owned here rather than in the host because the enter/leave bookkeeping is
+  // the dispatch's job, and keeping it here means the synthetic hover probe
+  // and the real GLFW callback share one source of truth. Accessed only from
+  // the event thread (both callers are), so it needs no lock of its own; the
+  // SceneGraph reads it drives ARE locked.
+  int hoveredTag_{0};
+
+  // ENG-09. Emits a pointerenter or pointerleave to `tag` through its
+  // TouchEventEmitter, hopping to the JS thread exactly as dispatchTouch does.
+  // No-op (returns false) if the tag has no touch emitter -- an unregistered
+  // or non-view node cannot receive pointer events. `x/y` are POINTS, used to
+  // build the PointerEvent's coordinates.
+  bool emitPointer(int tag, bool enter, float x, float y);
 };
 
 }  // namespace rni

@@ -6,6 +6,7 @@
 // consistent tree rather than a half-applied transaction.
 #pragma once
 
+#include <react/renderer/components/scrollview/ScrollViewProps.h>
 #include <react/renderer/components/text/ParagraphProps.h>
 #include <react/renderer/components/text/ParagraphState.h>
 #include <react/renderer/components/view/ViewProps.h>
@@ -70,6 +71,18 @@ struct SceneNode {
 
   bool overflowHidden{false};
 
+  // ENG-09 hover/cursor. The RN `cursor` ViewProp, collapsed to the three
+  // shapes this host has standard GLFW cursors for. NOT a bool "is hoverable":
+  // there is no such signal in Fabric -- every <View> mounts a
+  // TouchEventEmitter whether or not JS wired onPress, and the emitter's
+  // enabled flag is private -- so the honest, RN-native source for "what
+  // cursor belongs over this view" is ViewProps.cursor, which is exactly what
+  // web/RN authors set (Pressable does NOT set it by default; an app that
+  // wants a hand writes cursor:'pointer'). 0 arrow, 1 hand (Cursor::Pointer),
+  // 2 ibeam (Cursor::Text). Defaulted to arrow so an un-annotated view reads
+  // as arrow, matching every existing app that never set the prop.
+  int cursorKind{0};
+
   // <ScrollView>. ENG-02.
   //
   // ⛔ THE OFFSET IS THE HOST'S STATE, NOT THE SHADOW TREE'S.
@@ -81,6 +94,17 @@ struct SceneNode {
   // any unrelated re-render, which reads as "scrolling doesn't stick".
   bool isScrollView{false};
   float scrollY{0.0f};
+  // ENG-02b horizontal. The X offset is owned here for the SAME reason scrollY
+  // is (see the header note above the struct): the offset is the host's state,
+  // not the shadow tree's, and must survive mutation transactions.
+  float scrollX{0.0f};
+  // ScrollViewProps::horizontal, captured only as the AXIS FALLBACK. It is NOT
+  // the axis source: off Android RN never swaps in AndroidHorizontalScrollView,
+  // so `<ScrollView horizontal>` arrives with horizontal==false and axis-locking
+  // on it would make the strip un-scrollable. The axis is derived from which way
+  // the content overflows (scrollBy); this prop is consulted only when neither
+  // or both axes overflow.
+  bool scrollHorizontal{false};
   // Content height as last laid out (the single child's frame height). Cached
   // at paint/mutation time so clamping does not have to walk the tree from the
   // event thread.
@@ -95,6 +119,15 @@ struct SceneNode {
   // numberOfLines. Must be applied at PAINT time as well as measure time, or a
   // clamped label measures one line and paints three.
   int maxLines{0};
+  // ellipsizeMode. RN default is Tail. Only meaningful together with maxLines >
+  // 0 (an unclamped paragraph never truncates), and applied at PAINT time via
+  // ImpellerParagraphStyleSetEllipsis so a clamped line ends in "…" rather than
+  // a hard cut. Clip means "no ellipsis string", which is a nullptr to Impeller.
+  int ellipsizeMode{0};  // matches react::EllipsizeMode: 0 Clip,1 Head,2 Tail,3 Middle
+  // textTransform. Applied to node.text at MUTATION time (not paint) so the
+  // measured string and the painted string are the same object — measuring the
+  // raw case and painting the transformed case would disagree on width.
+  int textTransform{0};  // react::TextTransform: 0 None,1 Upper,2 Lower,3 Capitalize,4 Unset
 
   // RNSVGPath (P9-B2). `d` is re-parsed into geometry only when it changes —
   // see SvgPath.h. fillOpacity is kept SEPARATE from node.opacity (which
@@ -225,8 +258,11 @@ class SceneGraph {
   // Applies one MountingTransaction's mutations, in order.
   struct ScrollResult {
     facebook::react::Tag tag{0};
+    float offsetX{0.0f};
     float offsetY{0.0f};
+    float contentWidth{0.0f};
     float contentHeight{0.0f};
+    float containerWidth{0.0f};
     float containerHeight{0.0f};
     bool moved{false};
   };
@@ -240,7 +276,7 @@ class SceneGraph {
   // forever while still emitting perfectly plausible onScroll events -- the
   // failure looks like "the list is blank" long after the wheel stopped.
   facebook::react::Tag scrollViewAt(float x, float y);
-  ScrollResult scrollBy(float x, float y, float dy);
+  ScrollResult scrollBy(float x, float y, float dx, float dy);
 
   void applyMutations(const facebook::react::ShadowViewMutation::List& mutations,
                       bool log = false);
@@ -322,6 +358,13 @@ class SceneGraph {
   // is unmounting lands in.
   facebook::react::EventEmitter::Shared eventEmitterFor(
       facebook::react::Tag tag);
+
+  // ENG-09 hover/cursor. The cursor shape for `tag`: 0 arrow, 1 hand, 2 ibeam.
+  // Returns 0 (arrow) for an unknown tag, so a hover that resolves nothing
+  // reads as arrow -- the same answer as hovering empty space. Taken under the
+  // same mutex as eventEmitterFor for the same reason: the JS thread may be
+  // removing the node between the hit test and this read.
+  int cursorKindFor(facebook::react::Tag tag);
 
  private:
   // Returns the hit tag, or 0. `originX/originY` accumulate exactly as in

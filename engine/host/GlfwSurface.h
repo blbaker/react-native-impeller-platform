@@ -32,6 +32,7 @@
 #endif
 
 struct GLFWwindow;
+struct GLFWcursor;
 
 namespace rni {
 
@@ -128,15 +129,35 @@ class GlfwSurface {
   // the cursor's LAYOUT POINT position -- the same conversion, in the same one
   // place, as the mouse button handler above, for the same reason.
   //
-  // ⛔ dy IS INVERTED RELATIVE TO GLFW HERE, DELIBERATELY.
+  // ⛔ dx/dy ARE INVERTED RELATIVE TO GLFW HERE, DELIBERATELY.
   // GLFW reports yoffset POSITIVE when the wheel is pushed away from the user
-  // (scroll up), matching a "content moves down" convention. RN's contentOffset
-  // grows as you move DOWN a list. Passing GLFW's sign straight through gives a
-  // list that scrolls the wrong way -- which is a fully functional scroll
-  // implementation that every user calls broken, and which no assertion about
-  // "did the offset change" can catch. The flip happens at this boundary so
-  // both the real callback and the synthetic probe path share it.
-  void setScrollHandler(std::function<void(float x, float y, float dy)> handler);
+  // (scroll up) and xoffset POSITIVE when the wheel/trackpad pushes right. RN's
+  // contentOffset grows as you move DOWN and RIGHT a list. Passing GLFW's sign
+  // straight through gives a list that scrolls the wrong way -- which is a fully
+  // functional scroll implementation that every user calls broken, and which no
+  // assertion about "did the offset change" can catch. Both flips happen at this
+  // boundary so the real callback and the synthetic probe path share them.
+  //
+  // ⚠️ dx IS CARRIED, NOT DROPPED. The host used to (void)scrollDx and this
+  // handler was y-only, so a horizontal wheel or a horizontal ScrollView could
+  // never move: the X delta died here, before the scene graph ever saw it. The
+  // axis decision itself lives in SceneGraph::scrollBy (content-overflow, not
+  // the prop); the host's job is only to deliver BOTH deltas intact.
+  void setScrollHandler(
+      std::function<void(float x, float y, float dx, float dy)> handler);
+
+  // ENG-09 hover/cursor. Installed by the host; called with LAYOUT POINTS (the
+  // same one-place conversion the button and scroll handlers use) on every
+  // cursor MOVE. The host routes it into FabricHost::dispatchHover. Return
+  // value is the cursor kind the host resolved for the point (0 arrow, 1 hand,
+  // 2 ibeam); this class applies it to the window via glfwSetCursor so the
+  // shape decision lives with the hit test, not split across host and surface.
+  void setHoverHandler(std::function<int(float x, float y)> handler);
+
+  // ENG-09 hover/cursor. Installed by the host; called with no arguments when
+  // the cursor LEAVES the window, so the host can clear its hovered tag. The
+  // window's cursor is reset to arrow here regardless.
+  void setCursorLeaveHandler(std::function<void()> handler);
 
   // The effective layout scale, kept in sync by the host on every resize so the
   // cursor conversion cannot drift from the painter's root transform. Set from
@@ -164,7 +185,24 @@ class GlfwSurface {
   // the handler directly, so it passes with the registration deleted.
   // tools/ci-scroll.sh uses it for the offset/emitter assertions and a REAL
   // XTest button-4/5 press for the registration assertion.
-  void synthesiseScroll(double screenX, double screenY, double dy);
+  void synthesiseScroll(double screenX, double screenY, double dx, double dy);
+
+  // ENG-09 hover/cursor. Synthesises a cursor MOVE to a SCREEN-COORDINATE
+  // point, entering the exact same conversion and hover handler the real GLFW
+  // cursor-position callback does, and applying the resolved cursor shape.
+  // Exists for the same reason synthesiseClick does: a windowed hover path is
+  // otherwise only testable by a human with a mouse.
+  //
+  // ⚠️ SAME WARNING AS synthesiseClick: this is NOT proof
+  // glfwSetCursorPosCallback is registered -- it calls the handler directly, so
+  // it passes with the registration deleted. The negative arm of the gate
+  // removes the registration and asserts NO hover lines under a REAL OS motion
+  // event; this hook covers the transition logic where there is no display.
+  void synthesiseHover(double screenX, double screenY);
+
+  // ENG-09 hover/cursor. Synthesises the cursor LEAVING the window, entering
+  // the same cursor-leave handler the real GLFW cursor-enter callback does.
+  void synthesiseCursorLeave();
 
   // Drives a resize from inside the process, for gates. Produces the SAME
   // framebuffer-size callback a user drag produces; it is the identical code
@@ -252,7 +290,19 @@ class GlfwSurface {
   // <ScrollView>. ENG-02. Same role for scroll that dispatchCursorPoint plays
   // for clicks: the ONE place the screen->points conversion AND the GLFW sign
   // flip happen, shared by the real callback and synthesiseScroll().
-  void dispatchScrollPoint(double screenX, double screenY, double glfwDy);
+  void dispatchScrollPoint(double screenX, double screenY, double glfwDx,
+                           double glfwDy);
+
+  // ENG-09 hover/cursor. The ONE place the screen->points conversion happens
+  // for a hover, shared by the real cursor-position callback and
+  // synthesiseHover(), exactly as dispatchCursorPoint is for clicks. Calls
+  // hoverHandler_ with layout points and applies the cursor kind it returns.
+  void dispatchHoverPoint(double screenX, double screenY);
+
+  // ENG-09 hover/cursor. Sets the window cursor to the standard shape for
+  // `kind` (0 arrow, 1 hand, 2 ibeam), skipping the GLFW call when it is
+  // already that shape so a per-move stream does not thrash the cursor.
+  void applyCursorKind(int kind);
 
   int width_{0};
   int height_{0};
@@ -276,7 +326,28 @@ class GlfwSurface {
   std::function<void(float, float, bool)> mouseButtonHandler_;
   // <ScrollView>. ENG-02. Invoked from the GLFW scroll callback with LAYOUT
   // POINTS and an RN-convention dy. Same threading argument as the two above.
-  std::function<void(float, float, float)> scrollHandler_;
+  std::function<void(float, float, float, float)> scrollHandler_;
+  // ENG-09 hover/cursor. Invoked from the GLFW cursor-position callback with
+  // LAYOUT POINTS resolved, returning the cursor kind for the point. Same
+  // threading argument as the handlers above: installed once before the loop,
+  // called only from the thread inside glfwPollEvents.
+  std::function<int(float, float)> hoverHandler_;
+  // ENG-09 hover/cursor. Invoked from the GLFW cursor-ENTER callback when the
+  // cursor leaves the window. Same threading argument.
+  std::function<void()> cursorLeaveHandler_;
+  // ENG-09 hover/cursor. The three standard cursors, created ONCE at init()
+  // and destroyed in the destructor. arrowCursor_ is applied on creation and
+  // whenever a point resolves to arrow; keeping the objects rather than
+  // recreating per-move is why applyCursorKind is cheap. Null on a GLFW that
+  // failed to create them, in which case applyCursorKind is a no-op and the
+  // window keeps the default arrow.
+  GLFWcursor* arrowCursor_{nullptr};
+  GLFWcursor* handCursor_{nullptr};
+  GLFWcursor* ibeamCursor_{nullptr};
+  // The cursor kind currently applied to the window, so a per-move stream that
+  // stays over one shape does not call glfwSetCursor every frame. -1 means
+  // "never set", forcing the first apply through.
+  int appliedCursorKind_{-1};
   // The layout scale the cursor conversion divides by. Mirrors the host's
   // pointScale; kept here so the conversion happens once, at the callback,
   // rather than at every caller.

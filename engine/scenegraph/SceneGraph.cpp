@@ -11,7 +11,10 @@
 #include "svg/SvgPath.h"
 #endif
 
+#include "text/TextTransform.h"
+
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <variant>
@@ -261,6 +264,25 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
 
     node.overflowHidden = props->getClipsContentToBounds();
 
+    // ENG-09 hover/cursor. Collapse RN's full Cursor enum to the three shapes
+    // the host has standard GLFW cursors for. Everything that is not an
+    // explicit pointer/text request reads as arrow -- including Cursor::Auto,
+    // which is the default and means "let the platform decide", and the
+    // platform decision here is the arrow. Only the two authors actually set
+    // to change the pointer are honoured, so a view with no cursor prop (every
+    // existing app) is unchanged.
+    switch (props->cursor) {
+      case react::Cursor::Pointer:
+        node.cursorKind = 1;  // hand
+        break;
+      case react::Cursor::Text:
+        node.cursorKind = 2;  // ibeam
+        break;
+      default:
+        node.cursorKind = 0;  // arrow
+        break;
+    }
+
     // <ScrollView>. ENG-02.
     //
     // ⛔ IDENTIFIED BY COMPONENT NAME, AND THE NAME IS ONLY CORRECT BECAUSE THE
@@ -276,6 +298,14 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     // whenever any prop on it changed.
     node.isScrollView = (node.componentName == "ScrollView");
     if (node.isScrollView) {
+      // Axis fallback only. `horizontal` arrives false for `<ScrollView
+      // horizontal>` off Android (RN never swaps in the dedicated
+      // AndroidHorizontalScrollView), so scrollBy derives the real axis from
+      // content overflow and consults this only when neither/both axes overflow.
+      if (const auto* sp =
+              dynamic_cast<const react::ScrollViewProps*>(view.props.get())) {
+        node.scrollHorizontal = sp->horizontal;
+      }
       // A ScrollView clips by definition. RN's ScrollViewProps does not set
       // overflow:hidden by default the way a native scroll view implies it, so
       // relying on getClipsContentToBounds alone leaves the off-screen rows
@@ -363,10 +393,20 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     node.isParagraph = true;
     node.text.clear();
     node.maxLines = 0;
+    node.ellipsizeMode = 0;
+    node.textTransform = 0;
     if (const auto* pp =
             dynamic_cast<const react::ParagraphProps*>(view.props.get())) {
       node.maxLines = pp->paragraphAttributes.maximumNumberOfLines;
+      // ellipsizeMode is only consulted when the paragraph is line-clamped; an
+      // unclamped Text never truncates, so the mode is irrelevant there.
+      node.ellipsizeMode = (int)pp->paragraphAttributes.ellipsizeMode;
     }
+    // textTransform rides on the per-fragment TextAttributes, not on
+    // ParagraphProps. Read it from the FIRST non-empty fragment: RN resolves a
+    // single Text's transform onto every fragment, so the first is
+    // representative, and per-fragment mixed transforms are a later phase.
+    int fragTransform = 0;
     if (view.state) {
       // The state type is ParagraphShadowNode::ConcreteStateData's holder;
       // spelling it via the shadow node avoids guessing the template args.
@@ -374,6 +414,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
           static_cast<const facebook::react::ConcreteState<
               facebook::react::ParagraphState>&>(*view.state)
               .getData();
+      bool tookTransform = false;
       for (const auto& fragment : stateData.attributedString.getFragments()) {
         node.text += fragment.string;
         if (fragment.textAttributes.fontSize > 0) {
@@ -382,7 +423,18 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
         if (fragment.textAttributes.foregroundColor) {
           colorToFloats(fragment.textAttributes.foregroundColor, node.textColor);
         }
+        if (!tookTransform && fragment.textAttributes.textTransform.has_value()) {
+          fragTransform = (int)fragment.textAttributes.textTransform.value();
+          tookTransform = true;
+        }
       }
+    }
+    node.textTransform = fragTransform;
+    // Applied HERE, once, so node.text is the exact string the painter draws and
+    // (were measure to read it) the exact string measured — never the raw case
+    // in one and the transformed case in the other.
+    if (fragTransform == 1 || fragTransform == 2 || fragTransform == 3) {
+      node.text = applyTextTransform(node.text, fragTransform);
     }
   }
 
@@ -1152,6 +1204,18 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       // numberOfLines={1} label is measured at one line and painted at three,
       // overflowing whatever sits below it.
       ImpellerParagraphStyleSetMaxLines(style, (uint32_t)node.maxLines);
+      // ⛔ ELLIPSIS ONLY MAKES SENSE ON A CLAMPED PARAGRAPH.
+      // ellipsizeMode without maxLines is meaningless — an unclamped paragraph
+      // wraps forever and never truncates — so the setter is scoped inside the
+      // maxLines guard. RN's EllipsizeMode: 0 Clip (hard cut, NO ellipsis
+      // string), 1 Head, 2 Tail (RN default), 3 Middle. Impeller's C API exposes
+      // one ellipsis STRING, not a position, so Head/Tail/Middle all set "…" and
+      // the engine truncates at the tail; Clip passes nullptr for a hard cut.
+      // This is the real ImpellerParagraphStyleSetEllipsis setter (impeller.h
+      // :2585) — no manual U+2026 append needed.
+      if (node.ellipsizeMode != 0) {
+        ImpellerParagraphStyleSetEllipsis(style, "\xE2\x80\xA6");  // U+2026 …
+      }
     }
     ImpellerPaint textPaint = ImpellerPaintNew();
     ImpellerColor tc = impellerColor(node.textColor, node.opacity);
@@ -1199,13 +1263,15 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // it composes with the SVG/transform saves above without a fourth save/
   // restore pair to keep balanced.
   float childOriginY = y;
+  float childOriginX = x;
   if (node.isScrollView) {
     childOriginY -= node.scrollY;
+    childOriginX -= node.scrollX;
   }
   for (auto childTag : node.children) {
     auto it = nodes_.find(childTag);
     if (it != nodes_.end()) {
-      paintNode(builder, it->second, x, childOriginY);
+      paintNode(builder, it->second, childOriginX, childOriginY);
     }
   }
 
@@ -1532,11 +1598,13 @@ facebook::react::Tag SceneGraph::hitTestNode(const SceneNode& node,
   //
   // Reverse paint order: last painted is topmost, so it is tested first.
   const float childOriginY = node.isScrollView ? ny - node.scrollY : ny;
+  const float childOriginX = node.isScrollView ? nx - node.scrollX : nx;
 
   for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
     auto child = nodes_.find(*it);
     if (child == nodes_.end()) continue;
-    if (auto hit = hitTestNode(child->second, nx, childOriginY, x, y)) return hit;
+    if (auto hit = hitTestNode(child->second, childOriginX, childOriginY, x, y))
+      return hit;
   }
 
   // Zero-sized nodes are never targets. This matters more than it looks: a
@@ -1565,6 +1633,13 @@ facebook::react::EventEmitter::Shared SceneGraph::eventEmitterFor(
   auto it = nodes_.find(tag);
   if (it == nodes_.end()) return nullptr;
   return it->second.eventEmitter;
+}
+
+int SceneGraph::cursorKindFor(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end()) return 0;  // arrow
+  return it->second.cursorKind;
 }
 
 std::string SceneGraph::describe() {
@@ -1616,7 +1691,8 @@ facebook::react::Tag SceneGraph::scrollViewAt(float x, float y) {
   return 0;
 }
 
-SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dy) {
+SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dx,
+                                             float dy) {
   ScrollResult r{};
   const facebook::react::Tag tag = scrollViewAt(x, y);
   if (tag == 0) return r;
@@ -1626,7 +1702,7 @@ SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dy) {
   if (it == nodes_.end()) return r;
   SceneNode& sv = it->second;
 
-  // ⛔ CONTENT HEIGHT IS THE UNION OF EVERY CHILD, NOT children.front().
+  // ⛔ CONTENT EXTENT IS THE UNION OF EVERY CHILD, NOT children.front().
   //
   // Measured on fixtures/p9-scroll: ScrollView tag 40 has TWO children --
   // View 42 at 400x300 and the content container View 38 at 400x600 (six
@@ -1643,38 +1719,73 @@ SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dy) {
   //
   // Union rather than "the tallest child" or "the last child": child order is
   // not guaranteed and the container is not reliably front() or back(). The
-  // union of origin.y + height is correct for a single content container AND
-  // for a ScrollView whose children were laid out directly, and it cannot be
-  // fooled by sibling order changing between commits.
+  // union of origin + size is correct for a single content container AND for a
+  // ScrollView whose children were laid out directly, and it cannot be fooled
+  // by sibling order changing between commits. Done per-axis so a row-laid-out
+  // horizontal strip reports its width the same way a column reports height.
   //
   // Read live rather than from a paint-time cache: a headless run that never
   // painted would otherwise clamp against zero and refuse to scroll at all,
   // which reads as "scrolling is broken" when it is only "nothing has painted
   // yet".
+  float contentW = 0.0f;
   float contentH = 0.0f;
   for (auto childTag : sv.children) {
     auto content = nodes_.find(childTag);
     if (content == nodes_.end()) continue;
     const auto& cf = content->second.layoutMetrics.frame;
+    contentW = std::max(contentW, (float)(cf.origin.x + cf.size.width));
     contentH = std::max(contentH, (float)(cf.origin.y + cf.size.height));
   }
+  const float containerW = (float)sv.layoutMetrics.frame.size.width;
   const float containerH = (float)sv.layoutMetrics.frame.size.height;
 
-  // Clamp to [0, contentH - containerH]. A content shorter than its container
-  // has NO scrollable range, and max would go negative -- std::max with 0 is
-  // what keeps a short list pinned at the top instead of drifting upward.
-  const float maxOffset = std::max(0.0f, contentH - containerH);
-  const float before = sv.scrollY;
-  float next = sv.scrollY + dy;
-  if (next < 0.0f) next = 0.0f;
-  if (next > maxOffset) next = maxOffset;
-  sv.scrollY = next;
+  // ⛔ AXIS FROM CONTENT OVERFLOW, NOT FROM THE `horizontal` PROP.
+  //
+  // Off Android RN never swaps in the dedicated AndroidHorizontalScrollView, so
+  // `<ScrollView horizontal>` arrives with props->horizontal == false and a
+  // content container that simply lays out in a row. Locking the axis to the
+  // prop would leave that strip un-scrollable while every other signal looked
+  // healthy. Derive the scrollable axis from which way the content actually
+  // overflows; fall back to the prop only when neither or both axes overflow
+  // (an ambiguous case the prop is the best remaining hint for).
+  const float maxOffsetX = std::max(0.0f, contentW - containerW);
+  const float maxOffsetY = std::max(0.0f, contentH - containerH);
+  bool horizontal;
+  if (maxOffsetX > 0.0f && maxOffsetY <= 0.0f) {
+    horizontal = true;
+  } else if (maxOffsetY > 0.0f && maxOffsetX <= 0.0f) {
+    horizontal = false;
+  } else {
+    horizontal = sv.scrollHorizontal;
+  }
+
+  // A wheel has ONE delta; the host carries both dx and dy and lets the axis
+  // decide which one moves the list. On a vertical list a horizontal wheel
+  // (trackpad) must be a no-op, not a diagonal drift, and vice versa -- that is
+  // what routing the delta through the derived axis guarantees.
+  const float beforeX = sv.scrollX;
+  const float beforeY = sv.scrollY;
+  if (horizontal) {
+    float next = sv.scrollX + dx;
+    if (next < 0.0f) next = 0.0f;
+    if (next > maxOffsetX) next = maxOffsetX;
+    sv.scrollX = next;
+  } else {
+    float next = sv.scrollY + dy;
+    if (next < 0.0f) next = 0.0f;
+    if (next > maxOffsetY) next = maxOffsetY;
+    sv.scrollY = next;
+  }
 
   r.tag = tag;
-  r.offsetY = next;
+  r.offsetX = sv.scrollX;
+  r.offsetY = sv.scrollY;
+  r.contentWidth = contentW;
   r.contentHeight = contentH;
+  r.containerWidth = containerW;
   r.containerHeight = containerH;
-  r.moved = (next != before);
+  r.moved = (sv.scrollX != beforeX) || (sv.scrollY != beforeY);
   return r;
 }
 
