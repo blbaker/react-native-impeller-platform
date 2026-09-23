@@ -1843,100 +1843,137 @@ facebook::react::Tag SceneGraph::scrollViewAt(float x, float y) {
   return 0;
 }
 
+// <ScrollView>. ENG-02c NESTED.
+//
+// ⛔ THE AXIS PICKS THE VIEW, THE VIEW DOES NOT PICK THE AXIS.
+//
+// ENG-02/02b resolved ONE ScrollView (the nearest ancestor of the hit) and
+// then derived which axis of THAT view to move. Nested lists break that order:
+// over a horizontal row inside a vertical list, the nearest ScrollView is the
+// inner list, so a dx wheel -- which the row is the only thing that can consume
+// -- was handed to the inner list, whose X does not overflow, and dropped. The
+// outer row never moved and the gesture read as "sideways scroll is dead".
+//
+// The fix is to decide the wheel AXIS FIRST (from the delta the host sent) and
+// then walk up for the nearest ancestor that actually overflows on THAT axis.
+// A dx finds the row; a dy at the same point finds the inner list; each leaves
+// the other exactly where it was. This is per-axis RESOLUTION, distinct from
+// the per-axis derivation ENG-02b already does for a single view.
+//
+// Content extent per node is the UNION of every child (origin + size), for the
+// reason documented at ENG-02: fixtures/p9-scroll's ScrollView has a sized
+// viewport child AND a taller content container, and front() picked the wrong
+// one, clamping every scroll to zero. Read live, not from a paint cache, so a
+// headless run that never painted still scrolls.
 SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dx,
                                              float dy) {
   ScrollResult r{};
-  const facebook::react::Tag tag = scrollViewAt(x, y);
-  if (tag == 0) return r;
 
   std::lock_guard<std::mutex> lock(mutex_);
+
+  // The hit target, in the same POINT space as scrollViewAt. Inlined here (not
+  // via scrollViewAt) because that helper takes the lock itself AND stops at
+  // the first ScrollView -- nested resolution has to keep walking past it.
+  facebook::react::Tag hit = 0;
+  for (auto rit = roots_.rbegin(); rit != roots_.rend(); ++rit) {
+    auto root = nodes_.find(*rit);
+    if (root == nodes_.end()) continue;
+    if ((hit = hitTestNode(root->second, 0, 0, x, y))) break;
+  }
+  if (hit == 0) return r;
+
+  // ⛔ AXIS FROM THE DELTA THE HOST SENT, NOT FROM ANY VIEW'S CONTENT.
+  //
+  // A wheel/trackpad notch is one-dimensional per event; the host forwards it
+  // as (dx,dy) with the unused axis zero. The dominant magnitude is the axis
+  // the user meant. A tie (both zero, or a genuine diagonal the host never
+  // actually sends) falls back to Y, matching a mouse wheel's default axis and
+  // keeping a degenerate 0,0 event a no-op rather than an accidental X move.
+  const bool wheelHorizontal = std::abs(dx) > std::abs(dy);
+
+  // Extent of one ScrollView node: union content box minus its viewport, per
+  // axis. Returns the max scrollable offset on each axis (0 == does not
+  // overflow that way).
+  struct Extent {
+    float contentW, contentH, containerW, containerH, maxX, maxY;
+  };
+  auto extentOf = [&](const SceneNode& sv) -> Extent {
+    float contentW = 0.0f, contentH = 0.0f;
+    for (auto childTag : sv.children) {
+      auto content = nodes_.find(childTag);
+      if (content == nodes_.end()) continue;
+      const auto& cf = content->second.layoutMetrics.frame;
+      contentW = std::max(contentW, (float)(cf.origin.x + cf.size.width));
+      contentH = std::max(contentH, (float)(cf.origin.y + cf.size.height));
+    }
+    const float containerW = (float)sv.layoutMetrics.frame.size.width;
+    const float containerH = (float)sv.layoutMetrics.frame.size.height;
+    return {contentW, contentH, containerW, containerH,
+            std::max(0.0f, contentW - containerW),
+            std::max(0.0f, contentH - containerH)};
+  };
+
+  // Walk UP from the hit. Choose the NEAREST ancestor that overflows on the
+  // wheel axis. Remember the nearest ScrollView of ANY kind as a fallback for
+  // the degenerate case where nothing overflows the chosen axis (e.g. a
+  // fully-scrolled list) -- clamping there is still correct and keeps the
+  // event owned by a real scroll view instead of leaking to its parent.
+  //
+  // Bounded against a cycle in the parent chain: hanging the event thread is
+  // worse than missing one scroll.
+  facebook::react::Tag chosen = 0;
+  facebook::react::Tag fallback = 0;
+  int guard = 0;
+  facebook::react::Tag cur = hit;
+  while (cur != 0 && guard++ < 256) {
+    auto nit = nodes_.find(cur);
+    if (nit == nodes_.end()) break;
+    const SceneNode& node = nit->second;
+    if (node.isScrollView) {
+      if (fallback == 0) fallback = cur;
+      const Extent e = extentOf(node);
+      const float axisMax = wheelHorizontal ? e.maxX : e.maxY;
+      if (axisMax > 0.0f) {
+        chosen = cur;
+        break;
+      }
+    }
+    cur = node.parent;
+  }
+
+  const facebook::react::Tag tag = chosen ? chosen : fallback;
+  if (tag == 0) return r;
+
   auto it = nodes_.find(tag);
   if (it == nodes_.end()) return r;
   SceneNode& sv = it->second;
+  const Extent e = extentOf(sv);
 
-  // ⛔ CONTENT EXTENT IS THE UNION OF EVERY CHILD, NOT children.front().
-  //
-  // Measured on fixtures/p9-scroll: ScrollView tag 40 has TWO children --
-  // View 42 at 400x300 and the content container View 38 at 400x600 (six
-  // 100pt rows). front() returned the 300-tall one, so contentH == containerH,
-  // maxOffset == max(0, 300-300) == 0, and EVERY scroll clamped to zero.
-  //
-  // That failure is invisible to a presence check and nearly invisible to a
-  // human: dy arrives correct (the log says dy=80.0), scrollViewAt resolves the
-  // right tag, onScroll fires in JS with a real event, and the pixels never
-  // move. Three of the four signals are healthy. Only an assertion on the
-  // scroll DISTANCE catches it -- an inequality against the resting frame
-  // would have passed, which is exactly what the gate comment at
-  // tools/ci-scroll.sh:213 warns about for the opposite mistake.
-  //
-  // Union rather than "the tallest child" or "the last child": child order is
-  // not guaranteed and the container is not reliably front() or back(). The
-  // union of origin + size is correct for a single content container AND for a
-  // ScrollView whose children were laid out directly, and it cannot be fooled
-  // by sibling order changing between commits. Done per-axis so a row-laid-out
-  // horizontal strip reports its width the same way a column reports height.
-  //
-  // Read live rather than from a paint-time cache: a headless run that never
-  // painted would otherwise clamp against zero and refuse to scroll at all,
-  // which reads as "scrolling is broken" when it is only "nothing has painted
-  // yet".
-  float contentW = 0.0f;
-  float contentH = 0.0f;
-  for (auto childTag : sv.children) {
-    auto content = nodes_.find(childTag);
-    if (content == nodes_.end()) continue;
-    const auto& cf = content->second.layoutMetrics.frame;
-    contentW = std::max(contentW, (float)(cf.origin.x + cf.size.width));
-    contentH = std::max(contentH, (float)(cf.origin.y + cf.size.height));
-  }
-  const float containerW = (float)sv.layoutMetrics.frame.size.width;
-  const float containerH = (float)sv.layoutMetrics.frame.size.height;
-
-  // ⛔ AXIS FROM CONTENT OVERFLOW, NOT FROM THE `horizontal` PROP.
-  //
-  // Off Android RN never swaps in the dedicated AndroidHorizontalScrollView, so
-  // `<ScrollView horizontal>` arrives with props->horizontal == false and a
-  // content container that simply lays out in a row. Locking the axis to the
-  // prop would leave that strip un-scrollable while every other signal looked
-  // healthy. Derive the scrollable axis from which way the content actually
-  // overflows; fall back to the prop only when neither or both axes overflow
-  // (an ambiguous case the prop is the best remaining hint for).
-  const float maxOffsetX = std::max(0.0f, contentW - containerW);
-  const float maxOffsetY = std::max(0.0f, contentH - containerH);
-  bool horizontal;
-  if (maxOffsetX > 0.0f && maxOffsetY <= 0.0f) {
-    horizontal = true;
-  } else if (maxOffsetY > 0.0f && maxOffsetX <= 0.0f) {
-    horizontal = false;
-  } else {
-    horizontal = sv.scrollHorizontal;
-  }
-
-  // A wheel has ONE delta; the host carries both dx and dy and lets the axis
-  // decide which one moves the list. On a vertical list a horizontal wheel
-  // (trackpad) must be a no-op, not a diagonal drift, and vice versa -- that is
-  // what routing the delta through the derived axis guarantees.
+  // Route the delta through the wheel axis for THIS view. On a horizontal row a
+  // dy is a no-op (it never reached here as the chosen axis unless the row was
+  // the only fallback, in which case maxY==0 clamps it away), and vice versa --
+  // no diagonal drift.
   const float beforeX = sv.scrollX;
   const float beforeY = sv.scrollY;
-  if (horizontal) {
+  if (wheelHorizontal) {
     float next = sv.scrollX + dx;
     if (next < 0.0f) next = 0.0f;
-    if (next > maxOffsetX) next = maxOffsetX;
+    if (next > e.maxX) next = e.maxX;
     sv.scrollX = next;
   } else {
     float next = sv.scrollY + dy;
     if (next < 0.0f) next = 0.0f;
-    if (next > maxOffsetY) next = maxOffsetY;
+    if (next > e.maxY) next = e.maxY;
     sv.scrollY = next;
   }
 
   r.tag = tag;
   r.offsetX = sv.scrollX;
   r.offsetY = sv.scrollY;
-  r.contentWidth = contentW;
-  r.contentHeight = contentH;
-  r.containerWidth = containerW;
-  r.containerHeight = containerH;
+  r.contentWidth = e.contentW;
+  r.contentHeight = e.contentH;
+  r.containerWidth = e.containerW;
+  r.containerHeight = e.containerH;
   r.moved = (sv.scrollX != beforeX) || (sv.scrollY != beforeY);
   return r;
 }
