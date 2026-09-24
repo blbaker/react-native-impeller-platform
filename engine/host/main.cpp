@@ -1099,9 +1099,14 @@ int main(int argc, char** argv) {
   bool testUrlParse = false;
   bool testHttp = false;
   bool windowMode = false;
-  // P12-01 idle-frame damage-skip. Default OFF: every existing gate keeps its
-  // unconditional paint-every-frame loop.
+  // P12-01 idle-frame damage-skip. Default OFF for the HEADLESS/gate paths so
+  // every screenshot/--frames gate keeps its unconditional paint-every-frame
+  // loop. Under --window it now DEFAULTS ON (resolved post-parse below) so a
+  // real idle window sleeps instead of pinning a core; --no-idle-skip opts out.
+  // idleSkipSet tracks an explicit --idle-skip / --no-idle-skip so the windowed
+  // default never overrides what the caller asked for.
   bool idleSkip = false;
+  bool idleSkipSet = false;
   double idleRunSec = 0.0;
   int idleBudgetMs = 250;
   bool idleLog = false;
@@ -1237,7 +1242,8 @@ int main(int argc, char** argv) {
     //   --idle-offthread-after F  at frame F fire an OFF-thread scene bump once;
     //                         the off-thread repaint witness uses it with
     //                         --idle-log to prove M3 stalls and HEAD wakes.
-    else if (a == "--idle-skip") idleSkip = true;
+    else if (a == "--idle-skip") { idleSkip = true; idleSkipSet = true; }
+    else if (a == "--no-idle-skip") { idleSkip = false; idleSkipSet = true; }
     else if (a == "--idle-run-sec") idleRunSec = atof(next("--idle-run-sec").c_str());
     else if (a == "--idle-budget-ms") idleBudgetMs = atoi(next("--idle-budget-ms").c_str());
     else if (a == "--idle-log") idleLog = true;
@@ -1548,6 +1554,13 @@ int main(int argc, char** argv) {
 
   if (windowMode) {
 #if RNI_WITH_WINDOW
+    // P12-01: --idle-skip defaults ON in windowed mode (real display => a clean
+    // frame should SLEEP, not spin a core). An explicit --idle-skip/--no-idle-skip
+    // wins; a bounded --frames run or the mutation-verify --idle-mutant paths set
+    // it explicitly, so this only flips the interactive default. The loop's own
+    // handsPending guard keeps every frame-anchored windowed gate (resize/click/
+    // scroll/hover/stall/screenshot/--frames) painting on schedule regardless.
+    if (!idleSkipSet && frames == 0) idleSkip = true;
     return RunWindowed(bundlePath, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl,
                        widthGiven ? width : 0, heightGiven ? height : 0,

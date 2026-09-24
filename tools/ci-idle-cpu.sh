@@ -34,6 +34,13 @@
 # ⛔ MAC-RUNNABLE WITH NO TOOLCHAIN. This gate renders a COMMITTED prebuilt JS
 # bundle with the staged engine binary and reads only stdout — no npm/metro. On
 # the Mac (real Metal display) run: RNI_BIN=<darwin binary> bash tools/ci-idle-cpu.sh
+#
+# CPU sampling is uname-branched: Linux reads /proc/$PID/stat jiffies; Darwin has
+# NO /proc, so it diffs `ps -o time=` (cumulative CPU time) across the window and
+# uses `kill -0` for liveness. NOTE: macOS `ps` CPU-time granularity can be as
+# coarse as ~0.01s; over the 2s window a truly idle loop still reads ~0 and a
+# busy-spin reads ~2s, so the 15% budget separates them cleanly — but if a Mac
+# run reads a suspicious sub-budget non-zero, widen IDLE_RUN_SEC for resolution.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -94,23 +101,46 @@ fi
   --width 400 --height 400 > "$OUT/idle.log" 2>&1 &
 PID=$!
 
-# Settle, then sample /proc utime+stime jiffies across a 2s no-input window.
+# Settle, then sample CPU across a 2s no-input window.
+#   Linux: /proc/$PID/stat utime+stime jiffies (HZ-normalised).
+#   Darwin: NO /proc. Use `ps -o time=` (cumulative CPU h:mm:ss.dd) sampled twice
+#           and diff; liveness is `kill -0`, not a /proc/stat read.
 sleep 1.2
-if ! [ -r /proc/$PID/stat ]; then
+if ! kill -0 "$PID" 2>/dev/null; then
   echo "IDLE_CPU FAIL (engine exited before the CPU window; log:)"
   tail -20 "$OUT/idle.log"; wait $PID 2>/dev/null || true; exit 1
 fi
-read -r U1 S1 < <(awk '{print $14, $15}' /proc/$PID/stat)
+
+# cpu_time_sec PID -> cumulative CPU seconds consumed by PID, portably.
+cpu_time_sec() {
+  local pid="$1"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    # ps TIME is [[dd-]hh:]mm:ss[.ff]; normalise to seconds.
+    local t; t="$(ps -o time= -p "$pid" 2>/dev/null | tr -d ' ')"
+    [ -z "$t" ] && { echo ""; return; }
+    awk -v s="$t" 'BEGIN{
+      n=split(s,d,"-"); rest=(n==2)?d[2]:d[1]; days=(n==2)?d[1]:0;
+      m=split(rest,c,":"); sec=0;
+      if(m==3){sec=c[1]*3600+c[2]*60+c[3]} else if(m==2){sec=c[1]*60+c[2]} else {sec=c[1]}
+      printf "%.2f", days*86400+sec }'
+  else
+    read -r u s < <(awk '{print $14, $15}' /proc/$pid/stat 2>/dev/null || echo "")
+    [ -z "${u:-}" ] && { echo ""; return; }
+    awk -v u="$u" -v s="$s" -v hz="$(getconf CLK_TCK)" 'BEGIN{printf "%.3f",(u+s)/hz}'
+  fi
+}
+
+C1="$(cpu_time_sec "$PID")"
 T1=$(date +%s.%N)
 sleep 2.0
-read -r U2 S2 < <(awk '{print $14, $15}' /proc/$PID/stat 2>/dev/null || echo "$U1 $S1")
+C2="$(cpu_time_sec "$PID")"
 T2=$(date +%s.%N)
 wait $PID 2>/dev/null || true
+[ -z "$C1" ] && C1=0
+[ -z "$C2" ] && C2="$C1"
 
-HZ=$(getconf CLK_TCK)
-DJ=$(( (U2 + S2) - (U1 + S1) ))
 DT=$(echo "$T2 - $T1" | bc -l)
-PCT=$(echo "scale=1; 100.0 * ($DJ / $HZ) / $DT" | bc -l)
+PCT=$(echo "scale=1; 100.0 * ($C2 - $C1) / $DT" | bc -l)
 
 # The run must actually have skipped clean frames -- a run that painted every
 # frame at a low count would read "cheap" without the skip ever engaging. Prove
