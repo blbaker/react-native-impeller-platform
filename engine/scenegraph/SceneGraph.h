@@ -15,6 +15,8 @@
 
 #include <cstdint>
 #include <array>
+#include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -351,6 +353,32 @@ class SceneGraph {
   // no known key is indistinguishable, from the outside, from no call at all.
   unsigned long directPropUpdates() const { return directPropUpdates_; }
 
+  // ── Idle-frame damage signal + wake (P12-01) ──────────────────────────────
+  // A monotonic revision, bumped once per applyMutations, per applied direct-
+  // prop update (the NativeAnimated path), per text-input edit/focus change,
+  // and per scroll that MOVED. The windowed idle-skip loop presents a frame
+  // only when this advanced since the last present (or an animation clock is
+  // live). Impeller had NO such counter before P12-01: every windowed frame
+  // repainted unconditionally, pinning a CPU core on an idle window.
+  uint64_t version() const { return version_.load(std::memory_order_acquire); }
+
+  // Bump the revision. Safe from any thread (version_ is atomic) and it also
+  // fires the damage wake, so an OFF-thread bump (the JS thread's applyMutations
+  // / updateViewProps, or a detached test producer) wakes the GLFW loop if it
+  // is asleep in glfwWaitEventsTimeout. Main-thread callers (a windowed scroll,
+  // a resize) get a harmless glfwPostEmptyEvent the next poll drains.
+  void bumpVersion();
+
+  // Install the wake fired by every version_ bump. The callback only does
+  // glfwPostEmptyEvent() (documented thread-safe) so a setState while the loop
+  // sleeps in glfwWaitEventsTimeout repaints promptly instead of stalling to
+  // the next unrelated input. Null when no loop is listening (headless one-shot
+  // gates never install it), so producers pay one null-check. Installed once,
+  // before the JS thread starts. Guarded by its OWN mutex (never mutex_) so a
+  // bump taken while mutex_ is held — applyMutations does exactly that — cannot
+  // invert the lock order against the scene lock.
+  void setDamageWake(std::function<void()> wake);
+
   // Paints the whole tree into `builder`. Returns the number of nodes drawn —
   // a caller can tell "painted nothing" from "painted an empty-looking frame",
   // which are different bugs.
@@ -563,6 +591,15 @@ class SceneGraph {
   std::vector<std::string> svgCacheOrder_;  // LRU: front = oldest
   // ENG-06. Count of PROPS applied by updateViewProps(), not calls made.
   unsigned long directPropUpdates_{0};
+  // P12-01: idle-frame damage revision, bumped by bumpVersion(). Atomic so an
+  // off-thread producer (JS applyMutations / updateViewProps) can bump it while
+  // the GLFW loop reads it on the main thread with no scene lock held.
+  std::atomic<uint64_t> version_{0};
+  // P12-01: the wake fired by bumpVersion(). Guarded by its OWN mutex (never
+  // mutex_) so applyMutations — which bumps while holding mutex_ — cannot invert
+  // the lock order. Null until a windowed idle-skip loop installs it.
+  mutable std::mutex wakeMutex_;
+  std::function<void()> damageWake_;
   std::unordered_map<facebook::react::Tag, SceneNode> nodes_;
   std::vector<facebook::react::Tag> roots_;
   ImpellerTypographyContext typography_{nullptr};

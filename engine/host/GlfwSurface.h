@@ -296,6 +296,10 @@ class GlfwSurface {
   // unreachable — on every platform, which is what makes the fix gateable at
   // all. It does NOT claim to be AppKit's modal loop; see tools/ci-resize.sh.
   void waitEvents(double timeoutSeconds);
+  // P12-01: wake a thread parked in glfwWaitEventsTimeout. Thread-safe (GLFW
+  // guarantees glfwPostEmptyEvent is callable from any thread); the idle-skip
+  // damage wake calls this from the JS thread.
+  void postEmptyEvent();
   bool shouldClose() const;
   void present();  // glfwSwapBuffers
 

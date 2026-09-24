@@ -839,6 +839,29 @@ void SceneGraph::applyMutations(
                                 return it == nodes_.end() || it->second.parent != 0;
                               }),
                roots_.end());
+  // P12-01: a mounting transaction is scene damage. Bump the revision so the
+  // windowed idle-skip loop repaints, and WAKE it if it is asleep in
+  // glfwWaitEventsTimeout — applyMutations runs on the JS thread, so without the
+  // wake a commit here would not paint until the next unrelated input. Called
+  // while mutex_ is still held: bumpVersion takes only wakeMutex_, never mutex_,
+  // so there is no lock-order inversion.
+  bumpVersion();
+}
+
+// ── Idle-frame damage signal + wake (P12-01) ────────────────────────────────
+void SceneGraph::bumpVersion() {
+  version_.fetch_add(1, std::memory_order_release);
+  std::function<void()> wake;
+  {
+    std::lock_guard<std::mutex> lock(wakeMutex_);
+    wake = damageWake_;  // copy under the wake lock; never call it while held
+  }
+  if (wake) wake();
+}
+
+void SceneGraph::setDamageWake(std::function<void()> wake) {
+  std::lock_guard<std::mutex> lock(wakeMutex_);
+  damageWake_ = std::move(wake);
 }
 
 // ENG-06. The direct-manipulation prop path -- see the comment on the
@@ -860,6 +883,7 @@ void SceneGraph::applyMutations(
 bool SceneGraph::updateViewProps(facebook::react::Tag tag,
                                  const folly::dynamic& props) {
   std::lock_guard<std::mutex> lock(mutex_);
+  const unsigned long before = directPropUpdates_;
   auto it = nodes_.find(tag);
   if (it == nodes_.end()) {
     return false;
@@ -904,6 +928,12 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
       continue;
     }
   }
+  // P12-01: a NativeAnimated opacity/transform ramp bypasses the shadow tree
+  // and lands here every frame on the JS thread. If any prop actually applied,
+  // it is scene damage: bump + wake so the idle-skip loop presents this tick
+  // instead of freezing the animation on the last painted frame. Bumped only on
+  // a real apply, so a call that matched no known key does not falsely wake.
+  if (directPropUpdates_ != before) bumpVersion();
   return true;
 }
 
@@ -2387,6 +2417,8 @@ void SceneGraph::setTextInputFocus(facebook::react::Tag tag) {
   // here. Without this reset the caret's phase would be whatever the free clock
   // happened to be at, so a field could focus into an off phase and look dead.
   tiCaretResetAt_ = std::chrono::steady_clock::now();
+  // P12-01: focus shows the caret + seeds the buffer — scene damage.
+  bumpVersion();
 }
 
 void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
@@ -2400,6 +2432,8 @@ void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
   // character next to an invisible caret. Resetting the phase here guarantees
   // the caret is on for the first half-period after any edit.
   tiCaretResetAt_ = std::chrono::steady_clock::now();
+  // P12-01: an edit changes the glyphs and the caret index — scene damage.
+  bumpVersion();
 }
 
 void SceneGraph::clearTextInputFocus() {
@@ -2407,6 +2441,8 @@ void SceneGraph::clearTextInputFocus() {
   tiFocused_ = 0;
   tiEditValue_.clear();
   tiCaret_ = 0;
+  // P12-01: blur erases the caret the cached frame still shows — scene damage.
+  bumpVersion();
 }
 
 facebook::react::Tag SceneGraph::focusedTextInput() {
@@ -2619,6 +2655,9 @@ SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dx,
   r.containerWidth = e.containerW;
   r.containerHeight = e.containerH;
   r.moved = (sv.scrollX != beforeX) || (sv.scrollY != beforeY);
+  // P12-01: a scroll that actually moved is scene damage; a clamped no-op at a
+  // bound is not, so a wheel against the end of a list does not force a repaint.
+  if (r.moved) bumpVersion();
   return r;
 }
 

@@ -782,6 +782,13 @@ void GlfwSurface::waitEvents(double timeoutSeconds) {
   glfwWaitEventsTimeout(timeoutSeconds);
 }
 
+// P12-01: wake a thread parked in glfwWaitEventsTimeout. glfwPostEmptyEvent is
+// documented safe to call from ANY thread, which is exactly what the damage
+// wake needs: the JS thread's applyMutations/updateViewProps fires this so a
+// commit while the loop sleeps repaints promptly instead of stalling to the
+// next unrelated input.
+void GlfwSurface::postEmptyEvent() { glfwPostEmptyEvent(); }
+
 bool GlfwSurface::shouldClose() const {
   return window_ ? glfwWindowShouldClose(window_) : true;
 }

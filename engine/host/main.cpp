@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -314,7 +315,9 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 double scrollDx, double scrollDy,
                 int hoverAfterFrames,
                 const std::vector<std::pair<double, double>>& hoverPoints,
-                bool hoverLeaveAtEnd, int supersampleRnsvg) {
+                bool hoverLeaveAtEnd, int supersampleRnsvg,
+                bool idleSkip, double idleRunSec, int idleBudgetMs,
+                bool idleLog, int idleMutant, int idleOffthreadAfter) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -711,6 +714,34 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     fflush(stdout);
   };
 
+  // ── P12-01: idle-frame damage-skip wake wiring ─────────────────────────────
+  // The retained SceneGraph repaints every frame regardless of change; on an
+  // idle window that pins a CPU core. --idle-skip makes a CLEAN frame skip the
+  // paint AND block in glfwWaitEventsTimeout so the thread sleeps (skipping the
+  // paint alone still busy-spins the non-blocking poll — the sleep is the fix).
+  // Install glfwPostEmptyEvent as the damage wake on every OFF-thread source
+  // (SceneGraph::bumpVersion covers the JS thread's applyMutations /
+  // updateViewProps / text-input paths) so a change while the loop sleeps
+  // repaints promptly. M3 installs NO wake, so the off-thread witness stalls the
+  // full budget, proving the wake is load-bearing. Wired only under --idle-skip:
+  // every existing gate keeps its unconditional paint-every-frame loop.
+  if (idleSkip) {
+    if (idleMutant != 3) {
+      sceneGraph.setDamageWake([&surface]() { surface.postEmptyEvent(); });
+    } else {
+      printf("rn-impeller: [idle] MUTANT M3: damage wake NOT installed\n");
+      fflush(stdout);
+    }
+    printf("rn-impeller: [idle] enabled budget_ms=%d mutant=%d run_sec=%.2f\n",
+           idleBudgetMs, idleMutant, idleRunSec);
+    fflush(stdout);
+  }
+  // The last version() we actually PRESENTED. A frame is dirty when it advanced,
+  // an animation clock is live, or a CLI hand is still pending (folded in at the
+  // loop head). Starts at 0 == the initial version, so the first frame is forced
+  // dirty explicitly below.
+  uint64_t lastPresentedVersion = 0;
+
   while (!surface.shouldClose()) {
     surface.pollEvents();
 
@@ -779,11 +810,58 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // ENG-06: advance RN's animation engine once per frame, BEFORE painting,
     // so this frame shows the value this tick produced. Near-free when nothing
     // is animating (one atomic load) -- see ReactHost::pumpNativeAnimated.
+    const unsigned long ticksBefore = host.nativeAnimatedTicks();
     host.pumpNativeAnimated();
+    // P12-01: did an animation actually advance this frame? A NativeAnimated
+    // ramp drives props through updateViewProps (which bumps version_), but a
+    // frame that ticked the clock without yet moving a pixel still must not be
+    // mistaken for idle -- treat any tick as a live animation clock.
+    const bool animatedThisFrame = host.nativeAnimatedTicks() != ticksBefore;
 
-    int painted = paintFrame();
+    // ── P12-01: compute this frame's damage (idle-skip only) ─────────────────
+    // With --idle-skip OFF, shouldPaint stays true and the loop is byte-for-byte
+    // its old paint-every-frame self -- every existing gate is untouched. ON, a
+    // frame is dirty iff the scene version advanced, an animation clock is live
+    // (a NativeAnimated tick this frame OR a focused field whose caret blinks),
+    // the first frame, or a frame-anchored CLI test hook is still pending.
+    // Otherwise the paint is skipped and the loop SLEEPS below (that sleep, not
+    // the paint-skip, is what drops CPU).
+    bool shouldPaint = true;
+    if (idleSkip) {
+      const uint64_t curVersion = sceneGraph.version();
+      const bool versionAdvanced = curVersion != lastPresentedVersion;
+      // Any frame-anchored test hand not yet fully consumed keeps the loop
+      // painting, so resize/stall/click/scroll/hover/screenshot gates and any
+      // bounded --frames N run keep their exact frame counts. A --frames run
+      // paints every frame by construction (idle gate uses --idle-run-sec, an
+      // unbounded loop with a wall-clock exit, NOT --frames).
+      const bool handsPending =
+          frames > 0 ||
+          (resizeAfterFrames > 0 && frameIndex <= resizeAfterFrames + 5) ||
+          (stallAfterFrames > 0 && frameIndex <= stallAfterFrames) ||
+          (clickAfterFrames > 0 && frameIndex <= clickAfterFrames) ||
+          (scrollAfterFrames > 0 && frameIndex <= scrollAfterFrames) ||
+          (hoverAfterFrames > 0 &&
+           frameIndex <= hoverAfterFrames + (int)hoverPoints.size()) ||
+          (!screenshotFirstPath.empty() && !capturedFirst) ||
+          (!screenshotPath.empty() && !capturedTimed);
+      // A caret blink is a time-based clock nothing marks dirty: refuse the skip
+      // while a field is focused or the cached frame would freeze mid-blink.
+      const bool clockLive =
+          animatedThisFrame || sceneGraph.focusedTextInput() != 0;
+      // First frame ALWAYS paints (lastPresentedVersion starts at 0 == the
+      // initial version). M1 forces dirty every frame so the CPU gate fails,
+      // proving the skip is load-bearing.
+      const bool computedDirty =
+          frameIndex == 0 || versionAdvanced || clockLive || handsPending;
+      shouldPaint = (idleMutant == 1) ? true : computedDirty;
+      if (shouldPaint) lastPresentedVersion = curVersion;
+    }
+
+    int painted = shouldPaint ? paintFrame() : 0;
     ++frameIndex;
-    if (frameIndex == 1) printf("rn-impeller: painted_nodes=%d\n", painted);
+    if (shouldPaint && frameIndex == 1)
+      printf("rn-impeller: painted_nodes=%d\n", painted);
 
     // ⛔ SYNTHETIC-CLICK HOOK — AND IT IS DELIBERATELY THE WEAKER EVIDENCE.
     // This calls the handler through GlfwSurface::synthesiseClick, so it
@@ -885,6 +963,59 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       }
     }
 
+    // ── P12-01: off-thread repaint witness + idle sleep + run-window exit ─────
+    if (idleSkip) {
+      // OFF-THREAD REPAINT WITNESS. At the requested frame, spawn a detached
+      // thread that bumps the scene version once after a short delay -- the JS-
+      // thread applyMutations path in miniature. On HEAD the bump fires the
+      // damage wake (glfwPostEmptyEvent), so the sleep below returns early and a
+      // repaint follows; the gate measures the frame gap. Under M3 no wake is
+      // installed, so the loop sleeps out the full budget. Fired once.
+      if (idleOffthreadAfter >= 0 && frameIndex == idleOffthreadAfter) {
+        printf("rn-impeller: [idle] offthread_fire frame=%d version=%llu\n",
+               frameIndex, (unsigned long long)sceneGraph.version());
+        fflush(stdout);
+        std::thread([&sceneGraph]() {
+          // Small delay so the loop is actually parked in glfwWaitEventsTimeout
+          // when the bump lands -- the exact race the wake exists for.
+          std::this_thread::sleep_for(std::chrono::milliseconds(30));
+          sceneGraph.bumpVersion();
+        }).detach();
+      }
+
+      const bool clean = !shouldPaint;
+      int sleptMs = 0;
+      // THE SLEEP THAT DROPS CPU. Block up to budget ms; any input OR a posted
+      // wake returns early. M2 deliberately KEEPS the non-blocking poll (no
+      // sleep) so the loop busy-spins -- the CPU gate must catch that exact
+      // wrong fix, proving the sleep, not the paint-skip, is what matters.
+      if (clean && idleMutant != 2) {
+        const auto t0 = std::chrono::steady_clock::now();
+        surface.waitEvents((double)idleBudgetMs / 1000.0);
+        sleptMs = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - t0)
+                      .count();
+      }
+      if (idleLog) {
+        printf("rn-impeller: [idle] frame=%d dirty=%d painted=%d slept_ms=%d "
+               "version=%llu\n",
+               frameIndex, clean ? 0 : 1, shouldPaint ? 1 : 0, sleptMs,
+               (unsigned long long)sceneGraph.version());
+        fflush(stdout);
+      }
+      // --idle-run-sec: hold the window open with no input for the window, then
+      // exit 0. This is what the idle-CPU gate samples %CPU across.
+      if (idleRunSec > 0.0 &&
+          std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                        start)
+                  .count() >= idleRunSec) {
+        printf("rn-impeller: [idle] run window elapsed after %.2fs, frames=%d\n",
+               idleRunSec, frameIndex);
+        fflush(stdout);
+        break;
+      }
+    }
+
     if (frames > 0 && frameIndex >= frames) break;
   }
 
@@ -914,6 +1045,11 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // event, which would dispatch an edit into freed memory.
   surface.setCharHandler(nullptr);
   surface.setKeyHandler(nullptr);
+  // P12-01: drop the damage wake before teardown. It captures `surface` by
+  // reference; clearing it here means no late off-thread bump can post an event
+  // to a window mid-destruction. Safe even though the JS thread is already torn
+  // down by this point -- belt and braces, same discipline as the handlers.
+  sceneGraph.setDamageWake(nullptr);
 
 
   // Machine-readable evidence that the modal-loop repaint path executed. A
@@ -963,6 +1099,14 @@ int main(int argc, char** argv) {
   bool testUrlParse = false;
   bool testHttp = false;
   bool windowMode = false;
+  // P12-01 idle-frame damage-skip. Default OFF: every existing gate keeps its
+  // unconditional paint-every-frame loop.
+  bool idleSkip = false;
+  double idleRunSec = 0.0;
+  int idleBudgetMs = 250;
+  bool idleLog = false;
+  int idleMutant = 0;
+  int idleOffthreadAfter = -1;
   int frames = 0;              // 0 = unbounded, run until window closes
   std::string tapSpec;         // "X,Y" in points; empty = no input probe
   // <TextInput>. ENG-01b. Headless editing probe. "--type X,Y:SEQ" focuses the
@@ -1077,6 +1221,29 @@ int main(int argc, char** argv) {
     else if (a == "--headless") headless = true;
     else if (a == "--window") windowMode = true;
     else if (a == "--frames") frames = atoi(next("--frames").c_str());
+    // ── P12-01 idle-frame damage-skip flags ──────────────────────────────────
+    //   --idle-skip           enable the dirty-frame skip + glfwWaitEventsTimeout
+    //                         sleep (default OFF so every existing gate keeps its
+    //                         paint-every-frame behaviour unchanged).
+    //   --idle-run-sec S      run the window with no input for S seconds then
+    //                         exit 0. The idle-CPU gate samples %CPU across this.
+    //   --idle-budget-ms M    glfwWaitEventsTimeout sleep bound in ms (def 250).
+    //   --idle-log            print `[idle] frame=... dirty=... painted=...
+    //                         slept_ms=...` each iteration so a gate can prove
+    //                         skips happened.
+    //   --idle-mutant N       1=M1 always-dirty, 2=M2 skip paint but keep the
+    //                         non-blocking poll (no sleep), 3=M3 never install
+    //                         the wake. For mutation-verify ONLY.
+    //   --idle-offthread-after F  at frame F fire an OFF-thread scene bump once;
+    //                         the off-thread repaint witness uses it with
+    //                         --idle-log to prove M3 stalls and HEAD wakes.
+    else if (a == "--idle-skip") idleSkip = true;
+    else if (a == "--idle-run-sec") idleRunSec = atof(next("--idle-run-sec").c_str());
+    else if (a == "--idle-budget-ms") idleBudgetMs = atoi(next("--idle-budget-ms").c_str());
+    else if (a == "--idle-log") idleLog = true;
+    else if (a == "--idle-mutant") idleMutant = atoi(next("--idle-mutant").c_str());
+    else if (a == "--idle-offthread-after")
+      idleOffthreadAfter = atoi(next("--idle-offthread-after").c_str());
     // Headless input probe: "--tap X,Y" hit-tests a point in POINTS and
     // dispatches a full down/up pair. Exists so the hit test and the touch
     // dispatch path are testable WITHOUT a window -- the geometry and the
@@ -1391,7 +1558,9 @@ int main(int argc, char** argv) {
                        clickAfterFrames, clickX, clickY,
                        scrollAfterFrames, scrollX, scrollY, scrollDx, scrollDy,
                        hoverAfterFrames, hoverPoints, hoverLeaveAtEnd,
-                       supersampleRnsvg);
+                       supersampleRnsvg,
+                       idleSkip, idleRunSec, idleBudgetMs, idleLog, idleMutant,
+                       idleOffthreadAfter);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "
