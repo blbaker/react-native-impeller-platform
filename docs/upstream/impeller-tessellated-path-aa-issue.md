@@ -56,11 +56,26 @@ Impeller appears to AA analytic primitives (`AddOval` / `AddRoundedRect`) via
 per-fragment coverage in the shader, but AA the general tessellation path
 through an MSAA offscreen. Where `GL_EXT_multisampled_render_to_texture` is
 absent (llvmpipe here), the tessellated route falls back to no coverage AA at
-all. **Open question for maintainers:** on a hardware GLES/Metal GPU where the
-MSAA offscreen is available, does the cubic route antialias? If it is
-MSAA-offscreen-dependent, the fix is to guarantee that offscreen (or add
-analytic coverage AA to the tessellation path) so tessellated paths match the
-analytic fast path.
+all.
+
+**Update — reproduced on hardware Metal (macOS), so this is NOT an
+llvmpipe/MSAA-availability artifact.** The open question below asked whether the
+cubic route antialiases where the MSAA offscreen IS available. It does not.
+Measured on Apple Metal, headless 1440x900 scale 1, stroked tessellated paths
+(Tabler icon set, stroke width 1.8): the icon ink carries exactly **2 distinct
+luminance levels — 50 (530 px) and 115 (74 px), ZERO intermediate values**.
+That is a hard binary edge: **0% partial coverage** on stroked tessellated
+paths. The analytic `AddOval` route on the same GPU is anti-aliased (real
+coverage AA). So the split is not offscreen-availability — the tessellation path
+gets no coverage AA even on a hardware Metal GPU with the offscreen present.
+
+The fix is therefore not merely "guarantee the MSAA offscreen": it must **add
+analytic/per-fragment coverage AA to the tessellation path** so tessellated
+paths match the analytic fast path on all backends.
+
+**Original open question (now answered above):** on a hardware GLES/Metal GPU
+where the MSAA offscreen is available, does the cubic route antialias? —
+**No. Metal: 2 luminance levels, 0% partial on stroked tessellated paths.**
 
 ## Environment
 - Impeller SHA: `114eb184d66d7ca136d89eb8ec09f61aff265062`
