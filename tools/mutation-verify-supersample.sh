@@ -126,6 +126,74 @@ open(p,"w").write(s.replace(old,new,1))
 PY
 run_mutant "B supersample hook drops subtree attribution (N=1 < N=0, task-768)"
 
+# ── PER-ICON POSITION-GATE MUTANTS (tools/ci-supersample-position.sh) ────────
+# These run the POSITION gate, not ci-supersample.sh. run_mutant above greps for
+# SUPERSAMPLE_GATE_{PASS,FAIL} (the AA gate); the position gate emits
+# SUPERSAMPLE_POSITION_GATE_{PASS,FAIL}, so drive it with a dedicated runner.
+run_pos_mutant() {
+  local name="$1"
+  TOTAL=$((TOTAL + 1))
+  echo "--- mutant: $name ---"
+  if ! eval "$BUILD_CMD" > /tmp/mss-build.log 2>&1; then
+    echo "  BUILD FAILED -- a mutant that does not compile proves nothing"
+    grep -E "error:" /tmp/mss-build.log | head -3 | sed 's/^/     /'
+  elif timeout 600 bash tools/ci-supersample-position.sh > /tmp/mss-pos.log 2>&1; then
+    echo "  ⛔ NOT CAUGHT -- position gate still passed"
+    grep -E "SUPERSAMPLE_POSITION_GATE_PASS" /tmp/mss-pos.log | tail -1 | sed 's/^/     /'
+  else
+    echo "  caught:"
+    grep -E "SUPERSAMPLE_POSITION_GATE_FAIL" /tmp/mss-pos.log | head -2 | sed 's/^/     /'
+    PASS=$((PASS + 1))
+  fi
+  cp "$BACKUP/SceneGraph.cpp" "$SG"
+  eval "$BUILD_CMD" > /tmp/mss-rebuild.log 2>&1 || true
+}
+
+# C: skip the PER-ICON composite DrawTextureRect. This is THE bug this whole fix
+# repairs: paintSvgRootSupersampled builds and caches the texture, returns true
+# (so paintNode skips the in-place walk), but never draws it — every per-icon
+# <Svg> paints NOTHING. The per-icon arm's ink-presence assertion (within 10% of
+# N=0) MUST fail at N=1 (and N=8). Proves the per-icon composite is load-bearing.
+python3 - <<'PY'
+p="engine/scenegraph/SceneGraph.cpp"; s=open(p).read()
+old="""  ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
+                                            kImpellerTextureSamplingLinear,
+                                            nullptr);
+  ImpellerDisplayListBuilderRestore(builder);
+  // ⛔ DO NOT RELEASE `texture` HERE. The host draws `builder`'s display list
+  // AFTER paint() returns, and it references this texture. Unlike the root path"""
+new="""  (void)srcRect; (void)dstRect;  // MUTANT C: per-icon composite skipped -> icon vanishes
+  ImpellerDisplayListBuilderRestore(builder);
+  // ⛔ DO NOT RELEASE `texture` HERE. The host draws `builder`'s display list
+  // AFTER paint() returns, and it references this texture. Unlike the root path"""
+assert old in s, "C anchor not found"
+open(p,"w").write(s.replace(old,new,1))
+PY
+run_pos_mutant "C per-icon composite DrawTextureRect skipped (icons vanish at N=1/N=8)"
+
+# D: drop the Y-flip on the PER-ICON composite. The wrapped-FBO texture is
+# bottom-left origin; without the flip each up-arrow composites as a down-arrow.
+# The per-icon arm's orientation assertion (each arrow base-heavy) MUST fail.
+python3 - <<'PY'
+p="engine/scenegraph/SceneGraph.cpp"; s=open(p).read()
+old="""  ImpellerDisplayListBuilderSave(builder);
+  ImpellerDisplayListBuilderTranslate(builder, x, y + h);
+  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);
+  ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
+                                            kImpellerTextureSamplingLinear,
+                                            nullptr);
+  ImpellerDisplayListBuilderRestore(builder);"""
+new="""  ImpellerDisplayListBuilderSave(builder);
+  ImpellerDisplayListBuilderTranslate(builder, x, y);  // MUTANT D: no Y-flip -> mirrored
+  ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
+                                            kImpellerTextureSamplingLinear,
+                                            nullptr);
+  ImpellerDisplayListBuilderRestore(builder);"""
+assert old in s, "D anchor not found"
+open(p,"w").write(s.replace(old,new,1))
+PY
+run_pos_mutant "D per-icon composite Y-flip dropped (up-arrows composite as down-arrows)"
+
 echo
 if [ "$PASS" -eq "$TOTAL" ]; then
   echo "MUTATION_VERIFY_SUPERSAMPLE_PASS ($PASS/$TOTAL)"

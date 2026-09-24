@@ -112,3 +112,119 @@ if fails:
 print(f"SUPERSAMPLE_POSITION_GATE_PASS (top margins "
       f"N1={res[1]['top']} N2={res[2]['top']} N4={res[4]['top']} N8={res[8]['top']}, upright)")
 PY
+
+# ── PER-ICON ARM ────────────────────────────────────────────────────────────
+# WHY A SEPARATE FIXTURE AND ARM
+#   The root fixture above proves the WHOLE-TREE composite (paintTreeSupersampled,
+#   N>=2) is upright. It CANNOT see the per-icon composite
+#   (paintSvgRootSupersampled): at N>=2 the root path pre-empts the per-icon hook
+#   entirely, so a per-icon composite bug (a missing DrawTextureRect, or a missing
+#   Y-flip) is invisible to it. The per-icon hook runs at N==1, and on backends
+#   where the root offscreen exceeds the GPU bound and falls through with
+#   supersample_ still set (the Mac at N=8). This arm drives FIVE asymmetric
+#   filled up-arrows through their own <Svg> roots and asserts, at EVERY N:
+#     * all five present, each with ink within 10% of the N=0 (in-place) baseline
+#       — a missing per-icon composite paints NOTHING and reds this immediately;
+#     * each arrow points UP (base-heavy: more ink in its bottom half than its
+#       top half) — a Y-flipped per-icon composite turns them into down-arrows
+#       and reds this.
+#
+# MUTANT this arm must catch (per the request): skip the per-icon composite — the
+#   hook returns true without drawing — and every arrow vanishes at N=1/N=8, so
+#   the ink-presence assertion fails. tools/mutation-verify-supersample.sh drives
+#   it.
+echo "== per-icon arm: 5 up-arrows, ink within 10% of N=0 and each points up =="
+ICON_BUNDLE="${RNI_ICON_BUNDLE:-$ROOT/fixtures/eng-supersample-icons/prebuilt/eng-supersample-icons.bundle}"
+case "$ICON_BUNDLE" in /*) ;; *) ICON_BUNDLE="$ROOT/$ICON_BUNDLE" ;; esac
+[ -s "$ICON_BUNDLE" ] || fail "no per-icon bundle at $ICON_BUNDLE (run tools/build-supersample-icons-bundle.sh)"
+
+render_icons() {  # $1 = N, $2 = out.ppm
+  "$ENGINE" --bundle "$ICON_BUNDLE" --app-name EngSupersampleIcons \
+    --headless --probe-banner off --supersample-rnsvg "$1" \
+    --screenshot "$2" > "$WORK/icons-$1.log" 2>&1 \
+    || { tail -20 "$WORK/icons-$1.log" >&2; fail "per-icon engine run (N=$1) failed"; }
+  [ -s "$2" ] || fail "no per-icon screenshot for N=$1"
+  grep -q "supersample_rnsvg=$1" "$WORK/icons-$1.log" \
+    || fail "engine did not report supersample_rnsvg=$1 on the per-icon run"
+}
+# N=0 is the in-place baseline; N=1 is the per-icon offscreen path; N=2/4/8 test
+# the fallthrough backends too. All measured against N=0.
+for N in 0 1 2 4 8; do render_icons "$N" "$WORK/ic$N.ppm"; done
+
+python3 - "$WORK/ic0.ppm" "$WORK/ic1.ppm" "$WORK/ic2.ppm" "$WORK/ic4.ppm" "$WORK/ic8.ppm" <<'PY'
+import sys
+def read(p):
+    d=open(p,'rb').read(); parts=[]; i=0
+    while len(parts)<4:
+        while d[i:i+1].isspace(): i+=1
+        if d[i:i+1]==b'#':
+            while d[i:i+1]!=b'\n': i+=1
+            continue
+        s=i
+        while not d[i:i+1].isspace(): i+=1
+        parts.append(d[s:i])
+    w,h=int(parts[1]),int(parts[2])
+    return w,h,d[i+1:]
+
+# The five 48x48 icon wrappers in fixtures/eng-supersample-icons/index.js.
+TOPS=[8,64,120,176,232]; BOX=48
+NARROWS=len(TOPS)
+
+def measure(path):
+    w,h,px=read(path)
+    out=[]
+    for t in TOPS:
+        y0,y1=t,min(t+BOX,h); mid=(y0+y1)//2
+        ink=top=bot=0
+        for y in range(y0,y1):
+            row=y*w
+            for x in range(w):
+                o=(row+x)*3
+                if px[o]!=255 or px[o+1]!=255 or px[o+2]!=255:
+                    ink+=1
+                    if y<mid: top+=1
+                    else: bot+=1
+        out.append(dict(ink=ink,top=top,bot=bot))
+    return out
+
+Ns=(0,1,2,4,8)
+data={N:measure(p) for N,p in zip(Ns,sys.argv[1:6])}
+base=data[0]
+
+fails=[]
+# Baseline sanity: the in-place render must have drawn all five arrows, up.
+for i,a in enumerate(base):
+    if a['ink']<200:
+        fails.append(f"N=0 baseline arrow {i} painted almost nothing (ink={a['ink']}); "
+                     "the fixture itself did not render — nothing else can be believed.")
+
+for N in Ns:
+    for i,a in enumerate(data[N]):
+        b=base[i]
+        # 1. PRESENCE: ink within 10% of the N=0 baseline. A missing per-icon
+        #    composite paints 0 here (the bug: hook returns true, draws nothing).
+        if b['ink']>0 and abs(a['ink']-b['ink']) > 0.10*b['ink']:
+            fails.append(f"N={N} arrow {i} ink={a['ink']} vs N=0 {b['ink']} "
+                         f"(>10% off) — the per-icon composite is missing or "
+                         "wrong-sized (icon vanished or clipped).")
+        elif a['ink']<200:
+            fails.append(f"N={N} arrow {i} painted almost nothing (ink={a['ink']}) "
+                         "— the per-icon composite drew nothing (missing DrawTextureRect).")
+        # 2. ORIENTATION: an up-arrow is base-heavy (bottom half has more ink than
+        #    the top half). A Y-flipped composite inverts this into a down-arrow.
+        if a['ink']>=200 and not (a['bot'] > a['top']*1.3):
+            fails.append(f"N={N} arrow {i} is not pointing UP "
+                         f"(top_half={a['top']} bottom_half={a['bot']}) — the "
+                         "per-icon composite is VERTICALLY MIRRORED (Y-flip missing).")
+
+for N in Ns:
+    inks=",".join(str(a['ink']) for a in data[N])
+    print(f"   N={N}  arrow_ink=[{inks}]  "
+          f"orient=[{','.join('UP' if a['bot']>a['top']*1.3 else 'X' for a in data[N])}]")
+
+if fails:
+    for f in fails: print("SUPERSAMPLE_POSITION_GATE_FAIL: "+f, file=sys.stderr)
+    sys.exit(1)
+print(f"SUPERSAMPLE_POSITION_GATE_PASS (per-icon: {NARROWS} arrows present within "
+      "10% of N=0 and all pointing up at N=0,1,2,4,8)")
+PY

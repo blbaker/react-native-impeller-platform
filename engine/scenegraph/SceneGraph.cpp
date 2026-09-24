@@ -1842,10 +1842,39 @@ bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
   if (texture == nullptr) return false;
 
   // ---- Composite the (near-native) offscreen into the main builder. ----
+  // ⛔ THIS DRAW IS LOAD-BEARING. Without it the hook builds and caches the
+  // texture, returns true, and paintNode (the caller) SKIPS the in-place walk —
+  // so the icon paints NOTHING. That is the "icons vanish at N=1/N=8" bug: N=1
+  // is the only path that reaches this hook (root supersample is gated N>=2),
+  // and N=8 reaches it when the root offscreen exceeds the GPU bound and falls
+  // through with supersample_ still set. The icon's background View still paints
+  // (separate node), leaving a bare rounded tile with no glyph.
+  //
   // ⛔ LINEAR sampling IS the anti-aliasing. Nearest-neighbour would pick one
-  // sub-pixel and reproduce the binary edge — the N=1 mutant's result at any N.
-  // Because the halving chain left the texture at <=2x native, this final draw
-  // is at most a 2x reduction, so its single linear tap is an exact box average.
+  // sub-pixel and reproduce the binary edge — the N=1 round-trip's result. The
+  // halving chain left the texture at <=2x native, so this final draw is at most
+  // a 2x reduction and its single linear tap is an exact box average.
+  //
+  // ⛔ Y-FLIP THE DRAW — the wrapped GL FBO is bottom-left origin while
+  // DrawTextureRect samples top-left, so an unflipped composite is vertically
+  // mirrored. Same reason and mechanism as halveTexture and the root composite:
+  // a builder transform (translate to the box's bottom, scale y by -1), because
+  // a negative-height srcRect is clamped by Impeller and fills the surface. The
+  // icon box is at (x,y) size (w,h), so the flip pivots on THIS box, not (0,0).
+  ImpellerRect srcRect = {0, 0, (float)texW, (float)texH};
+  ImpellerRect dstRect = {0, 0, w, h};
+  ImpellerDisplayListBuilderSave(builder);
+  ImpellerDisplayListBuilderTranslate(builder, x, y + h);
+  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);
+  ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
+                                            kImpellerTextureSamplingLinear,
+                                            nullptr);
+  ImpellerDisplayListBuilderRestore(builder);
+  // ⛔ DO NOT RELEASE `texture` HERE. The host draws `builder`'s display list
+  // AFTER paint() returns, and it references this texture. Unlike the root path
+  // (which double-buffers via treeTexture_), the per-icon texture is owned by
+  // svgCache_ — it stays alive until LRU eviction past kSvgCacheMax or the
+  // destructor, which is well after the deferred host draw consumes the list.
   return true;
 }
 
