@@ -113,6 +113,8 @@ void Usage() {
           "                     wheel-away/scroll-up. Synthetic -- it does NOT\n"
           "                     prove glfwSetScrollCallback is registered.)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
+          "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
+          "                     default 4 on darwin, 0 (off) elsewhere\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
           "                   [--screenshot-first <file.ppm>]\n"
@@ -312,7 +314,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 double scrollDx, double scrollDy,
                 int hoverAfterFrames,
                 const std::vector<std::pair<double, double>>& hoverPoints,
-                bool hoverLeaveAtEnd) {
+                bool hoverLeaveAtEnd, int supersampleRnsvg) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
@@ -347,6 +349,11 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   fflush(stdout);
 
   rni::SceneGraph sceneGraph(surface.typography());
+  // ENG item 2. Wire the supersample render context (the surface's own
+  // ImpellerContext — same GL sharegroup the offscreen FBO needs) and N. On
+  // Windows/Android the offscreen path is compiled out, so these are inert.
+  sceneGraph.setRenderContext(surface.context());
+  sceneGraph.setSupersample(supersampleRnsvg);
   // The cursor conversion divides by this. Set from the SAME derived value the
   // layout uses, and re-set on every resize below, so a click can never be
   // converted with a scale the painter is no longer using.
@@ -369,6 +376,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   host.waitForJsIdle(10000);
 
   printf("rn-impeller: scene_nodes=%zu\n", sceneGraph.nodeCount());
+  printf("rn-impeller: supersample_rnsvg=%d\n", sceneGraph.supersample());
   fflush(stdout);
 
   // Incremented inside paintFrame at the present, so it counts FRAMES THAT
@@ -1027,6 +1035,16 @@ int main(int argc, char** argv) {
   // explicit one, and the derived Retina scale could never be applied without
   // silently ignoring a real `--scale 1`.
   bool pointScaleGiven = false;
+  // ENG item 2 — SUPERSAMPLE-RNSVG. N>0 renders each <Svg> root subtree into an
+  // N x offscreen and composites it back with a linear downsample, which
+  // synthesises the edge-coverage AA Impeller's tessellated stroke path does not
+  // emit. Default 4 on darwin (where the tessellated-AA gap was measured), 0
+  // (disabled, exact in-place path) elsewhere. --supersample-rnsvg overrides.
+#if defined(__APPLE__)
+  int supersampleRnsvg = 4;
+#else
+  int supersampleRnsvg = 0;
+#endif
   // Arbitrary pixel probes, so a gate can assert the geometry ITS fixture
   // declares instead of whatever probes happen to be hardcoded here. Each
   // prints `probe=<x>,<y> rgb=r,g,b`.
@@ -1258,6 +1276,18 @@ int main(int argc, char** argv) {
       }
       pointScaleGiven = true;
     }
+    else if (a == "--supersample-rnsvg") {
+      // N>=0. 0 disables (exact in-place path). 1 is the mutant control (an
+      // offscreen round-trip with no supersample). >=2 supersamples. A negative
+      // value is rejected rather than silently clamped: it is a caller error,
+      // not a mode.
+      supersampleRnsvg = atoi(next("--supersample-rnsvg").c_str());
+      if (supersampleRnsvg < 0) {
+        fprintf(stderr, "rn-impeller: --supersample-rnsvg must be >= 0 (got %s)\n",
+                argv[i]);
+        return 2;
+      }
+    }
     else if (a == "--probe") {
       std::string v = next("--probe");
       auto comma = v.find(',');
@@ -1354,7 +1384,8 @@ int main(int argc, char** argv) {
                        resizeToW, resizeToH, stallAfterFrames, stallMs,
                        clickAfterFrames, clickX, clickY,
                        scrollAfterFrames, scrollX, scrollY, scrollDx, scrollDy,
-                       hoverAfterFrames, hoverPoints, hoverLeaveAtEnd);
+                       hoverAfterFrames, hoverPoints, hoverLeaveAtEnd,
+                       supersampleRnsvg);
 #else
     fprintf(stderr,
             "rn-impeller: built without windowed support "
@@ -1383,6 +1414,9 @@ int main(int argc, char** argv) {
   size_t nodeCount = 0;
   {
     rni::SceneGraph sceneGraph(surface.typography());
+    // ENG item 2 — same wiring as the primary headless path above.
+    sceneGraph.setRenderContext(surface.context());
+    sceneGraph.setSupersample(supersampleRnsvg);
     rni::ReactHost host;
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
@@ -1445,6 +1479,7 @@ int main(int argc, char** argv) {
     // do not exist yet at the point the old count was taken.
     nodeCount = sceneGraph.nodeCount();
     printf("rn-impeller: scene_nodes=%zu\n", nodeCount);
+    printf("rn-impeller: supersample_rnsvg=%d\n", sceneGraph.supersample());
     // Side effects the modules recorded, so a gate can assert that JS actually
     // REACHED native rather than merely that the app rendered something.
     printf("rn-impeller: alerts_shown=%zu\n", host.alerts()->count());

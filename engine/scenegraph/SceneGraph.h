@@ -269,6 +269,29 @@ struct SceneNode {
 class SceneGraph {
  public:
   explicit SceneGraph(ImpellerTypographyContext typography);
+  ~SceneGraph();
+
+  // ENG item 2 — SUPERSAMPLE-RNSVG.
+  //
+  // Impeller gives stroked tessellated paths NO edge-coverage AA (Mac Metal: 2
+  // luminance levels, 0% partial). The client-side fix is supersample-then-
+  // downsample: render an <Svg> root subtree at N x into an offscreen FBO, then
+  // composite it back with a LINEAR filter. The box filter of the downsample
+  // synthesises the partial-coverage edge pixels Impeller refuses to emit.
+  //
+  // ⛔ setRenderContext MUST be called with the SAME ImpellerContext that owns
+  // the surface paint() draws into. The offscreen FBO is created in that
+  // context's GL sharegroup — the documented requirement for
+  // ImpellerTextureCreateWithOpenGLTextureHandleNew. Without it, supersample_
+  // is inert (the in-place path runs) rather than crashing: a null context is
+  // exactly the "not wired" state, distinct from N=0 "disabled".
+  void setRenderContext(ImpellerContext context) { renderContext_ = context; }
+
+  // N. 0 disables (the exact current in-place path, zero behavioural change).
+  // >=2 supersamples. 1 is the mutant control: an offscreen round-trip at
+  // native resolution, which must NOT anti-alias — the gate proves that.
+  void setSupersample(int n) { supersample_ = n; }
+  int supersample() const { return supersample_; }
 
   // Applies one MountingTransaction's mutations, in order.
   struct ScrollResult {
@@ -424,6 +447,33 @@ class SceneGraph {
                  const SceneNode& node,
                  float originX,
                  float originY);
+  // ENG item 2. Renders the <Svg> root subtree rooted at `node` into an
+  // N x offscreen FBO and composites it back into `builder` with a LINEAR
+  // downsample, at painted position (x,y,w,h). Returns true if it handled the
+  // subtree (the caller then SKIPS the in-place walk); false if it could not
+  // (no GL context, degenerate size, N<2, or a GL failure) so the caller falls
+  // back to painting in place. The fallback is why a supersample failure
+  // degrades to a correct-but-aliased icon rather than a blank one.
+  bool paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
+                                const SceneNode& node, float x, float y,
+                                float w, float h);
+  // Renders the <Svg> subtree rooted at `node` (painted at x,y,w,h) into a
+  // fresh pxW x pxH offscreen FBO and returns the adopted ImpellerTexture
+  // (ownership transferred from the GL handle — caller Releases it), or null on
+  // any GL/Impeller failure. Depth+stencil attached so concave fills work.
+  ImpellerTexture renderSvgSubtreeToTexture(const SceneNode& node, float x,
+                                            float y, float w, float h, int pxW,
+                                            int pxH);
+  // Downsamples `src` (size srcW x srcH) into a fresh dstW x dstH texture via a
+  // single LINEAR DrawTextureRect — an EXACT box average only when it is a 2x
+  // reduction, which is why paintSvgRootSupersampled halves iteratively rather
+  // than reducing N x in one step. Returns the adopted texture (caller
+  // Releases) or null. Does NOT release `src`.
+  ImpellerTexture halveTexture(ImpellerTexture src, int srcW, int srcH,
+                               int dstW, int dstH);
+  // Content key for the per-icon texture cache: every input that changes the
+  // rasterised pixels. Two icons with the same key reuse one ImpellerTexture.
+  std::string svgSubtreeCacheKey(const SceneNode& node, int pxW, int pxH) const;
   // Split out of paintNode because per-edge borders are a whole geometry
   // problem: a stroked rect cannot express four colours and straddles the path,
   // so each edge is drawn as its own mitred quad.
@@ -451,6 +501,27 @@ class SceneGraph {
   ImpellerColorSource makeGradientSource(const SceneNode* def, float x, float y,
                                          float w, float h, float alpha) const;
   int painted_{0};  // reset per paint(); incremented in paintNode()
+
+  // ENG item 2 — supersample state.
+  // renderContext_ is the ImpellerContext whose GL sharegroup the offscreen FBO
+  // is created in. Null until setRenderContext() wires it, which keeps
+  // supersample inert on hosts (Windows, Android) that do not call it.
+  ImpellerContext renderContext_{nullptr};
+  int supersample_{0};  // 0 disabled, 1 mutant control, >=2 real supersample
+  // Per-icon texture cache. Keyed by content (paths+colours+px size+N) so the
+  // same icon rendered on many rows rasterises ONCE. Holds the ImpellerTexture
+  // (ownership already transferred to Impeller from the adopted GL handle), NOT
+  // a raw GL handle — re-adopting a handle twice double-frees it. Bounded LRU:
+  // svgCacheOrder_ is MRU-back; the front is evicted past kSvgCacheMax so a
+  // scrolling icon list cannot leak GPU textures.
+  struct SvgCacheEntry {
+    ImpellerTexture texture{nullptr};
+    int texW{0};
+    int texH{0};
+  };
+  static constexpr size_t kSvgCacheMax = 256;
+  std::unordered_map<std::string, SvgCacheEntry> svgCache_;
+  std::vector<std::string> svgCacheOrder_;  // LRU: front = oldest
   // ENG-06. Count of PROPS applied by updateViewProps(), not calls made.
   unsigned long directPropUpdates_{0};
   std::unordered_map<facebook::react::Tag, SceneNode> nodes_;
