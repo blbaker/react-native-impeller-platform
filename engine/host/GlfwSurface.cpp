@@ -32,6 +32,10 @@ void GlfwCocoaSetLayerScale(GLFWwindow* window);
 // the window's backingScaleFactor; the ENG-08 gate asserts they are equal.
 double GlfwCocoaLayerContentsScale(GLFWwindow* window);
 double GlfwCocoaBackingScale(GLFWwindow* window);
+// Defined in GlfwCocoaView.mm — sets the app cursor to NSCursor open/closed
+// hand (GLFW 3.4 has no grab shape). grabbing=false is the open hand (kind 3),
+// grabbing=true the closed hand (kind 4).
+void GlfwCocoaSetGrabCursor(GLFWwindow* window, bool grabbing);
 #endif
 
 namespace {
@@ -703,6 +707,17 @@ void GlfwSurface::dispatchHoverPoint(double screenX, double screenY) {
 void GlfwSurface::applyCursorKind(int kind) {
   if (kind == appliedCursorKind_) return;
   if (!window_) return;
+#if defined(__APPLE__)
+  // ENG item 6. GLFW has no grab shape, so kinds 3 (grab / open hand) and 4
+  // (grabbing / closed hand) go straight to NSCursor on darwin. On other
+  // platforms these fall through to arrow below (no grab standard cursor), the
+  // same graceful degrade a null standard cursor gets.
+  if (kind == 3 || kind == 4) {
+    GlfwCocoaSetGrabCursor(window_, /*grabbing=*/kind == 4);
+    appliedCursorKind_ = kind;
+    return;
+  }
+#endif
   GLFWcursor* c = arrowCursor_;
   if (kind == 1) c = handCursor_;
   else if (kind == 2) c = ibeamCursor_;
