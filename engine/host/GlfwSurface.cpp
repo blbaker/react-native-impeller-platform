@@ -541,6 +541,19 @@ bool GlfwSurface::consumeDirty() {
   if (!dirty_.exchange(false, std::memory_order_acq_rel)) return false;
   if (!window_) return false;
 
+#if defined(__APPLE__)
+  // ⛔ RE-ASSERT THE LAYER SCALE BEFORE READING THE FRAMEBUFFER, NOT AFTER.
+  // ENG item 2 (Retina scale drops to 1.00 after the first resize). On a live
+  // resize AppKit resets the ANGLE CAMetalLayer's contentsScale back to 1.0
+  // BEFORE this callback runs, so glfwGetFramebufferSize then reports the 1x
+  // point size (px==points, scale=1.00) on a 2x display -- the "rough icons /
+  // text after resize" read. Setting contentsScale back to backingScaleFactor
+  // first restores the 2x drawable, so the framebuffer query below reports the
+  // true 2x pixel size and width_/height_ carry the physical backing again.
+  // The old code set the scale AFTER the query, one frame too late.
+  GlfwCocoaSetLayerScale(window_);
+#endif
+
   int fbWidth = 0, fbHeight = 0;
   glfwGetFramebufferSize(window_, &fbWidth, &fbHeight);
   int winWidth = 0, winHeight = 0;
@@ -560,17 +573,11 @@ bool GlfwSurface::consumeDirty() {
   pointWidth_ = winWidth;
   pointHeight_ = winHeight;
 
-#if defined(__APPLE__)
   // ANGLE's window surface tracks the CALayer, which AppKit has already
   // resized by the time this callback runs, so there is nothing to rebuild on
-  // the EGL side. The viewport is ours and must follow.
-  //
-  // The framebuffer-size callback also fires when the backing scale changes
-  // (drag between a 1x and 2x display), so re-assert contentsScale here — this
-  // is the single change-time home for backing state; do NOT add a second
-  // observer that could disagree.
-  GlfwCocoaSetLayerScale(window_);
-#endif
+  // the EGL side. The viewport is ours and must follow. contentsScale was
+  // already re-asserted at the TOP of this function (before the framebuffer
+  // query) so the drawable is 2x again; do NOT re-assert here.
   glViewport(0, 0, width_, height_);
 
   if (surface_) {
