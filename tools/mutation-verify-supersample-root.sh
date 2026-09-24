@@ -31,16 +31,25 @@ cd "$ROOT"
 SG="engine/scenegraph/SceneGraph.cpp"
 BACKUP="$(mktemp -d)"
 cp "$SG" "$BACKUP/SceneGraph.cpp"
-trap 'cp "$BACKUP/SceneGraph.cpp" "$SG"; bash tools/engine-build.sh > /tmp/msr-restore.log 2>&1 || true; rm -rf "$BACKUP"' EXIT
+trap 'cp "$BACKUP/SceneGraph.cpp" "$SG"; eval "${RNI_BUILD_CMD:-bash tools/engine-build.sh}" > /tmp/msr-restore.log 2>&1 || true; rm -rf "$BACKUP"' EXIT
 
 PASS=0
 TOTAL=0
+
+# The command that rebuilds the engine between mutants. Default is
+# engine-build.sh (WSL/dev boxes). ⛔ THE MAC HAS NO node, so engine-build.sh
+# fails at `node -p` — the Mac passes a cmake-direct build instead, e.g.
+#   RNI_BUILD_CMD='/opt/homebrew/bin/cmake --build engine/build --target rn-impeller -j8' \
+#   RNI_BIN=engine/build/rn-impeller  bash tools/mutation-verify-supersample-root.sh
+# When RNI_BIN points at the cmake build tree, ci-supersample-root.sh renders
+# with that binary directly (no npm, no staged package).
+BUILD_CMD="${RNI_BUILD_CMD:-bash tools/engine-build.sh}"
 
 run_mutant() {
   local name="$1"
   TOTAL=$((TOTAL + 1))
   echo "--- mutant: $name ---"
-  if ! bash tools/engine-build.sh > /tmp/msr-build.log 2>&1; then
+  if ! eval "$BUILD_CMD" > /tmp/msr-build.log 2>&1; then
     echo "  BUILD FAILED -- a mutant that does not compile proves nothing"
     grep -E "error:" /tmp/msr-build.log | head -3 | sed 's/^/     /'
   elif timeout 300 bash tools/ci-supersample-root.sh > /tmp/msr-gate.log 2>&1; then
@@ -52,7 +61,7 @@ run_mutant() {
     PASS=$((PASS + 1))
   fi
   cp "$BACKUP/SceneGraph.cpp" "$SG"
-  bash tools/engine-build.sh > /tmp/msr-rebuild.log 2>&1 || true
+  eval "$BUILD_CMD" > /tmp/msr-rebuild.log 2>&1 || true
 }
 
 echo "MUTATION_VERIFY_SUPERSAMPLE_ROOT_START"

@@ -940,6 +940,14 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // offscreen degrades to a correct-but-aliased icon, never a blank one.
   if (node.isSvgRoot && supersample_ >= 1 && renderContext_ != nullptr) {
     if (paintSvgRootSupersampled(builder, node, x, y, w, h)) {
+      // ⛔ COUNT THE SUBTREE CACHE-INDEPENDENTLY. The offscreen render (which is
+      // the only thing that walks the children, and only on a cache MISS) does
+      // NOT touch painted_ — so painted_nodes must be attributed here, the same
+      // whether the texture was rendered or fetched from svgCache_. The OUTER
+      // ++painted_ above already counted this root once; add the rest of the
+      // subtree exactly as an in-place walk would have. This makes painted_
+      // depend only on the scene graph, never on cache state.
+      painted_ += countPaintedNodes(node, svgUseDepth_) - 1;
       return;
     }
   }
@@ -1714,8 +1722,6 @@ ImpellerTexture SceneGraph::halveTexture(ImpellerTexture src, int srcW,
 // the offscreen lists immediately is safe. Every FBO helper saves/restores the
 // prior FBO binding + viewport, so the surface init's own bindings survive.
 bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
-                                          const SceneNode& node, float x,
-                                          float y, float w, float h) {
   const int N = supersample_;
   if (N < 1 || w <= 0.0f || h <= 0.0f) return false;
 
