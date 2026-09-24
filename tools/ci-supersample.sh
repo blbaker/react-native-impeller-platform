@@ -82,36 +82,44 @@ render() {  # $1 = N, $2 = out.ppm
     || fail "engine did not report supersample_rnsvg=$1 (flag not honoured)"
 }
 render 0 "$WORK/n0.ppm"
+render 1 "$WORK/n1.ppm"
 render 4 "$WORK/n4.ppm"
 echo "   $(grep -h 'scene_nodes\|supersample_rnsvg' "$WORK/run-0.log" | tr '\n' ' ')"
 
-echo "== 3b. painted_nodes must be CACHE-INDEPENDENT (same at N=0 and N=4) =="
-# ⛔ SAME BUNDLE, TWO N VALUES: the ONLY variable is the supersample flag, so the
-#   painted-node count MUST be identical, AND must equal the node_frame line
-#   count in EACH arm. The fixture has TWO IDENTICAL icons + one unique:
+echo "== 3b. painted_nodes must be CACHE-INDEPENDENT (per-icon path, N=1) =="
+# ⛔ WHICH ARM EXERCISES THE PER-ICON CACHE. The ROOT supersample (ENG-2b) fires
+#   at N>=2 and renders the WHOLE tree in one offscreen, pre-empting the per-icon
+#   paintSvgRootSupersampled hook entirely — so N=4 never touches the per-icon
+#   svgCache_ this fix concerns. The per-icon path runs at N==1 (root path is
+#   gated N>=2). So the cache-independence assertion is N=0 vs N=1, both of which
+#   walk per node; only N=1 takes the per-icon offscreen+cache hook.
+#   The fixture has TWO IDENTICAL icons + one unique:
 #     * icon #2 is a svgCache_ HIT (same content+pixel-size key as #1), so its
-#       subtree is NEVER walked by the offscreen render;
+#       subtree is NEVER walked by the per-icon offscreen render;
 #     * icon #3 is a MISS, so its subtree IS walked (counter-suppressed).
 #   painted_ is attributed by countPaintedNodes at the supersample hook, the
 #   same on hit and miss, so it can depend only on the scene graph.
-# TWO MUTANTS this gate must catch:
+# TWO MUTANTS this arm must catch:
 #   A) drop `painted_ = savedPainted;` in renderSvgSubtreeToTexture — the
-#      offscreen inner walk then leaks ++painted_ on every MISS, so N=4 > N=0.
+#      per-icon offscreen inner walk then leaks ++painted_ on every MISS, so
+#      N=1 > N=0 (and > node_frame lines).
 #   B) drop `painted_ += countPaintedNodes(...) - 1;` at the supersample hook —
-#      children are never counted (offscreen walk is suppressed), so N=4 < N=0
-#      and N=4 < node_frame lines. This is the task-768 regression: the old
+#      children are never counted (offscreen walk is suppressed), so N=1 < N=0
+#      and N=1 < node_frame lines. This is the task-768 regression: the old
 #      `--painted_;` under-counted on a cache HIT because the walk it cancelled
 #      never ran (N=0=534 vs N=4=531).
 pn() { grep -oE 'painted_nodes=[0-9]+' "$1" | head -1 | cut -d= -f2; }
 nf() { grep -cE '^rn-impeller: node_frame=' "$1"; }
-PN0="$(pn "$WORK/run-0.log")"; PN4="$(pn "$WORK/run-4.log")"
-NF0="$(nf "$WORK/run-0.log")"; NF4="$(nf "$WORK/run-4.log")"
+PN0="$(pn "$WORK/run-0.log")"; PN1="$(pn "$WORK/run-1.log")"; PN4="$(pn "$WORK/run-4.log")"
+NF0="$(nf "$WORK/run-0.log")"; NF1="$(nf "$WORK/run-1.log")"; NF4="$(nf "$WORK/run-4.log")"
 echo "   N=0  painted_nodes=$PN0  node_frame_lines=$NF0"
-echo "   N=4  painted_nodes=$PN4  node_frame_lines=$NF4"
-[ -n "$PN0" ] && [ -n "$PN4" ] || fail "painted_nodes not reported in a run log"
-[ "$PN0" = "$PN4" ] || fail "painted_nodes differs by supersample flag: N=0=$PN0 N=4=$PN4 (cache-dependent count regression)"
+echo "   N=1  painted_nodes=$PN1  node_frame_lines=$NF1  (per-icon cache path)"
+echo "   N=4  painted_nodes=$PN4  node_frame_lines=$NF4  (root supersample path)"
+[ -n "$PN0" ] && [ -n "$PN1" ] && [ -n "$PN4" ] || fail "painted_nodes not reported in a run log"
+[ "$PN0" = "$PN1" ] || fail "painted_nodes differs by per-icon supersample: N=0=$PN0 N=1=$PN1 (cache-dependent count regression)"
 [ "$PN0" = "$NF0" ] || fail "N=0 painted_nodes=$PN0 != node_frame lines=$NF0"
-[ "$PN4" = "$NF4" ] || fail "N=4 painted_nodes=$PN4 != node_frame lines=$NF4 (supersample under/over-count)"
+[ "$PN1" = "$NF1" ] || fail "N=1 painted_nodes=$PN1 != node_frame lines=$NF1 (per-icon supersample under/over-count)"
+[ "$PN4" = "$NF4" ] || fail "N=4 painted_nodes=$PN4 != node_frame lines=$NF4 (root supersample under/over-count)"
 
 echo "== 4. count partial-luminance edge pixels in each =="
 python3 - "$WORK/n0.ppm" "$WORK/n4.ppm" <<'PY'
