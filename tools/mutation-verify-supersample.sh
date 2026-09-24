@@ -15,8 +15,15 @@
 #       arm MUST fail -> gate fails. Proves the composite is real.
 #
 # Restore by cp and REBUILD between mutants (a mutant scored against the prior
-# mutant's binary proves nothing). engine-build.sh restages the package the gate
-# reinstalls, so each mutant reaches the gate.
+# mutant's binary proves nothing). The default build is engine-build.sh, which
+# restages the linux package; on a box that has node the gate renders the
+# committed prebuilt bundle with that freshly-staged binary.
+#
+# ⛔ NO-NPM MODE (the Mac): engine-build.sh calls `node -p` and dies on the Mac's
+#   node-less ssh. Pass a cmake-direct build + RNI_BIN so the gate renders with
+#   the cmake build tree binary and the committed bundle — no npm, no node:
+#     RNI_BUILD_CMD='/opt/homebrew/bin/cmake --build engine/build --target rn-impeller -j8' \
+#     RNI_BIN=engine/build/rn-impeller  bash tools/mutation-verify-supersample.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,7 +32,12 @@ cd "$ROOT"
 SG="engine/scenegraph/SceneGraph.cpp"
 BACKUP="$(mktemp -d)"
 cp "$SG" "$BACKUP/SceneGraph.cpp"
-trap 'cp "$BACKUP/SceneGraph.cpp" "$SG"; bash tools/engine-build.sh > /tmp/mss-restore.log 2>&1 || true; rm -rf "$BACKUP"' EXIT
+
+# The command that rebuilds the engine between mutants. Default is
+# engine-build.sh (WSL/dev boxes); the Mac overrides with a cmake-direct build.
+BUILD_CMD="${RNI_BUILD_CMD:-bash tools/engine-build.sh}"
+
+trap 'cp "$BACKUP/SceneGraph.cpp" "$SG"; eval "$BUILD_CMD" > /tmp/mss-restore.log 2>&1 || true; rm -rf "$BACKUP"' EXIT
 
 PASS=0
 TOTAL=0
@@ -34,7 +46,7 @@ run_mutant() {
   local name="$1"
   TOTAL=$((TOTAL + 1))
   echo "--- mutant: $name ---"
-  if ! bash tools/engine-build.sh > /tmp/mss-build.log 2>&1; then
+  if ! eval "$BUILD_CMD" > /tmp/mss-build.log 2>&1; then
     echo "  BUILD FAILED -- a mutant that does not compile proves nothing"
     grep -E "error:" /tmp/mss-build.log | head -3 | sed 's/^/     /'
   elif timeout 600 bash tools/ci-supersample.sh > /tmp/mss-gate.log 2>&1; then
@@ -46,41 +58,73 @@ run_mutant() {
     PASS=$((PASS + 1))
   fi
   cp "$BACKUP/SceneGraph.cpp" "$SG"
-  bash tools/engine-build.sh > /tmp/mss-rebuild.log 2>&1 || true
+  eval "$BUILD_CMD" > /tmp/mss-rebuild.log 2>&1 || true
 }
 
 echo "MUTATION_VERIFY_SUPERSAMPLE_START"
 
-# M1: render the offscreen at NATIVE resolution regardless of N. The offscreen
-# FBO still runs (the composite path is exercised), but with no upscale there is
-# nothing for the downsample to average, so the edge stays binary. This is the
-# design's N=1 control expressed as a code mutation.
+# M1: force the ROOT offscreen to NATIVE resolution regardless of N. Step 4
+# measures the AA jump on the N=4 arm, which goes through paintTreeSupersampled
+# (the per-icon hook is suppressed at N>=2), so the AA mutant MUST target the
+# root path's pixel size, not the per-icon path's. With no upscale the downsample
+# has nothing to average and the edge stays binary -> the partial/luma jump
+# vanishes -> gate fails. (Per-icon AA is separately covered at N=1 by the count
+# arm and by ci-supersample-root.sh's own mutation script for View borders.)
 python3 - <<'PY'
 p="engine/scenegraph/SceneGraph.cpp"; s=open(p).read()
-old="""  const int pxW = (int)std::ceil(w * (float)N);
-  const int pxH = (int)std::ceil(h * (float)N);"""
-new="""  const int pxW = nativeW;  // MUTANT M1: offscreen at native res (no supersample)
+old="""  const int pxW = nativeW * N;
+  const int pxH = nativeH * N;"""
+new="""  const int pxW = nativeW;  // MUTANT M1: root offscreen at native res (no supersample)
   const int pxH = nativeH;  // MUTANT M1"""
 assert old in s, "M1 anchor not found"
 open(p,"w").write(s.replace(old,new,1))
 PY
-run_mutant "M1 offscreen forced to native resolution (no supersample, no AA)"
+run_mutant "M1 root offscreen forced to native resolution (no supersample, no AA)"
 
-# M2: skip the final composite. The offscreen is rendered and cached, but never
-# drawn into the main builder -- the function still returns true, so paintNode
-# skips the in-place walk and the icon vanishes entirely.
+# M2: skip the ROOT composite DrawTextureRect. The whole-tree offscreen renders
+# but is never drawn back into the main builder, so the frame is blank -> the N=4
+# ink floor fails. Proves the composite is real and the AA is not measured off a
+# stale in-place frame.
 python3 - <<'PY'
 p="engine/scenegraph/SceneGraph.cpp"; s=open(p).read()
 old="""  ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
                                             kImpellerTextureSamplingLinear,
-                                            nullptr);
-  return true;"""
-new="""  (void)srcRect; (void)dstRect;  // MUTANT M2: composite skipped, icon vanishes
-  return true;"""
+                                            nullptr);"""
+new="""  (void)srcRect; (void)dstRect; (void)texture;  // MUTANT M2: root composite skipped, tree blank"""
 assert old in s, "M2 anchor not found"
 open(p,"w").write(s.replace(old,new,1))
 PY
-run_mutant "M2 final composite DrawTextureRect skipped (icon vanishes)"
+run_mutant "M2 root composite DrawTextureRect skipped (tree blank)"
+
+# A: drop the painted_ = savedPainted restore in the per-icon offscreen walk.
+# On a cache MISS the inner paintNode walk then LEAKS its ++painted_ increments
+# into the live counter, so painted_nodes at N=1 (the per-icon path) exceeds N=0
+# and the node_frame line count. Proves the 3b cache-independence arm is real and
+# not fooled by the root-supersample path (which suppresses this hook at N>=2).
+python3 - <<'PY'
+p="engine/scenegraph/SceneGraph.cpp"; s=open(p).read()
+old="""    supersample_ = savedN;
+    painted_ = savedPainted;"""
+new="""    supersample_ = savedN;
+    (void)savedPainted;  // MUTANT A: offscreen walk leaks ++painted_ on a MISS"""
+assert old in s, "A anchor not found"
+open(p,"w").write(s.replace(old,new,1))
+PY
+run_mutant "A per-icon offscreen walk leaks painted_ on a cache MISS (N=1 > N=0)"
+
+# B: drop the cache-independent subtree attribution at the supersample hook. The
+# offscreen inner walk is counter-suppressed and (on a HIT) never runs at all, so
+# without this line the icon's subtree is NEVER counted -> painted_nodes at N=1
+# under-counts vs N=0 and vs node_frame lines. This is the exact task-768
+# regression the old `--painted_;` shipped (N=0=534 vs N=4=531 on a repeated icon).
+python3 - <<'PY'
+p="engine/scenegraph/SceneGraph.cpp"; s=open(p).read()
+old="      painted_ += countPaintedNodes(node, svgUseDepth_) - 1;"
+new="      (void)0;  // MUTANT B: subtree never attributed -> under-count on hit/miss"
+assert old in s, "B anchor not found"
+open(p,"w").write(s.replace(old,new,1))
+PY
+run_mutant "B supersample hook drops subtree attribution (N=1 < N=0, task-768)"
 
 echo
 if [ "$PASS" -eq "$TOTAL" ]; then

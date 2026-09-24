@@ -19,17 +19,37 @@
 #
 # ⚠️ LINUX DEFAULT IS N=0, so the baseline needs no flag, but we pass it
 #   explicitly for both arms so the gate reads the same on darwin (default 4).
+#
+# NO-NPM MODE (for the Mac / any box without a JS toolchain):
+#   By default this renders a COMMITTED prebuilt bundle
+#   (fixtures/eng-supersample/prebuilt/eng-supersample.bundle) with the staged
+#   engine binary — no npm, no metro, no react-native-svg install, no node.
+#   Override the binary with RNI_BIN (the Mac passes its darwin-arm64 staged or
+#   cmake-built binary) and the bundle with RNI_TEST_BUNDLE. On a box WITH node,
+#   set BUILD_BUNDLE=1 to rebuild the bundle from the fixture source first.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
-RNI_ENGINE_PKG="${RNI_ENGINE_PKG:-$ROOT/packages-engine/engine-linux-x64}"
 
 fail() { echo "SUPERSAMPLE_GATE_FAIL: $*" >&2; exit 1; }
 
-[ -d "$BASE_APP/node_modules/react-native" ] || bash tools/base-app.sh
-[ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP"
+# Engine binary: staged linux package by default; RNI_BIN overrides (the Mac
+# passes its darwin-arm64 staged binary or a hand-built one).
+ENGINE="${RNI_BIN:-$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller}"
+[ -x "$ENGINE" ] || fail "no engine binary at $ENGINE (set RNI_BIN)"
+
+# Bundle: committed prebuilt by default (no toolchain needed). RNI_TEST_BUNDLE
+# overrides. BUILD_BUNDLE=1 rebuilds from source on a box that has node.
+BUNDLE="${RNI_TEST_BUNDLE:-$ROOT/fixtures/eng-supersample/prebuilt/eng-supersample.bundle}"
+if [ "${BUILD_BUNDLE:-0}" = "1" ] && [ -z "${RNI_TEST_BUNDLE:-}" ]; then
+  echo "== BUILD_BUNDLE=1: rebuilding the prebuilt bundle from fixture source =="
+  bash "$ROOT/tools/build-supersample-bundle.sh" \
+    || fail "could not rebuild the prebuilt bundle"
+fi
+# ⛔ --bundle must be ABSOLUTE (no CWD fallback in the engine).
+case "$BUNDLE" in /*) ;; *) BUNDLE="$ROOT/$BUNDLE" ;; esac
+[ -s "$BUNDLE" ] || fail "no bundle at $BUNDLE (set RNI_TEST_BUNDLE, or BUILD_BUNDLE=1 on a box with node)"
 
 WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
@@ -39,39 +59,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "== 1. pack + install into a pristine app OUTSIDE the repo =="
-ENGINE_TGZ="$(cd "$RNI_ENGINE_PKG" && npm pack --silent --pack-destination "$WORK")"
-MAIN_TGZ="$(cd package && npm pack --silent --pack-destination "$WORK")"
-APP="$WORK/SupersampleApp"
-cp -R "$BASE_APP" "$APP"
-cd "$APP"
-node -e '
-const fs=require("fs");
-const p=JSON.parse(fs.readFileSync("package.json","utf8"));
-p.name="supersampleapp";
-fs.writeFileSync("package.json", JSON.stringify(p,null,2));
-const a=JSON.parse(fs.readFileSync("app.json","utf8"));
-a.name="EngSupersample"; a.displayName="EngSupersample";
-fs.writeFileSync("app.json", JSON.stringify(a,null,2));
-'
-npm install --no-audit --no-fund --silent \
-  "$WORK/$ENGINE_TGZ" "$WORK/$MAIN_TGZ" || fail "npm install of the tarballs failed"
-npm install --no-audit --no-fund --silent react-native-svg@15.15.5 \
-  || fail "could not install react-native-svg"
-
-cp "$ROOT/fixtures/eng-supersample/index.js" "$APP/index.js"
-npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
-  || fail "engine resolver failed"
-
-echo "== 2. bundle --platform impeller =="
-npx --no-install react-native bundle --platform impeller --dev false \
-    --entry-file index.js --bundle-output impeller/build/supersample.bundle \
-    >/dev/null 2>&1 || fail "bundle failed"
-BUNDLE="$APP/impeller/build/supersample.bundle"
-[ -s "$BUNDLE" ] || fail "no bundle produced"
-
-echo "== 3. render N=0 (in-place) and N=4 (offscreen) =="
+echo "== render N=0 (in-place) and N=4 (offscreen) =="
 render() {  # $1 = N, $2 = out.ppm
   "$ENGINE" --bundle "$BUNDLE" --app-name EngSupersample \
     --headless --probe-banner off --supersample-rnsvg "$1" \
