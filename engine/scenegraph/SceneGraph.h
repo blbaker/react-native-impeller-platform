@@ -293,6 +293,13 @@ class SceneGraph {
   void setSupersample(int n) { supersample_ = n; }
   int supersample() const { return supersample_; }
 
+  // ENG item 2b — ROOT SUPERSAMPLE. The device-pixel size of the surface paint()
+  // draws into. The whole-tree offscreen is sized N x this, so the root path is
+  // inert until a host wires it (headless/windowed both do, next to
+  // setRenderContext). Re-set on every window resize so the offscreen tracks the
+  // framebuffer; a stale size would supersample into the wrong extent.
+  void setSurfaceSize(int pxW, int pxH) { surfacePxW_ = pxW; surfacePxH_ = pxH; }
+
   // Applies one MountingTransaction's mutations, in order.
   struct ScrollResult {
     facebook::react::Tag tag{0};
@@ -457,6 +464,19 @@ class SceneGraph {
   bool paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
                                 const SceneNode& node, float x, float y,
                                 float w, float h);
+  // ENG item 2b — ROOT SUPERSAMPLE. Renders the ENTIRE tree (all roots) into a
+  // single N x offscreen the size of the surface, downsamples with the same
+  // iterative-halve box filter paintSvgRootSupersampled uses, and composites the
+  // near-native result back into `builder` in DEVICE PIXELS. This is the fallback
+  // (option b) for AA on primitives Impeller does not edge-antialias itself — a
+  // View's stroked rounded border, whose corner arc is otherwise a binary step.
+  // Returns true if it handled the frame (paint() then skips the in-place walk);
+  // false if it could not (no context, N<2, zero/oversize surface, GL failure)
+  // so paint() falls back to the exact in-place walk — a supersample failure
+  // degrades to a correct-but-aliased frame, never a blank one. pointScaleFactor
+  // is the same device scale paint() would otherwise apply at the root.
+  bool paintTreeSupersampled(ImpellerDisplayListBuilder builder,
+                             float pointScaleFactor);
   // Renders the <Svg> subtree rooted at `node` (painted at x,y,w,h) into a
   // fresh pxW x pxH offscreen FBO and returns the adopted ImpellerTexture
   // (ownership transferred from the GL handle — caller Releases it), or null on
@@ -508,6 +528,20 @@ class SceneGraph {
   // supersample inert on hosts (Windows, Android) that do not call it.
   ImpellerContext renderContext_{nullptr};
   int supersample_{0};  // 0 disabled, 1 mutant control, >=2 real supersample
+  // ENG item 2b — ROOT SUPERSAMPLE surface size, device pixels. 0 until a host
+  // calls setSurfaceSize(); paintTreeSupersampled refuses to run at 0 rather
+  // than guess, so the root path is inert on any host that does not wire it.
+  int surfacePxW_{0};
+  int surfacePxH_{0};
+  // ENG item 2b — the whole-tree offscreen texture from the previous frame.
+  // paintTreeSupersampled composites this into `builder`, but the display list
+  // the host draws is not consumed until after paint() returns, so the texture
+  // must OUTLIVE this call. Held here and released at the START of the next root
+  // supersample (double-buffered), and in the destructor — releasing it
+  // immediately after DrawTextureRect would free a texture the pending display
+  // list still references (a use-after-free that the icon path sidesteps only
+  // because its cache keeps every texture alive across frames).
+  ImpellerTexture treeTexture_{nullptr};
   // Per-icon texture cache. Keyed by content (paths+colours+px size+N) so the
   // same icon rendered on many rows rasterises ONCE. Holds the ImpellerTexture
   // (ownership already transferred to Impeller from the adopted GL handle), NOT

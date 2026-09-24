@@ -229,6 +229,9 @@ SceneGraph::~SceneGraph() {
   for (auto& [key, entry] : svgCache_) {
     if (entry.texture) ImpellerTextureRelease(entry.texture);
   }
+  // ENG item 2b — the double-buffered whole-tree offscreen, if a root
+  // supersample ran on the final frame and nothing consumed the successor.
+  if (treeTexture_) ImpellerTextureRelease(treeTexture_);
 }
 
 void SceneGraph::updateFromShadowView(SceneNode& node,
@@ -1785,11 +1788,144 @@ bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
   // sub-pixel and reproduce the binary edge — the N=1 mutant's result at any N.
   // Because the halving chain left the texture at <=2x native, this final draw
   // is at most a 2x reduction, so its single linear tap is an exact box average.
+  return true;
+}
+
+// ENG item 2b — ROOT SUPERSAMPLE. Whole tree -> one N x offscreen -> iterative
+// halve -> single composite in device pixels. Same box-filter chain as the
+// per-icon path (renderSvgSubtreeToTexture + halveTexture), lifted to the root so
+// primitives Impeller does not edge-antialias itself (a View's stroked rounded
+// border) get the synthesised partial-coverage edges too.
+bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
+                                       float pointScaleFactor) {
+  const int N = supersample_;
+  if (N < 2 || renderContext_ == nullptr) return false;      // <2 = in-place/mutant
+  if (surfacePxW_ <= 0 || surfacePxH_ <= 0) return false;     // host never wired size
+  const int nativeW = surfacePxW_;
+  const int nativeH = surfacePxH_;
+  const int pxW = nativeW * N;
+  const int pxH = nativeH * N;
+  // Same 8192/axis GPU bound as the icon path. A surface large enough that N x
+  // overflows it (e.g. a 5K window at N>=2) falls back to the in-place walk,
+  // which STILL runs the per-<Svg>-root hook — so icons keep their AA and only
+  // View borders on an oversize surface lose it. A strict superset of b9edbee.
+  if (pxW <= 0 || pxH <= 0 || pxW > 8192 || pxH > 8192) return false;
+
+  GLint prevFbo = 0;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+  GLint prevViewport[4] = {0, 0, 0, 0};
+  glGetIntegerv(GL_VIEWPORT, prevViewport);
+
+  GLuint colorTex = 0, fbo = 0, depthStencil = 0;
+  glGenTextures(1, &colorTex);
+  glBindTexture(GL_TEXTURE_2D, colorTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, pxW, pxH, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glGenFramebuffers(1, &fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         colorTex, 0);
+  // Depth+stencil for the same reason renderSvgSubtreeToTexture attaches it: any
+  // concave fill in the tree is stencil-then-cover and paints its bounding box
+  // without a stencil buffer.
+  glGenRenderbuffers(1, &depthStencil);
+  glBindRenderbuffer(GL_RENDERBUFFER, depthStencil);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, pxW, pxH);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                            GL_RENDERBUFFER, depthStencil);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+                            GL_RENDERBUFFER, depthStencil);
+
+  ImpellerTexture texture = nullptr;
+  int texW = 0, texH = 0;
+  bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  ImpellerSurface offscreen = nullptr;
+  if (ok) {
+    ImpellerISize size = {pxW, pxH};
+    offscreen = ImpellerSurfaceCreateWrappedFBONew(
+        renderContext_, fbo, kImpellerPixelFormatRGBA8888, &size);
+    ok = offscreen != nullptr;
+  }
+  if (ok) {
+    ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
+    // points -> N x device pixels: the same root scale paint() applies, times N.
+    const float s = pointScaleFactor * (float)N;
+    ImpellerDisplayListBuilderScale(off, s, s);
+    // ⛔ SUPPRESS THE PER-<Svg>-ROOT HOOK for the inner walk. With supersample_
+    // still >=2, paintNode would take paintSvgRootSupersampled for each icon —
+    // supersampling twice (wasteful) and, worse, at a scale the icon path does
+    // not expect. Zero it so the inner walk is a plain in-place render; restore
+    // after. The root offscreen already supersamples the icons along with
+    // everything else.
+    const int savedN = supersample_;
+    supersample_ = 0;
+    for (auto rootTag : roots_) {
+      auto it = nodes_.find(rootTag);
+      if (it == nodes_.end()) continue;
+      paintNode(off, it->second, 0, 0);
+    }
+    supersample_ = savedN;
+
+    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
+    if (dl) {
+      ImpellerSurfaceDrawDisplayList(offscreen, dl);
+      ImpellerDisplayListRelease(dl);
+      glFinish();
+      ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
+                                        {pxW, pxH}, 1};
+      texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
+          renderContext_, &desc, (uint64_t)colorTex);
+      texW = pxW;
+      texH = pxH;
+    }
+    ImpellerDisplayListBuilderRelease(off);
+  }
+
+  if (offscreen) ImpellerSurfaceRelease(offscreen);
+  glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+  glDeleteFramebuffers(1, &fbo);
+  glDeleteRenderbuffers(1, &depthStencil);
+  glViewport(prevViewport[0], prevViewport[1], prevViewport[2],
+             prevViewport[3]);
+
+  if (texture == nullptr) return false;  // fall back to in-place walk
+
+  // Halve iteratively to within 2x native; the final composite is the last 2x
+  // box average. Exactly the icon path's reasoning: one linear tap averages a
+  // 2x2 footprint, so reducing N x in one step would point-sample.
+  {
+    int guard = 0;
+    while ((texW > nativeW * 2 || texH > nativeH * 2) && guard++ < 16) {
+      const int nW = std::max(nativeW, texW / 2);
+      const int nH = std::max(nativeH, texH / 2);
+      ImpellerTexture half = halveTexture(texture, texW, texH, nW, nH);
+      ImpellerTextureRelease(texture);
+      if (half == nullptr) return false;  // fall back; frame paints in place
+      texture = half;
+      texW = nW;
+      texH = nH;
+    }
+  }
+
+  // ---- Composite in DEVICE PIXELS. ----
+  // paint() applies its pointScaleFactor scale around the in-place walk; the
+  // supersample path does NOT (see paint()), so this draws straight into the
+  // device-pixel framebuffer at the surface's full extent. LINEAR sampling IS
+  // the AA: because the texture is <=2x native, this final draw is at most a 2x
+  // box average.
   ImpellerRect srcRect = {0, 0, (float)texW, (float)texH};
-  ImpellerRect dstRect = {x, y, w, h};
+  ImpellerRect dstRect = {0, 0, (float)nativeW, (float)nativeH};
   ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
                                             kImpellerTextureSamplingLinear,
                                             nullptr);
+  // ⛔ DO NOT RELEASE `texture` HERE. The host draws `builder`'s display list
+  // AFTER paint() returns, and it references this texture. Double-buffer it:
+  // free the PREVIOUS frame's tree texture (its display list is long consumed)
+  // and hold this one for the next frame / the destructor.
+  if (treeTexture_) ImpellerTextureRelease(treeTexture_);
+  treeTexture_ = texture;
   return true;
 }
 #endif  // RNI_SUPERSAMPLE_GL
@@ -1974,6 +2110,23 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder,
     }
   }
   svgUseDepth_ = 0;
+#if RNI_SUPERSAMPLE_GL
+  // ENG item 2b — ROOT SUPERSAMPLE HOOK. At N>=2 with a wired context and known
+  // surface size, render the WHOLE tree into one N x offscreen and composite it
+  // back with a linear downsample — antialiasing primitives Impeller does not
+  // edge-antialias itself (a View's stroked rounded border). Composites in
+  // device pixels, so it does its OWN root scale; the scaled in-place walk below
+  // is skipped when it succeeds. A failure (no context, oversize surface, GL
+  // error) returns false and falls through to the exact in-place walk, so a
+  // broken offscreen degrades to a correct-but-aliased frame, never a blank one.
+  // N=0 (disabled) and N=1 (the mutant control) never enter here — they take the
+  // in-place walk and paint the flat, un-antialiased edge the gate proves.
+  if (supersample_ >= 2 && paintTreeSupersampled(builder, pointScaleFactor)) {
+    // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
+    // so it already reflects the visited node count.
+    return painted_;
+  }
+#endif
   // ⛔ SCALE ONCE, AT THE ROOT — NOT PER NODE.
   // The tree's frames are in points. Applying the device scale as a single
   // root transform means every child, every stroke width and every glyph run

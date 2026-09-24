@@ -354,6 +354,9 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // Windows/Android the offscreen path is compiled out, so these are inert.
   sceneGraph.setRenderContext(surface.context());
   sceneGraph.setSupersample(supersampleRnsvg);
+  // ENG item 2b — the root supersample offscreen is sized N x this. Device
+  // pixels (surface.width()/height()), re-set on resize below.
+  sceneGraph.setSurfaceSize(surface.width(), surface.height());
   // The cursor conversion divides by this. Set from the SAME derived value the
   // layout uses, and re-set on every resize below, so a click can never be
   // converted with a scale the painter is no longer using.
@@ -456,6 +459,9 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // subsequent click by the OLD factor and quietly halve or double every
     // coordinate. Set through the same one derivation, at the same moment.
     surface.setPointScale(pointScale);
+    // ENG item 2b — the root supersample offscreen must track the new
+    // framebuffer, or it would supersample the old extent into the new one.
+    sceneGraph.setSurfaceSize(newPx, newPy);
     const float newPointW = (float)newPx / pointScale;
     const float newPointH = (float)newPy / pointScale;
 
@@ -1417,6 +1423,8 @@ int main(int argc, char** argv) {
     // ENG item 2 — same wiring as the primary headless path above.
     sceneGraph.setRenderContext(surface.context());
     sceneGraph.setSupersample(supersampleRnsvg);
+    // ENG item 2b — root supersample offscreen size, device pixels.
+    sceneGraph.setSurfaceSize(width, height);
     rni::ReactHost host;
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
