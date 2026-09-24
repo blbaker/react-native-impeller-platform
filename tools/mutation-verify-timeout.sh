@@ -155,7 +155,7 @@ SENTINEL="pt_m4_$$_$RANDOM"
 shim_bg=$!
 sleep 2                                   # well past the 1s deadline
 # set -e safe: grep -c exits 1 on zero matches, so guard with || true.
-LEAK="$(ps -o args= 2>/dev/null | grep -c "[${SENTINEL:0:1}]${SENTINEL:1}" || true)"
+LEAK="$(ps -Ao args= 2>/dev/null | grep -c "[${SENTINEL:0:1}]${SENTINEL:1}" || true)"
 TOTAL=$((TOTAL + 1))
 if [ "${LEAK:-0}" -gt 0 ]; then
   echo "  caught: M4 (bg deadline leaked a live child: $LEAK proc)"; PASS=$((PASS + 1))
