@@ -1690,10 +1690,24 @@ ImpellerTexture SceneGraph::halveTexture(ImpellerTexture src, int srcW,
         renderContext_, fbo, kImpellerPixelFormatRGBA8888, &size);
     if (surf) {
       ImpellerDisplayListBuilder b = ImpellerDisplayListBuilderNew(nullptr);
+      // ⛔ Y-FLIP THE DRAW. `src` is read out of a wrapped GL FBO
+      // (ImpellerSurfaceCreateWrappedFBONew), whose colour attachment is
+      // BOTTOM-LEFT origin, while DrawTextureRect samples TOP-LEFT — so each such
+      // draw comes out vertically mirrored. A negative-height srcRect does NOT
+      // flip here (Impeller clamps it and fills the whole surface); flip via a
+      // builder transform instead: translate down by the dst height, scale y by
+      // -1. This MUST be at every FBO-texture draw: the root chain does
+      // (halves + 1) such hops, so flipping only the final composite would leave
+      // odd hop counts (N=2, N=8) mirrored while even counts (N=4) stay upright —
+      // the exact N-dependent parity bug measured.
       ImpellerRect srcRect = {0, 0, (float)srcW, (float)srcH};
       ImpellerRect dstRect = {0, 0, (float)dstW, (float)dstH};
+      ImpellerDisplayListBuilderSave(b);
+      ImpellerDisplayListBuilderTranslate(b, 0, (float)dstH);
+      ImpellerDisplayListBuilderScale(b, 1.0f, -1.0f);
       ImpellerDisplayListBuilderDrawTextureRect(
           b, src, &srcRect, &dstRect, kImpellerTextureSamplingLinear, nullptr);
+      ImpellerDisplayListBuilderRestore(b);
       ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(b);
       if (dl) {
         ImpellerSurfaceDrawDisplayList(surf, dl);
@@ -1959,11 +1973,20 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   // device-pixel framebuffer at the surface's full extent. LINEAR sampling IS
   // the AA: because the texture is <=2x native, this final draw is at most a 2x
   // box average.
+  // ⛔ Y-FLIP THE DRAW — same wrapped-FBO bottom-left-origin reason as
+  // halveTexture, via a builder transform (negative-height srcRect is unsupported
+  // and fills the whole surface). This final composite is one FBO-texture hop;
+  // combined with the per-hop flip in halveTexture, every N (halves+1 hops)
+  // lands upright.
   ImpellerRect srcRect = {0, 0, (float)texW, (float)texH};
   ImpellerRect dstRect = {0, 0, (float)nativeW, (float)nativeH};
+  ImpellerDisplayListBuilderSave(builder);
+  ImpellerDisplayListBuilderTranslate(builder, 0, (float)nativeH);
+  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);
   ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
                                             kImpellerTextureSamplingLinear,
                                             nullptr);
+  ImpellerDisplayListBuilderRestore(builder);
   // ⛔ DO NOT RELEASE `texture` HERE. The host draws `builder`'s display list
   // AFTER paint() returns, and it references this texture. Double-buffer it:
   // free the PREVIOUS frame's tree texture (its display list is long consumed)
