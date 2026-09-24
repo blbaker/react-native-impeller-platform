@@ -6,6 +6,7 @@
 # AA (if on) MUST produce intermediate luminance values — unlike an
 # axis-aligned rect, whose edges legitimately land on pixel boundaries.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -18,7 +19,7 @@ fail() { echo "ENG05_AA_FAIL: $*" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
 cleanup() {
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
   rm -rf "$WORK"
 }
 trap cleanup EXIT

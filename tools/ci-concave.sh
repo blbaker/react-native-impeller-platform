@@ -4,6 +4,7 @@
 # Does a filled concave <Path> paint its true area, or its convex hull?
 # Built by cloning ci-mark.sh's app setup and swapping the fixture.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -17,7 +18,7 @@ fail() { echo "CONCAVE_FAIL: $*" >&2; exit 1; }
 
 WORK="${CONCAVE_WORK:-$(mktemp -d)}"
 echo "workdir: $WORK"
-cleanup() { pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true; }
+cleanup() { rni_kill_own; }
 trap cleanup EXIT
 
 APP="$WORK/ConcaveApp"

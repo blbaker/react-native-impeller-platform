@@ -21,6 +21,7 @@
 #      with a named reason, or never attempted. Without it a red gate has three
 #      indistinguishable causes.
 set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
@@ -46,7 +47,7 @@ _dpy="${DISPLAY#*:}"; _dpy="${_dpy%%.*}"
 WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
 cleanup() {
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
   [ "$KEEP" = "1" ] && echo "workdir kept: $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT

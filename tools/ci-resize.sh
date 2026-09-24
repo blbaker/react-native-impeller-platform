@@ -60,6 +60,7 @@
 # compositor is out-of-process on the Windows side and every GUI gate on this
 # machine shares it.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 CI_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -79,7 +80,7 @@ bash tools/engine-build.sh "$RNI_PLATFORM" "$RNI_ARCH" > /dev/null || fail "engi
 WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
 cleanup() {
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
   [ "$KEEP" = "1" ] && echo "workdir kept: $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -170,7 +171,7 @@ echo "   OK: loop-driven resize unchanged"
 
 echo "== 6. no orphan window process =="
 sleep 0.3
-pgrep -x rn-impeller > /dev/null 2>&1 && fail "orphan rn-impeller process left behind"
+rni_have_own && fail "orphan rn-impeller process left behind"
 echo "   OK: no orphan process"
 
 echo "RESIZE_GATE_PASS (painted_during=$PAINTED_DURING stall=${STALL_MS}ms)"

@@ -12,6 +12,7 @@
 # ⛔ --probe-banner off is mandatory (see ci-svg.sh: the banner paints its own
 # shapes over the scene and makes every fixture byte-identical).
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -26,7 +27,7 @@ fail() { echo "ENG05_PROBE_FAIL: $*" >&2; exit 1; }
 WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
 cleanup() {
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
   [ "$KEEP" = "1" ] && echo "workdir kept: $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT

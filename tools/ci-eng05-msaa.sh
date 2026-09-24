@@ -37,6 +37,7 @@
 # HeadlessSurface builds its own FBO and never consults GLFW, so running this
 # headless would test nothing and pass. Needs a display.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -59,7 +60,7 @@ fail() { echo "ENG05_MSAA_FAIL: $*" >&2; exit 1; }
 WORK="$(mktemp -d)"
 echo "workdir: $WORK"
 cleanup() {
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
 }
 trap cleanup EXIT
 

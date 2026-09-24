@@ -20,6 +20,7 @@
 # confuse GLFW's platform auto-detection). pgrep -x (not -f) so we never
 # match this very script.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 CI_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -40,7 +41,7 @@ WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
 cleanup() {
   # Never leave an orphan window behind, whatever else happens.
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
   [ "$KEEP" = "1" ] && echo "workdir kept: $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -132,8 +133,8 @@ echo "   OK: timed screenshot is a valid PPM, ${DIMS}"
 
 echo "== 6. no orphan window process =="
 sleep 1
-if pgrep -x rn-impeller > /dev/null 2>&1; then
-  pkill -x rn-impeller || true
+if rni_have_own; then
+  rni_kill_own
   fail "rn-impeller was still running after the bounded run exited"
 fi
 echo "   OK: no orphan process"

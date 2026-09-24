@@ -13,6 +13,7 @@
 #         and the 0.0% on hard edges is a real property of the renderer.
 # FAIL  = pure-only -> the AA number is an instrument artifact.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -39,7 +40,7 @@ WORK="$(mktemp -d)"
 # a deliberately-blind (pure-only) image without re-rendering.
 OUT_DIR="${ENG05_EP_KEEP_PPM:-}"
 cleanup() {
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
   rm -rf "$WORK"
 }
 trap cleanup EXIT

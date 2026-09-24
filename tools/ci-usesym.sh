@@ -8,6 +8,7 @@
 # and there is no <Defs> exclusion anywhere in the painter, so "nothing" is a
 # hypothesis, not a given.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -22,7 +23,7 @@ fail() { echo "USESYM_PROBE_FAIL: $*" >&2; exit 1; }
 WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
 cleanup() {
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
   [ "$KEEP" = "1" ] && echo "workdir kept: $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT

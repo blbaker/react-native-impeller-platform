@@ -33,6 +33,7 @@
 #   binary with RNI_BIN and the bundle with RNI_TEST_BUNDLE. On a box WITH node,
 #   set BUILD_BUNDLE=1 to rebuild the bundle from the fixture source first.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -59,7 +60,7 @@ case "$BUNDLE" in /*) ;; *) BUNDLE="$ROOT/$BUNDLE" ;; esac
 WORK="$(mktemp -d)"
 KEEP="${KEEP_WORKDIR:-0}"
 cleanup() {
-  pgrep -x rn-impeller > /dev/null 2>&1 && pkill -x rn-impeller || true
+  rni_kill_own
   [ "$KEEP" = "1" ] && echo "workdir kept: $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT
