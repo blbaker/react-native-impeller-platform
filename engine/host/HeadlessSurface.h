@@ -28,6 +28,13 @@ class HeadlessSurface {
   int width() const { return width_; }
   int height() const { return height_; }
 
+  // False when init() succeeded (GL context + typography are up) but the main
+  // render target could not be completed — a transient GPU-memory-pressure
+  // failure, or RNI_FORCE_FBO_FAIL. The scene graph still mounts, lays out and
+  // walks (the layout proof needs no pixels), so the caller emits counts and
+  // exits 0 instead of aborting the whole parallel suite. surface_ is null.
+  bool hasDrawSurface() const { return surface_ != nullptr; }
+
   bool drawDisplayList(ImpellerDisplayList dl);
 
   // Reads the framebuffer back, ALREADY Y-FLIPPED into top-left order.

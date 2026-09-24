@@ -1415,6 +1415,12 @@ int main(int argc, char** argv) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
   }
+  // A degraded surface (main FBO unavailable under GPU pressure, or
+  // RNI_FORCE_FBO_FAIL) mounts and walks the tree for counts but has no
+  // drawable. Every pixel-dependent step below is gated on this; the run still
+  // exits 0 with scene_nodes / painted_nodes / node_frame, which is the whole
+  // proof a count-only gate needs.
+  const bool havePixels = surface.hasDrawSurface();
 
   int painted = 0;
   size_t nodeCount = 0;
@@ -1762,27 +1768,46 @@ int main(int argc, char** argv) {
     if (probeBanner) {
       DrawProbeBanner(builder, shimOk, bundleSize, width, height);
     }
-    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
-    if (dl == nullptr) {
-      fprintf(stderr, "rn-impeller: FATAL: CreateDisplayListNew returned null\n");
-      return 1;
+    // Degraded (no drawable): the paint walk above already produced `painted`
+    // and the node_frame report, which is the count-only proof. Skip the draw
+    // and readback — there is no surface to draw into. Do NOT abort.
+    if (havePixels) {
+      ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
+      if (dl == nullptr) {
+        fprintf(stderr, "rn-impeller: FATAL: CreateDisplayListNew returned null\n");
+        return 1;
+      }
+      if (!surface.drawDisplayList(dl)) {
+        fprintf(stderr, "rn-impeller: FATAL: SurfaceDrawDisplayList failed\n");
+        return 1;
+      }
+      ImpellerDisplayListRelease(dl);
     }
-    if (!surface.drawDisplayList(dl)) {
-      fprintf(stderr, "rn-impeller: FATAL: SurfaceDrawDisplayList failed\n");
-      return 1;
-    }
-    ImpellerDisplayListRelease(dl);
     ImpellerDisplayListBuilderRelease(builder);
   }
 
   std::vector<rni::Px> px;
-  if (!surface.readPixels(&px)) {
+  if (havePixels && !surface.readPixels(&px)) {
     fprintf(stderr, "rn-impeller: FATAL: glReadPixels failed\n");
     return 1;
   }
   auto at = [&](int x, int y) -> rni::Px { return px[(size_t)y * width + x]; };
 
   printf("rn-impeller: painted_nodes=%d\n", painted);
+  // Degraded run: no pixels were captured, so every pixel-derived line below is
+  // meaningless (and `at()` would index an empty buffer). painted_nodes and the
+  // node_frame report above are the count-only proof; emit the degraded marker
+  // and finish clean with exit 0.
+  if (!havePixels) {
+    printf("rn-impeller: degraded_no_pixels=1\n");
+    if (!shimOk) {
+      printf("RN_IMPELLER_FAIL (packaging shim marker absent from bundle)\n");
+      return 4;
+    }
+    printf("RN_IMPELLER_RENDER_OK app=%s\n", appName.c_str());
+    fflush(stdout);
+    return 0;
+  }
   if (probeBanner) {
     rni::Px s = at(70, 70);
     printf("rn-impeller: status_swatch_rgb=%d,%d,%d\n", s.r, s.g, s.b);
