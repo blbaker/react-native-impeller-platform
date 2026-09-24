@@ -25,6 +25,7 @@
 #     RNI_BUILD_CMD='/opt/homebrew/bin/cmake --build engine/build --target rn-impeller -j8' \
 #     RNI_BIN=engine/build/rn-impeller  bash tools/mutation-verify-supersample.sh
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -87,14 +88,23 @@ run_mutant "M1 root offscreen forced to native resolution (no supersample, no AA
 # stale in-place frame.
 python3 - <<'PY'
 p="engine/scenegraph/SceneGraph.cpp"; s=open(p).read()
-old="""  ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
+# Anchor the WHOLE-TREE root composite in paintTreeSupersampled (Translate-by-
+# nativeH is unique to it) — the earlier bare-DrawTextureRect anchor matched TWO
+# call sites and replace(,1) hit the SVG-root composite instead. (04:34 audit.)
+old="""  ImpellerRect srcRect = {0, 0, (float)texW, (float)texH};
+  ImpellerRect dstRect = {0, 0, (float)nativeW, (float)nativeH};
+  ImpellerDisplayListBuilderSave(builder);
+  ImpellerDisplayListBuilderTranslate(builder, 0, (float)nativeH);
+  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);
+  ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
                                             kImpellerTextureSamplingLinear,
-                                            nullptr);"""
-new="""  (void)srcRect; (void)dstRect; (void)texture;  // MUTANT M2: root composite skipped, tree blank"""
-assert old in s, "M2 anchor not found"
+                                            nullptr);
+  ImpellerDisplayListBuilderRestore(builder);"""
+new="""  (void)texW; (void)texH; (void)nativeW; (void)nativeH;  // MUTANT M2: whole-tree root composite skipped, tree blank"""
+assert s.count(old)==1, "M2 anchor not unique/found"
 open(p,"w").write(s.replace(old,new,1))
 PY
-run_mutant "M2 root composite DrawTextureRect skipped (tree blank)"
+run_mutant "M2 whole-tree root composite DrawTextureRect skipped (tree blank)"
 
 # A: drop the painted_ = savedPainted restore in the per-icon offscreen walk.
 # On a cache MISS the inner paintNode walk then LEAKS its ++painted_ increments

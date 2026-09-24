@@ -24,6 +24,7 @@
 #   JS is unchanged; only the engine changes. The gate renders the committed
 #   bundle with the freshly-built binary, so a rebuilt engine reaches the gate.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -88,13 +89,15 @@ python3 - <<'PY'
 p="engine/scenegraph/SceneGraph.cpp"; s=open(p).read()
 old="""  ImpellerRect srcRect = {0, 0, (float)texW, (float)texH};
   ImpellerRect dstRect = {0, 0, (float)nativeW, (float)nativeH};
+  ImpellerDisplayListBuilderSave(builder);
+  ImpellerDisplayListBuilderTranslate(builder, 0, (float)nativeH);
+  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);
   ImpellerDisplayListBuilderDrawTextureRect(builder, texture, &srcRect, &dstRect,
                                             kImpellerTextureSamplingLinear,
                                             nullptr);
-  // ⛔ DO NOT RELEASE `texture` HERE."""
-new="""  (void)texW; (void)texH; (void)nativeW; (void)nativeH;  // MUTANT M2: composite skipped, frame vanishes
-  // ⛔ DO NOT RELEASE `texture` HERE."""
-assert old in s, "M2 anchor not found"
+  ImpellerDisplayListBuilderRestore(builder);"""
+new="""  (void)texW; (void)texH; (void)nativeW; (void)nativeH;  // MUTANT M2: composite skipped, frame vanishes"""
+assert s.count(old)==1, "M2 anchor not unique/found"
 open(p,"w").write(s.replace(old,new,1))
 PY
 run_mutant "M2 root composite DrawTextureRect skipped (frame vanishes)"
