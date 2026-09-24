@@ -1601,6 +1601,15 @@ ImpellerTexture SceneGraph::renderSvgSubtreeToTexture(const SceneNode& node,
     const float originY = y - (float)node.layoutMetrics.frame.origin.y;
     paintNode(off, node, originX, originY);
     supersample_ = savedN;
+    // ⛔ DO NOT DOUBLE-COUNT THIS NODE. The OUTER paintNode already did
+    // ++painted_ for this SVG root before taking the supersample hook, and the
+    // inner walk just above did ++painted_ for the very same node again. Cancel
+    // exactly one so the root is counted ONCE. Children inside the SVG are
+    // counted by the inner walk once each and must NOT be touched — hence a
+    // single decrement here, not a save/restore of the whole counter.
+    // Without this, painted_nodes exceeds the printed node_frame lines by one
+    // per supersampled RNSVGSvgView and screen-proof.sh fails (301 vs 300).
+    --painted_;
 
     ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
     if (dl) {

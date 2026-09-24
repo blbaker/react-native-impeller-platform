@@ -85,6 +85,26 @@ render 0 "$WORK/n0.ppm"
 render 4 "$WORK/n4.ppm"
 echo "   $(grep -h 'scene_nodes\|supersample_rnsvg' "$WORK/run-0.log" | tr '\n' ' ')"
 
+echo "== 3b. painted_nodes must NOT double-count the supersampled RNSVGSvgView =="
+# ⛔ SAME BUNDLE, TWO N VALUES: the ONLY variable is the supersample flag, so the
+#   painted-node count MUST be identical. The supersample hook renders the <Svg>
+#   root subtree a second time into an offscreen; that inner walk used to hit
+#   ++painted_ again for the root, so painted_nodes at N=4 was N=0 + (#supersampled
+#   roots). screen-proof.sh then saw painted_nodes=301 but 300 node_frame lines.
+# MUTANT: drop the `--painted_;` correction in paintSvgRootSupersampled and this
+#   assertion goes 300 != 301 and FAILS. It also cross-checks that painted_nodes
+#   equals the number of node_frame lines in EACH arm (no over/under-count).
+pn() { grep -oE 'painted_nodes=[0-9]+' "$1" | head -1 | cut -d= -f2; }
+nf() { grep -cE '^rn-impeller: node_frame=' "$1"; }
+PN0="$(pn "$WORK/run-0.log")"; PN4="$(pn "$WORK/run-4.log")"
+NF0="$(nf "$WORK/run-0.log")"; NF4="$(nf "$WORK/run-4.log")"
+echo "   N=0  painted_nodes=$PN0  node_frame_lines=$NF0"
+echo "   N=4  painted_nodes=$PN4  node_frame_lines=$NF4"
+[ -n "$PN0" ] && [ -n "$PN4" ] || fail "painted_nodes not reported in a run log"
+[ "$PN0" = "$PN4" ] || fail "painted_nodes differs by supersample flag: N=0=$PN0 N=4=$PN4 (double-count regression)"
+[ "$PN0" = "$NF0" ] || fail "N=0 painted_nodes=$PN0 != node_frame lines=$NF0"
+[ "$PN4" = "$NF4" ] || fail "N=4 painted_nodes=$PN4 != node_frame lines=$NF4 (supersample double-count)"
+
 echo "== 4. count partial-luminance edge pixels in each =="
 python3 - "$WORK/n0.ppm" "$WORK/n4.ppm" <<'PY'
 import sys
