@@ -67,15 +67,23 @@ fi
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 
 # --- REAL DISPLAY REQUIRED (see header) -------------------------------------
-# GLFW on this box is X11 (WSLg). No SwapBuffers block off a real display, so a
+# GLFW on Linux is X11 (WSLg). No SwapBuffers block off a real display, so a
 # %CPU number would be a lie. Skip loudly, exactly like ci-resize.sh needs :0.
+#
+# Darwin is NOT X11: the GLFW window is a native Metal-backed NSWindow whose
+# present blocks on vsync, so an idle window genuinely sleeps and %CPU IS
+# measurable. There is no DISPLAY var and no /tmp/.X11-unix socket on macOS, so
+# the X11 guard below would SKIP on the very platform that has the realest
+# display we ship on. Gate the X11 requirement to Linux only.
 unset SDL_VIDEODRIVER || true
-if [ -z "${DISPLAY:-}" ] && [ ! -S /tmp/.X11-unix/X0 ]; then
-  echo "IDLE_CPU SKIP (no real display -- idle CPU is meaningless with no blocking"
-  echo "  present; the loop busy-spins headless by construction. See this header.)"
-  exit 0
+if [ "$(uname -s)" != "Darwin" ]; then
+  if [ -z "${DISPLAY:-}" ] && [ ! -S /tmp/.X11-unix/X0 ]; then
+    echo "IDLE_CPU SKIP (no real display -- idle CPU is meaningless with no blocking"
+    echo "  present; the loop busy-spins headless by construction. See this header.)"
+    exit 0
+  fi
+  export DISPLAY="${DISPLAY:-:0}"
 fi
-export DISPLAY="${DISPLAY:-:0}"
 
 # ==========================================================================
 # A. IDLE CPU
