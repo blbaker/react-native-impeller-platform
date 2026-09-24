@@ -1606,21 +1606,27 @@ ImpellerTexture SceneGraph::renderSvgSubtreeToTexture(const SceneNode& node,
     // restore after — nested <Svg> roots simply paint in place.
     const int savedN = supersample_;
     supersample_ = 0;
+    // ⛔ THE OFFSCREEN WALK MUST COUNT NOTHING. painted_nodes is attributed
+    // CACHE-INDEPENDENTLY at the supersample hook (paintNode: `painted_ +=
+    // countPaintedNodes(node) - 1`), which fires on BOTH a cache hit and miss.
+    // This inner paintNode walk only happens on a MISS (renderSvgSubtreeToTexture
+    // runs only when svgCache_.find misses), so letting it touch painted_ would
+    // make the tally cache-dependent: a hit would count the subtree once (via the
+    // hook), a miss would count it twice (hook + this walk). Save painted_ before
+    // the walk and restore it after so the offscreen render leaves the counter
+    // exactly as it found it — the hook is the single source of truth.
+    //   NOT a `--painted_` (the old fix): that cancelled only the ROOT's extra
+    //   increment and left the CHILDREN double-counted on a miss. With the hook
+    //   attributing the whole subtree, the correct move is to zero this walk's
+    //   contribution entirely, hence save/restore rather than a single decrement.
+    const int savedPainted = painted_;
     // Reproduce the exact absolute coordinates the caller used: paintNode
     // computes x = originX + frame.origin.x, so pass origin = painted - frame.
     const float originX = x - (float)node.layoutMetrics.frame.origin.x;
     const float originY = y - (float)node.layoutMetrics.frame.origin.y;
     paintNode(off, node, originX, originY);
     supersample_ = savedN;
-    // ⛔ DO NOT DOUBLE-COUNT THIS NODE. The OUTER paintNode already did
-    // ++painted_ for this SVG root before taking the supersample hook, and the
-    // inner walk just above did ++painted_ for the very same node again. Cancel
-    // exactly one so the root is counted ONCE. Children inside the SVG are
-    // counted by the inner walk once each and must NOT be touched — hence a
-    // single decrement here, not a save/restore of the whole counter.
-    // Without this, painted_nodes exceeds the printed node_frame lines by one
-    // per supersampled RNSVGSvgView and screen-proof.sh fails (301 vs 300).
-    --painted_;
+    painted_ = savedPainted;
 
     ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
     if (dl) {
@@ -1721,7 +1727,39 @@ ImpellerTexture SceneGraph::halveTexture(ImpellerTexture src, int srcW,
 // (main.cpp draws the finished list afterwards). So issuing GL here and drawing
 // the offscreen lists immediately is safe. Every FBO helper saves/restores the
 // prior FBO binding + viewport, so the surface init's own bindings survive.
+// Counts how many ++painted_ increments a real paintNode() walk of this subtree
+// would make — WITHOUT painting anything. Used by the supersample hook so the
+// painted_nodes tally is cache-independent (the offscreen render walks children
+// only on a cache miss and is counter-suppressed). This MUST mirror paintNode's
+// traversal exactly, or the tally drifts from the node_frame lines:
+//   * +1 for the node itself (paintNode does ++painted_ at its top);
+//   * a definition subtree (<Defs>/<Symbol>) counts ONLY itself — paintNode
+//     early-returns before its child walk, so its children are not counted here;
+//   * otherwise each child is counted;
+//   * a <Use> re-enters the referenced definition's CHILDREN (not the def node),
+//     bounded by kMaxUseDepth exactly as the painter is.
+int SceneGraph::countPaintedNodes(const SceneNode& node, int useDepth) {
+  int n = 1;  // paintNode's ++painted_ for this node
+  if (node.isSvgDefinition) return n;  // early return before the child walk
+  for (auto childTag : node.children) {
+    auto it = nodes_.find(childTag);
+    if (it != nodes_.end()) n += countPaintedNodes(it->second, useDepth);
+  }
+  if (node.isSvgUse && !node.svgUseHref.empty() && useDepth < kMaxUseDepth) {
+    auto def = svgDefs_.find(node.svgUseHref);
+    if (def != svgDefs_.end() && def->second != nullptr) {
+      for (auto defChild : def->second->children) {
+        auto ct = nodes_.find(defChild);
+        if (ct != nodes_.end()) n += countPaintedNodes(ct->second, useDepth + 1);
+      }
+    }
+  }
+  return n;
+}
+
 bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
+                                          const SceneNode& node, float x,
+                                          float y, float w, float h) {
   const int N = supersample_;
   if (N < 1 || w <= 0.0f || h <= 0.0f) return false;
 

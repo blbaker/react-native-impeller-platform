@@ -464,6 +464,11 @@ class SceneGraph {
   bool paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
                                 const SceneNode& node, float x, float y,
                                 float w, float h);
+  // Counts the ++painted_ increments a paintNode() walk of this subtree would
+  // make, without painting. Mirrors paintNode traversal (self, definition early
+  // return, children, <Use> expansion bounded by kMaxUseDepth). The supersample
+  // hook uses it so painted_nodes is cache-independent.
+  int countPaintedNodes(const SceneNode& node, int useDepth);
   // ENG item 2b — ROOT SUPERSAMPLE. Renders the ENTIRE tree (all roots) into a
   // single N x offscreen the size of the surface, downsamples with the same
   // iterative-halve box filter paintSvgRootSupersampled uses, and composites the
