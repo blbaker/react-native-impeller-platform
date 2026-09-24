@@ -538,9 +538,13 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   int touchHits = 0;
   int touchDowns = 0;
   surface.setMouseButtonHandler([&](float x, float y, bool down) {
-    const auto phase = down ? rni::FabricHost::TouchPhase::Down
-                            : rni::FabricHost::TouchPhase::Up;
-    const int hit = fabric.dispatchTouch(phase, x, y);
+    // ENG-DRAG (P0). A press begins a capture and a release ends it, so every
+    // cursor-move in between (delivered by the hover handler below) routes to
+    // the pressed control, not to whatever is under the cursor now. Without
+    // this the drag path re-hit-tested each move and a slider dragged past its
+    // track, or a button pressed and slid off, lost the gesture.
+    const int hit = down ? fabric.beginTouchCapture(x, y)
+                         : fabric.endTouchCapture(x, y);
     if (down) {
       // <TextInput>. ENG-01b. A press also (re)assigns keyboard focus: click a
       // field to edit it, click elsewhere to blur. This must run on the DOWN so
@@ -591,6 +595,16 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // not change, which is what makes the common case silent.
   int lastLoggedCursor = -1;
   surface.setHoverHandler([&](float x, float y) -> int {
+    // ENG-DRAG (P0). A cursor-move while a button is held is a DRAG, not a
+    // hover: route it to the captured tag (the pressed control) as a Move, and
+    // suppress hover enter/leave entirely -- a control being dragged does not
+    // fire pointerenter on whatever the cursor passes over. The cursor shape is
+    // held at the drag's grabbing shape by the mac's NSCursor path (mac-patches
+    // 2c0ed10); returning the last shape keeps this path from fighting it.
+    if (fabric.isTouchCaptured()) {
+      fabric.dispatchCapturedMove(x, y);
+      return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
+    }
     const auto r = fabric.dispatchHover(x, y);
     bool logged = false;
     if (r.left) {
@@ -946,6 +960,15 @@ int main(int argc, char** argv) {
   // does: the geometry and event wiring are platform-independent and gating them
   // on a working macOS window would leave the input tier unverified on Linux.
   std::string typeSpec;
+  // ENG-DRAG (P0). Headless drag probe. "--drag X0,Y0:X1,Y1[:X2,Y2...]" presses
+  // at the first point, moves through each subsequent point, releases at the
+  // last, all through the SAME beginTouchCapture/dispatchCapturedMove/
+  // endTouchCapture path the GLFW mouse+hover callbacks use. Exists for the
+  // reason --tap does: the capture logic is platform-independent, and the
+  // property it must prove -- every move and the release go to the tag the
+  // press captured, even when a waypoint is OFF that control -- is unverifiable
+  // by a pixel gate and must not wait on a working macOS window.
+  std::string dragSpec;
   int screenshotAfterMs = -1;  // -1 = no timed capture
   std::string screenshotFirst;  // empty = no frame-0 capture
   int resizeAfterFrames = 0;    // 0 = no scripted resize
@@ -1036,6 +1059,7 @@ int main(int argc, char** argv) {
     // emitter wiring are platform-independent, and gating them on a working
     // macOS window would leave the whole input tier unverified on Linux.
     else if (a == "--tap") tapSpec = next("--tap");
+    else if (a == "--drag") dragSpec = next("--drag");
     else if (a == "--type") typeSpec = next("--type");
     else if (a == "--screenshot-after") screenshotAfterMs = atoi(next("--screenshot-after").c_str());
     // Frame-0 capture. Pairs with --screenshot/--screenshot-after so ONE run
@@ -1455,6 +1479,85 @@ int main(int argc, char** argv) {
                 tapSpec.c_str());
         return 1;
       }
+    }
+
+    // ENG-DRAG (P0). Headless drag probe. Press at the first point, move through
+    // the rest, release at the last -- through the SAME capture path the window
+    // uses. Emits the tag each phase reached so a gate can assert the invariant
+    // a pixel check cannot: every move and the release stay on the pressed tag,
+    // even a waypoint OFF that control. drag_move_tag != drag_down_tag is the
+    // exact bug (a re-hit-testing move retargets); drag_move_tag=0 with a
+    // non-zero down is the other (no capture -- the off-control move hit
+    // nothing). Both are separable from a working drag here.
+    if (!dragSpec.empty()) {
+      // Parse "X0,Y0:X1,Y1:..." into points. At least two are required: a press
+      // and one move/release. sscanf per colon-separated token.
+      std::vector<std::pair<float, float>> pts;
+      size_t start = 0;
+      bool parseOk = true;
+      while (start <= dragSpec.size()) {
+        size_t colon = dragSpec.find(':', start);
+        std::string tok = dragSpec.substr(
+            start, colon == std::string::npos ? std::string::npos : colon - start);
+        float px = 0, py = 0;
+        if (std::sscanf(tok.c_str(), "%f,%f", &px, &py) != 2) {
+          parseOk = false;
+          break;
+        }
+        pts.emplace_back(px, py);
+        if (colon == std::string::npos) break;
+        start = colon + 1;
+      }
+      if (!parseOk || pts.size() < 2) {
+        fprintf(stderr,
+                "rn-impeller: FATAL: --drag wants X0,Y0:X1,Y1[:...] with >=2 "
+                "points (got '%s')\n",
+                dragSpec.c_str());
+        return 1;
+      }
+      // Press captures the first point's tag.
+      int downTag = fabric.beginTouchCapture(pts.front().first, pts.front().second);
+      printf("rn-impeller: drag_down_tag=%d at=%.1f,%.1f\n", downTag,
+             pts.front().first, pts.front().second);
+      // Every intermediate point is a held move; the LAST point is the release.
+      // Report the tag each move reached: it MUST equal downTag for the whole
+      // drag, including a waypoint outside the control's bounds.
+      int lastMoveTag = downTag;
+      for (size_t i = 1; i + 1 < pts.size(); ++i) {
+        int mt = fabric.dispatchCapturedMove(pts[i].first, pts[i].second);
+        lastMoveTag = mt;
+        printf("rn-impeller: drag_move_tag=%d at=%.1f,%.1f\n", mt, pts[i].first,
+               pts[i].second);
+      }
+      // For a 2-point drag (press + release with no intermediate move), emit a
+      // move at the release point too, so the "move stays on the down tag"
+      // assertion always has a line to read -- otherwise a 2-point drag would
+      // leave drag_move_tag absent and the gate could not tell capture from a
+      // plain tap. This move is at the release point, which is the off-control
+      // location the gate places to catch a re-hit-test.
+      if (pts.size() == 2) {
+        int mt = fabric.dispatchCapturedMove(pts.back().first, pts.back().second);
+        lastMoveTag = mt;
+        printf("rn-impeller: drag_move_tag=%d at=%.1f,%.1f\n", mt,
+               pts.back().first, pts.back().second);
+      }
+      int upTag = fabric.endTouchCapture(pts.back().first, pts.back().second);
+      printf("rn-impeller: drag_up_tag=%d at=%.1f,%.1f\n", upTag,
+             pts.back().first, pts.back().second);
+      // After release the capture MUST be clear: a move now is a hover, not a
+      // drag. captured=0 here proves endTouchCapture reset the state -- a stuck
+      // capture would silently swallow every later click as a drag move.
+      printf("rn-impeller: drag_captured_after=%d\n",
+             fabric.isTouchCaptured() ? 1 : 0);
+      fflush(stdout);
+      host.waitForJsIdle(5000);
+      // Re-emit alerts after the drag for the same reason --tap does: the
+      // pre-probe alerts_shown is always 0. A press+release on a Pressable
+      // fires onPress, so a captured drag that lands its Up on the down tag
+      // still resolves the press.
+      printf("rn-impeller: alerts_after_drag=%zu\n", host.alerts()->count());
+      (void)lastMoveTag;
+      fflush(stdout);
     }
 
     // <TextInput>. ENG-01b. Headless editing probe. Focus the field, replay the

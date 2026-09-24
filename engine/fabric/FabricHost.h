@@ -4,6 +4,7 @@
 // on the JS thread and applies them to the retained SceneGraph.
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -78,6 +79,29 @@ class FabricHost {
   // emitter runs on the JS thread. Calling a TouchEventEmitter directly from
   // the event thread would race the mounting transaction that owns the node.
   int dispatchTouch(TouchPhase phase, float x, float y);
+
+  // Shared touch builder used by dispatchTouch (which hit-tests to find the
+  // target) and the drag-capture path (which supplies the captured tag with no
+  // hit test). `target` is a react::Tag (int32_t); 0 or a non-touch node yields
+  // no dispatch and returns 0.
+  int dispatchTouchToTarget(TouchPhase phase, std::int32_t target, float x,
+                            float y);
+
+  // ENG-DRAG (P0). Press-drag-release capture, the retention a PointerDispatcher
+  // gives other platforms and impeller lacks. beginTouchCapture hit-tests the
+  // press and remembers the tag it landed on; dispatchCapturedMove and
+  // endTouchCapture then deliver Move/Up to THAT tag with NO further hit test,
+  // so a drag stays on the pressed control after the cursor leaves its bounds.
+  // All three take POINTS, same contract as dispatchTouch.
+  //
+  // beginTouchCapture returns the captured tag (0 if the press hit empty space
+  // or a non-touch node -- nothing is captured then). dispatchCapturedMove and
+  // endTouchCapture return the captured tag, or 0 if no press is held.
+  // isTouchCaptured lets the windowed host tell a drag-move from a hover-move.
+  int beginTouchCapture(float x, float y);
+  int dispatchCapturedMove(float x, float y);
+  int endTouchCapture(float x, float y);
+  bool isTouchCaptured() const;
 
   // <ScrollView>. ENG-02. Applies `dy` POINTS of scroll at (x, y) in points --
   // the same coordinate space dispatchTouch takes -- and returns the tag of the
@@ -161,6 +185,12 @@ class FabricHost {
   // the event thread (both callers are), so it needs no lock of its own; the
   // SceneGraph reads it drives ARE locked.
   int hoveredTag_{0};
+
+  // ENG-DRAG (P0). The tag a currently-held press captured, or 0 when no press
+  // is down. Set by beginTouchCapture, read by dispatchCapturedMove/
+  // endTouchCapture to route Move/Up WITHOUT re-hit-testing, cleared on release.
+  // Accessed only from the event thread (all callers are), same as hoveredTag_.
+  int capturedTag_{0};
 
   // <TextInput>. ENG-01b. Monotonic native event counter. RN's TextInput.js
   // discards a native onChange whose eventCount is <= the last it saw, to drop

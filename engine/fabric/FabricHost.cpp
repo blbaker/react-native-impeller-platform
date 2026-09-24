@@ -398,10 +398,24 @@ void FabricHost::stopSurface() {
 }
 
 int FabricHost::dispatchTouch(TouchPhase phase, float x, float y) {
-  if (!sceneGraph_ || !runtimeScheduler_) return 0;
-
+  if (!sceneGraph_) return 0;
+  // Hit-test to find the target, then hand off to the shared builder. The
+  // resolution is the ONLY thing that differs between a fresh touch and a
+  // captured drag move: this path finds whatever is under the point; the drag
+  // path (dispatchCapturedMove) skips the hit test and reuses the pressed tag.
   const react::Tag target = sceneGraph_->hitTest(x, y);
-  if (target == 0) return 0;
+  return dispatchTouchToTarget(phase, target, x, y);
+}
+
+// Build and schedule a touch to an ALREADY-RESOLVED target. Factored out of
+// dispatchTouch so the drag-capture path can deliver Move/Up to the tag the
+// press captured WITHOUT re-hit-testing -- duplicating this body would give the
+// drag path its own copy of the emitter downcast, event shape and threading
+// rules, and the two would drift. Returns the target, or 0 if it is 0 or has no
+// touch emitter.
+int FabricHost::dispatchTouchToTarget(TouchPhase phase, react::Tag target,
+                                      float x, float y) {
+  if (target == 0 || !sceneGraph_ || !runtimeScheduler_) return 0;
 
   auto emitter = sceneGraph_->eventEmitterFor(target);
   if (!emitter) return 0;
@@ -469,6 +483,59 @@ int FabricHost::dispatchTouch(TouchPhase phase, float x, float y) {
       });
   return (int)target;
 }
+
+// ENG-DRAG (P0). Press-drag-release capture. A real UI toolkit routes every
+// move BETWEEN a press and its release to the node the press landed on, even
+// after the cursor leaves that node's bounds -- a slider you drag past its
+// track still tracks, a button you press and slide off still gets the release
+// (as a cancel/out event). Impeller has no PointerDispatcher, whose whole job
+// on other platforms is exactly this retention, so the host replicates it: the
+// press captures its tag, held moves and the release go to THAT tag with NO
+// re-hit-test, and release clears the capture.
+//
+// ⛔ WHY NOT JUST HIT-TEST EACH MOVE. dispatchTouch resolves the target from
+// the point every call. Feed it mid-drag coordinates and it retargets to
+// whatever is now under the cursor -- so a drag that leaves the pressed control
+// silently hands the Move/Up to a sibling, or to nothing, and the gesture the
+// user is performing on control A is delivered to control B. That is the exact
+// defect this captures against: move-target MUST equal down-target for the life
+// of the press, which is what ci-drag.sh asserts.
+int FabricHost::beginTouchCapture(float x, float y) {
+  if (!sceneGraph_) return 0;
+  const react::Tag target = sceneGraph_->hitTest(x, y);
+  // Dispatch the Down through the resolving path (it downcasts the emitter and
+  // returns 0 for a non-touch target), and capture ONLY if a real touchable
+  // took it. Capturing a tag with no emitter would strand a drag that can
+  // deliver nothing -- the same discrimination dispatchTouch already makes.
+  const int hit = dispatchTouchToTarget(TouchPhase::Down, target, x, y);
+  capturedTag_ = hit;  // 0 when the press landed on empty space / a non-touch
+  return hit;
+}
+
+// A move while a press is held. Routes to the CAPTURED tag with no hit test, so
+// the drag stays on the pressed control wherever the cursor goes. Returns the
+// captured tag (== the down target), or 0 if no press is currently held -- a
+// bare hover, which the caller must route to dispatchHover instead.
+int FabricHost::dispatchCapturedMove(float x, float y) {
+  if (capturedTag_ == 0) return 0;
+  return dispatchTouchToTarget(TouchPhase::Move, (react::Tag)capturedTag_, x, y);
+}
+
+// The release that ends a press. Delivers the Up to the captured tag (again no
+// hit test -- a release off the control still belongs to it) and clears the
+// capture so the next move is a plain hover again. Returns the tag the Up went
+// to, or 0 if nothing was captured.
+int FabricHost::endTouchCapture(float x, float y) {
+  if (capturedTag_ == 0) return 0;
+  const int tag = capturedTag_;
+  dispatchTouchToTarget(TouchPhase::Up, (react::Tag)tag, x, y);
+  capturedTag_ = 0;
+  return tag;
+}
+
+// True while a press is held, so the windowed host knows whether a cursor-move
+// is a drag (route to the captured tag) or a hover (route to dispatchHover).
+bool FabricHost::isTouchCaptured() const { return capturedTag_ != 0; }
 
 // <ScrollView>. ENG-02.
 //
