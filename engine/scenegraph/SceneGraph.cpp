@@ -281,6 +281,12 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       case react::Cursor::Text:
         node.cursorKind = 2;  // ibeam
         break;
+      case react::Cursor::Grab:
+        node.cursorKind = 3;  // open hand (NSCursor openHandCursor)
+        break;
+      case react::Cursor::Grabbing:
+        node.cursorKind = 4;  // closed hand (NSCursor closedHandCursor)
+        break;
       default:
         node.cursorKind = 0;  // arrow
         break;

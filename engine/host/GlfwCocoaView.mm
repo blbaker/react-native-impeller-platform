@@ -81,4 +81,23 @@ double GlfwCocoaBackingScale(GLFWwindow* window) {
   return [nsWindow backingScaleFactor];
 }
 
+// ENG item 6 — grab / grabbing cursor.
+//
+// GLFW 3.4 has no standard grab shape (only arrow, ibeam, crosshair, hand,
+// h/v-resize, all-resize, not-allowed), so glfwCreateStandardCursor cannot
+// build the open/closed hand a draggable canvas needs. AppKit ships them as
+// NSCursor openHandCursor / closedHandCursor, so we set them directly.
+//
+// ⛔ -set, NOT -push. push/pop maintains a cursor STACK; a per-move stream that
+// pushes on every enter and never balances a pop would grow the stack without
+// bound. -set replaces the current cursor outright, which is the same
+// semantics glfwSetCursor gives for the standard shapes and matches
+// applyCursorKind's "one shape at a time, deduped by appliedCursorKind_".
+void GlfwCocoaSetGrabCursor(GLFWwindow* window, bool grabbing) {
+  (void)window;  // NSCursor is app-global; the window is taken for symmetry.
+  NSCursor* cursor =
+      grabbing ? [NSCursor closedHandCursor] : [NSCursor openHandCursor];
+  [cursor set];
+}
+
 }  // namespace rni
