@@ -138,3 +138,13 @@ rni_kill_own() {
   kill -KILL $uniq 2>/dev/null || true
   return 0
 }
+
+# --- portable `timeout` ------------------------------------------------------
+# Every gate that sources own-procs.sh also gets a `timeout` that works where
+# GNU coreutils' timeout is absent (stock macOS). Inert on Linux: the function
+# resolves and delegates to the real `timeout`/`gtimeout` binary via `type -P`
+# (which ignores this same-named function), so behaviour is unchanged there.
+# On a Mac with neither binary it falls back to perl alarm(), then a pure-shell
+# sleep+kill. Proven by tools/mutation-verify-timeout.sh (10/10, fallbacks only).
+# shellcheck source=lib/portable-timeout.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/portable-timeout.sh"

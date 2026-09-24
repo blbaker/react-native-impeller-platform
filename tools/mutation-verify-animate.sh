@@ -10,6 +10,7 @@
 # Each mutant breaks the ENGINE (or the fixture), never the checker, so a redden
 # proves the gate is measuring the product rather than its own assertions.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

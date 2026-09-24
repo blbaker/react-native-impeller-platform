@@ -5,6 +5,7 @@
 # test is "D4 detects native-perfect + JS-silent", so the mutant is exactly that
 # build: delete the emit, leave every other line of the resize path intact.
 set -uo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)
 cd $HOME/projects/react-native-impeller
 export DISPLAY=:0
 SRC=engine/host/main.cpp

@@ -10,6 +10,7 @@
 # ⛔ SDL_VIDEODRIVER is not used here (GLFW, not SDL), but DISPLAY is: WSLg's
 # Wayland compositor is reachable via Xwayland at :0 and GLFW is built X11-only.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDK="$ROOT/engine/third_party/impeller-sdk"

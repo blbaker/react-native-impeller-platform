@@ -13,6 +13,7 @@
 # is then scored against the wrong engine -- that exact bug made the animation
 # suite report a pass for the wrong reason (see docs/STATE.md P9-A).
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
