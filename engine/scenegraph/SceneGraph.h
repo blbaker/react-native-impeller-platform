@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "impeller.h"
+#include "modules/WorldRasterStore.h"
 
 namespace rni {
 
@@ -263,6 +264,14 @@ struct SceneNode {
   std::string svgRootAlign;
   int svgRootMeetOrSlice{0};
 
+  // <world> ENG-09. `name` keys WorldRasterStore -- the SAME string
+  // JS passed to WorldRaster.setPixels(id, ...). Empty means either not a
+  // <world> node or a <world> whose `name` prop has not been set yet (the
+  // painter then has nothing to look up and paints nothing, matching an
+  // unset RNSVGImage `name`/uri: silent, not a crash).
+  bool isWorldRaster{false};
+  std::string worldRasterName;
+
 
   std::vector<facebook::react::Tag> children;
   facebook::react::Tag parent{};
@@ -301,6 +310,16 @@ class SceneGraph {
   // setRenderContext). Re-set on every window resize so the offscreen tracks the
   // framebuffer; a stale size would supersample into the wrong extent.
   void setSurfaceSize(int pxW, int pxH) { surfacePxW_ = pxW; surfacePxH_ = pxH; }
+
+  // <world> ENG-09. Wires the SAME WorldRasterStore the WorldRaster
+  // TurboModule writes into (ReactHost::worldRasterStore()) so paintWorldNode
+  // reads what JS actually published. Null (the default) makes every <world>
+  // node paint nothing -- the "not wired" state, same shape as
+  // renderContext_ being null for supersampling.
+  void setWorldRasterStore(std::shared_ptr<WorldRasterStore> store) {
+    worldRasterStore_ = std::move(store);
+  }
+
 
   // Applies one MountingTransaction's mutations, in order.
   struct ScrollResult {
@@ -524,6 +543,13 @@ class SceneGraph {
   // Releases) or null. Does NOT release `src`.
   ImpellerTexture halveTexture(ImpellerTexture src, int srcW, int srcH,
                                int dstW, int dstH);
+  // <world> ENG-09. Reads WorldRasterStore by node.worldRasterName and paints
+  // the RGBA buffer into (x,y,w,h) as a textured rect. Returns false (paints
+  // nothing) when the store is unwired, the name is empty, or nothing has
+  // ever been set for it -- all silent-no-op, never a crash, matching the
+  // "unset image source" convention the rest of this file uses.
+  bool paintWorldNode(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                      float x, float y, float w, float h);
   // Content key for the per-icon texture cache: every input that changes the
   // rasterised pixels. Two icons with the same key reuse one ImpellerTexture.
   std::string svgSubtreeCacheKey(const SceneNode& node, int pxW, int pxH) const;
@@ -589,6 +615,29 @@ class SceneGraph {
   static constexpr size_t kSvgCacheMax = 256;
   std::unordered_map<std::string, SvgCacheEntry> svgCache_;
   std::vector<std::string> svgCacheOrder_;  // LRU: front = oldest
+  // <world> ENG-09. The store paintWorldNode reads by node name; wired by
+  // setWorldRasterStore(), null until a host calls it.
+  std::shared_ptr<WorldRasterStore> worldRasterStore_;
+  // Per-node-tag GL texture cache for <world>, keyed by react::Tag (each
+  // <world> instance owns exactly one texture -- unlike svgCache_, there is no
+  // content-sharing across different <world> nodes with the same name, since
+  // each may be at a different size/frame). Re-uploaded (glTexSubImage2D) when
+  // the store's version for that node's name advances past what was last
+  // uploaded; fully reallocated (glTexImage2D) on the first frame or a
+  // width/height change.
+  struct WorldTextureEntry {
+    ImpellerTexture texture{nullptr};
+    // GL texture handle -- stored as uint32_t (GLuint's real underlying type
+    // on every platform this engine targets) so this header does not need to
+    // pull in a GL headers just to declare the cache; GLES3/gl3.h is only
+    // ever included from the .cpp, and only on the two platforms
+    // RNI_SUPERSAMPLE_GL covers.
+    uint32_t glTex{0};
+    int texW{0};
+    int texH{0};
+    uint64_t uploadedVersion{0};
+  };
+  std::unordered_map<facebook::react::Tag, WorldTextureEntry> worldTextureCache_;
   // ENG-06. Count of PROPS applied by updateViewProps(), not calls made.
   unsigned long directPropUpdates_{0};
   // P12-01: idle-frame damage revision, bumped by bumpVersion(). Atomic so an

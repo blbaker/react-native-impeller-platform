@@ -229,6 +229,11 @@ SceneGraph::~SceneGraph() {
   for (auto& [key, entry] : svgCache_) {
     if (entry.texture) ImpellerTextureRelease(entry.texture);
   }
+  // <world> ENG-09. Same ownership rule as svgCache_ above -- release the
+  // adopted texture, never glDeleteTextures the GL handle it wraps.
+  for (auto& [tag, entry] : worldTextureCache_) {
+    if (entry.texture) ImpellerTextureRelease(entry.texture);
+  }
   // ENG item 2b — the double-buffered whole-tree offscreen, if a root
   // supersample ran on the final frame and nothing consumed the successor.
   if (treeTexture_) ImpellerTextureRelease(treeTexture_);
@@ -730,6 +735,15 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.svgGradientCoords[5] = svgLength(rg->cy, 0.5f);
       node.svgGradientUnits = rg->gradientUnits;
     }
+  } else if (node.componentName == "world") {
+    // <world> ENG-09. Borrows RNSVGImageProps (see fabric/WorldShadowNode.h
+    // for why) -- `name` is the only field this node reads; it is the SAME
+    // string JS passes as WorldRaster.setPixels(id, ...)'s `id`.
+    node.isWorldRaster = true;
+    if (const auto* pp =
+            dynamic_cast<const react::RNSVGImageProps*>(view.props.get())) {
+      node.worldRasterName = pp->name;
+    }
   }
 
 #endif
@@ -978,6 +992,20 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       // subtree exactly as an in-place walk would have. This makes painted_
       // depend only on the scene graph, never on cache state.
       painted_ += countPaintedNodes(node, svgUseDepth_) - 1;
+      return;
+    }
+  }
+  // <world> ENG-09. Same shape as the SVG supersample hook just above: a
+  // dedicated node kind short-circuits the ordinary paint (background/
+  // border/text/children) walk. Gated on renderContext_ for the SAME reason
+  // the SVG hook is -- glTexImage2D/ImpellerTextureCreateWithOpenGLTextureHandleNew
+  // need the surface's GL sharegroup, so a host that never wired a render
+  // context (or a <world> whose store has nothing published yet) falls
+  // through to the plain in-place walk below, which paints this leaf's
+  // background/border and nothing else -- never a crash, never a blank
+  // surprise beyond "no image".
+  if (node.isWorldRaster && renderContext_ != nullptr) {
+    if (paintWorldNode(builder, node, x, y, w, h)) {
       return;
     }
   }
@@ -1758,6 +1786,117 @@ ImpellerTexture SceneGraph::halveTexture(ImpellerTexture src, int srcW,
   glViewport(prevViewport[0], prevViewport[1], prevViewport[2],
              prevViewport[3]);
   return out;
+}
+
+// <world> ENG-09 — WORLD PAINTER. Reads WorldRasterStore by node name (set
+// from RNSVGImageProps::name in updateFromShadowView's "world" branch, the
+// SAME string JS passes to WorldRaster.setPixels) and paints the buffer as a
+// textured rect at (x,y,w,h). Copies renderSvgSubtreeToTexture/halveTexture's
+// GL-texture-cache shape: allocate once per node-tag, reuse across frames,
+// only touch the GPU when the store's version for this node's name actually
+// advanced.
+//
+// ⛔ THE STORE OWNS THE BYTES; WE COPY THEM INTO A GL TEXTURE, ONCE PER
+// VERSION BUMP. get() (WorldRasterStore.h) returns a shared_ptr<const Entry>
+// that is safe to read here without the store's lock (Entry is immutable
+// after publish), but the RGBA vector itself is still the STORE's memory --
+// glTexImage2D/glTexSubImage2D copy it into GPU memory synchronously before
+// this function returns, so there is no lifetime hazard even though `entry`
+// drops out of scope right after.
+bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
+                                const SceneNode& node, float x, float y,
+                                float w, float h) {
+  if (worldRasterStore_ == nullptr) return false;
+  if (node.worldRasterName.empty()) return false;
+  if (w <= 0.0f || h <= 0.0f) return false;
+
+  std::shared_ptr<const WorldRasterEntry> entry =
+      worldRasterStore_->get(node.worldRasterName);
+  // Nothing has ever been published for this name -- silent no-op, the same
+  // "unset image source" convention RNSVGImageShadowNode uses.
+  if (entry == nullptr) return false;
+  const int srcW = (int)entry->width;
+  const int srcH = (int)entry->height;
+  if (srcW <= 0 || srcH <= 0) return false;
+  // ⛔ THE STRICT-THROW CONTRACT LIVES IN WorldRasterModule, NOT HERE, BUT
+  // THIS IS THE SECOND LINE OF DEFENSE. setPixels() rejects a mismatched
+  // buffer at the JS call site (see WorldRasterModule.h's header comment); a
+  // buffer that somehow reached the store undersized would otherwise read out
+  // of bounds in glTexImage2D/glTexSubImage2D below.
+  if (entry->pixels.size() < (size_t)srcW * (size_t)srcH * 4) return false;
+
+  WorldTextureEntry& cacheEntry = worldTextureCache_[node.tag];
+  const bool sizeChanged =
+      cacheEntry.glTex == 0 || cacheEntry.texW != srcW || cacheEntry.texH != srcH;
+
+  if (sizeChanged) {
+    // First frame for this node, or its buffer's dimensions changed --
+    // (re)allocate. A size change with the SAME glTex name is fine: glTexImage2D
+    // reallocates storage for an existing texture object, it does not need a
+    // fresh glGenTextures.
+    if (cacheEntry.glTex == 0) {
+      GLuint tex = 0;
+      glGenTextures(1, &tex);
+      cacheEntry.glTex = tex;
+    }
+    glBindTexture(GL_TEXTURE_2D, cacheEntry.glTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, srcW, srcH, 0, GL_RGBA,
+                GL_UNSIGNED_BYTE, entry->pixels.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    cacheEntry.texW = srcW;
+    cacheEntry.texH = srcH;
+    cacheEntry.uploadedVersion = entry->version;
+    // (Re)adopt. A resize means the OLD ImpellerTexture wrapped a GL texture
+    // whose storage glTexImage2D just reallocated out from under it -- release
+    // the stale adoption before creating a new one over the same GL name, same
+    // as any other adopt-after-reallocate would require.
+    if (cacheEntry.texture) {
+      ImpellerTextureRelease(cacheEntry.texture);
+      cacheEntry.texture = nullptr;
+    }
+    ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
+                                      {srcW, srcH}, 1};
+    cacheEntry.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
+        renderContext_, &desc, (uint64_t)cacheEntry.glTex);
+  } else if (entry->version != cacheEntry.uploadedVersion) {
+    // Same dimensions, new pixels -- a partial update via glTexSubImage2D is
+    // the whole point of tracking uploadedVersion: re-running glTexImage2D
+    // every frame would reallocate GPU storage for a texture that never
+    // changed size, which is wasteful and is exactly what glTexSubImage2D
+    // avoids.
+    glBindTexture(GL_TEXTURE_2D, cacheEntry.glTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH, GL_RGBA,
+                    GL_UNSIGNED_BYTE, entry->pixels.data());
+    cacheEntry.uploadedVersion = entry->version;
+  }
+
+  if (cacheEntry.texture == nullptr) return false;
+
+  // ⛔ Y-FLIP THE DRAW. WorldRaster's JS contract (package/src/worldraster/
+  // index.js) is explicit that callers hand over a TOP-TO-BOTTOM row-major
+  // buffer and never flip themselves -- "the engine performs the Y-flip at
+  // paint time". glTexImage2D/glTexSubImage2D upload that buffer row 0 first,
+  // which OpenGL treats as the texture's BOTTOM row (GL texture v=0 is the
+  // bottom), so an unflipped DrawTextureRect would render the buffer upside
+  // down. Same translate-then-scale(1,-1) pattern as halveTexture and the
+  // root/icon supersample composites, pivoted on this node's own box.
+  ImpellerRect srcRect = {0, 0, (float)srcW, (float)srcH};
+  ImpellerRect dstRect = {0, 0, w, h};
+  ImpellerDisplayListBuilderSave(builder);
+  ImpellerDisplayListBuilderTranslate(builder, x, y + h);
+  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);
+  ImpellerDisplayListBuilderDrawTextureRect(builder, cacheEntry.texture,
+                                            &srcRect, &dstRect,
+                                            kImpellerTextureSamplingLinear,
+                                            nullptr);
+  ImpellerDisplayListBuilderRestore(builder);
+  // ⛔ DO NOT RELEASE cacheEntry.texture HERE. It is cached across frames in
+  // worldTextureCache_ (unlike the per-icon svgCache_'s LRU eviction, this
+  // cache is unbounded -- one <world> app mounts a small, fixed number of
+  // these nodes, not an unbounded scrolling list) and the deferred host draw
+  // that consumes `builder`'s display list runs after paint() returns.
+  return true;
 }
 
 // ENG item 2 — SUPERSAMPLE-RNSVG. Render the <Svg> root subtree at N x into an
