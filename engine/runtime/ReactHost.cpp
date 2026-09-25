@@ -246,6 +246,17 @@ ReactHost::ReactHost() {
     return std::make_shared<AppStorageModule>(inv, s);
   });
 
+  // ENG-09. Narrow raster primitive: JS pushes an RGBA buffer keyed by a
+  // string id; SceneGraph's world painter reads the SAME store by node name
+  // at paint time (worldRasterStore(), used from FabricHost/SceneGraph
+  // wiring). Not getEnforcing'd by anything in RN -- same silent-absence
+  // trap AppStorage and Networking document above -- so the gate asserts a
+  // real round trip end to end (JS setPixels -> painted pixels), not merely
+  // that the module resolves.
+  modules_->add("WorldRaster", [s = worldRasterStore_](auto inv) {
+    return std::make_shared<rni::WorldRasterModule>(inv, s);
+  });
+
   // ENG-06. RN's own C++ NativeAnimated engine (ReactCommon/react/renderer/
   // animated/), already compiled by cmake/ReactCommonFabric.cmake and, until
   // now, linked into the binary and reachable by nothing.

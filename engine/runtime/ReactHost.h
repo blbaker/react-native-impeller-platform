@@ -17,6 +17,8 @@
 #include "modules/NetworkingModule.h"
 #include "modules/PlatformModules.h"
 #include "modules/AppStorageModule.h"
+#include "modules/WorldRasterModule.h"
+#include "modules/WorldRasterStore.h"
 #include "runtime/DeviceEventSink.h"
 #include "runtime/JsThread.h"
 #include "runtime/NativeAnimatedPump.h"
@@ -63,6 +65,12 @@ class ReactHost {
   // module cannot relocate its own sandbox and a gate can point it at a
   // disposable directory without touching process-wide state.
   std::shared_ptr<AppStorageConfig> storage() { return storage_; }
+  // ENG-09. SceneGraph's world painter reads this by node name on every
+  // paint; exposed so the fabric/painter side can be wired to the SAME
+  // store the TurboModule writes into, rather than each owning its own.
+  std::shared_ptr<rni::WorldRasterStore> worldRasterStore() {
+    return worldRasterStore_;
+  }
   // Network activity, so a headless run can wait for in-flight REQUESTS and
   // not only for an idle JS thread. See NetworkActivity in NetworkingModule.h.
   std::shared_ptr<NetworkActivity> network() { return network_; }
@@ -118,6 +126,8 @@ class ReactHost {
   std::shared_ptr<NetworkActivity> network_;
   std::shared_ptr<std::string> initialUrl_;
   std::shared_ptr<AppStorageConfig> storage_;
+  std::shared_ptr<rni::WorldRasterStore> worldRasterStore_ =
+      std::make_shared<rni::WorldRasterStore>();
   // ENG-06. The provider owns the NativeAnimatedNodesManager; the pump is the
   // clock the manager does not have. Both outlive the module, which is created
   // lazily by the registry on first JS access.
