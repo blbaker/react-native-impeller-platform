@@ -187,6 +187,8 @@ int ListModules() {
     return 1;
   }
   rni::SceneGraph sceneGraph(surface.typography());
+  // ENG-09 — wire the world raster store so --list-modules boots identically.
+  sceneGraph.setWorldRasterStore(host.worldRasterStore());
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          /*logMutations*/ false, host.displayMetrics());
 
@@ -366,6 +368,9 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   surface.setPointScale(pointScale);
   rni::ReactHost host;
   host.setKnownComponents(rni::FabricHost::knownComponentNames());
+  // ENG-09 — the <world> painter reads pixel buffers the WorldRaster
+  // TurboModule writes; give the SceneGraph the same store the host owns.
+  sceneGraph.setWorldRasterStore(host.worldRasterStore());
   host.displayMetrics()->set((float)pxWidth / pointScale,
                              (float)pxHeight / pointScale, pointScale);
   host.appearance()->set(colorScheme);
@@ -1615,6 +1620,8 @@ int main(int argc, char** argv) {
     sceneGraph.setSurfaceSize(width, height);
     rni::ReactHost host;
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
+    // ENG-09 — wire the world raster store, same as the primary path.
+    sceneGraph.setWorldRasterStore(host.worldRasterStore());
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
     // Dimensions/PixelRatio read this. RN code branches on PixelRatio.get()
     // for asset selection (@2x/@3x) and hairline widths, so reporting 1 while
