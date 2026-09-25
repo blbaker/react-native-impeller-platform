@@ -36,6 +36,7 @@
 // / we-own-pixels split.
 #include "RNSVGComponentDescriptors.h"
 #include <react/renderer/components/rnsvg/ComponentDescriptors.h>
+#include "fabric/WorldShadowNode.h"
 #endif
 
 #include <atomic>
@@ -172,6 +173,10 @@ std::vector<std::string> FabricHost::knownComponentNames() {
                              "RNSVGRect", "RNSVGCircle", "RNSVGEllipse",
                              "RNSVGLine", "RNSVGDefs", "RNSVGLinearGradient",
                              "RNSVGRadialGradient"});
+  // <world>. ENG-09. WorldShadowNode borrows RNSVGImageProps/EventEmitter
+  // (see fabric/WorldShadowNode.h), so it is only declared -- and only
+  // registered below -- when RNI_WITH_RNSVG pulls those generated types in.
+  names.push_back("world");
 #endif
   return names;
 }
@@ -218,6 +223,13 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::TextInputComponentDescriptor>());
 #if RNI_WITH_RNSVG
+  // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
+  // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --
+  // registration here is the floor, same as every other host component:
+  // unregistered, a mounted <world> falls back to a plain View with
+  // ViewProps and paints nothing OF ITS OWN, silently.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::WorldComponentDescriptor>());
   // RNSVGSvgView's ComponentDescriptor is OUR codegen output (react-native-svg's
   // Svg.js resolves to the platform-suffixed name, which only the codegen
   // emits); Group/Path use the vendor's own hand-written `using` aliases.
