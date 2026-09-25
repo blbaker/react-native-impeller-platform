@@ -17,13 +17,12 @@
 #      surface stays blank (paintWorldNode's own "nothing published yet"
 #      no-op). Must die on ARM B (luma mismatch): blank vs the reference's
 #      full ramp.
-# M3 — skipped Y-flip. Remove the Scale(1,-1) call from paintWorldNode's
-#      draw, leaving the Translate. The buffer draws upside down. Must die
-#      on ARM B (luma mismatch): a vertically mirrored gradient does not
-#      luma-match its un-mirrored reference (the ramp is monotonic
-#      row-to-row, so flipping it top-to-bottom changes which luma values
-#      land in which frequency band relative to the reference's rows --
-#      measured below).
+# M3 — skipped Y-flip. Re-add the (now-removed) translate+scale(-1) Y-flip to
+#      paintWorldNode's draw. The buffer draws upside down. Must die on ARM B
+#      (luma mismatch): a vertically mirrored gradient does not luma-match
+#      its un-mirrored reference (the ramp is monotonic row-to-row, so
+#      flipping it top-to-bottom changes which luma values land in which
+#      frequency band relative to the reference's rows -- measured below).
 #
 # Each mutant must be killed by ARM B specifically (the luma comparison),
 # proving that arm -- not ARM A, which is a structural node-count check that
@@ -55,7 +54,7 @@ fail() { echo "MUTATION_VERIFY_FAIL: $*" >&2; exit 1; }
 # ⚠️ MUTANT RESIDUE PRE-FLIGHT. A crashed harness leaves a mutant in the tree
 # and its trap does not run on a hard failure; a later gate then "fails"
 # mysteriously, unrelated to whatever it happened to be testing.
-for marker in "M1: unregistered" "M2: inert" "M3: Y-flip removed"; do
+for marker in "M1: unregistered" "M2: inert" "M3: Y-flip re-added"; do
   if grep -rq "$marker" "$SRC_FABRIC" "$SRC_MODULE" "$SRC_SCENE"; then
     fail "mutant residue '$marker' is already in the tree -- restore it before running (git diff)"
   fi
@@ -142,7 +141,7 @@ grep -q "luma histogram L1 distance" "$BAK/m2.log" || {
 echo "   OK: M2 killed by ARM B (luma mismatch -- stale/blank world surface)"
 cp "$BAK/WorldRasterModule.h" "$SRC_MODULE"
 
-echo "== M3: skipped Y-flip (world buffer renders upside down) =="
+echo "== M3: re-add a Y-flip to the (correctly) unflipped draw =="
 python3 - "$SRC_SCENE" <<'PY'
 import sys
 p = sys.argv[1]
@@ -150,15 +149,14 @@ s = open(p).read()
 i = s.index("bool SceneGraph::paintWorldNode(")
 j = s.index("\n}\n", i)
 seg = s[i:j]
-old = (
-    "ImpellerDisplayListBuilderTranslate(builder, x, y + h);\n"
-    "  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);"
-)
+old = "ImpellerDisplayListBuilderTranslate(builder, x, y);"
 assert seg.count(old) == 1, f"M3 anchor not found exactly once within paintWorldNode (got {seg.count(old)})"
 new = (
-    "ImpellerDisplayListBuilderTranslate(builder, x, y);\n"
-    "  // M3: Y-flip removed -- the world buffer now draws top-to-bottom into a\n"
-    "  // GL texture whose v=0 is the BOTTOM row, i.e. upside down."
+    "ImpellerDisplayListBuilderTranslate(builder, x, y + h);\n"
+    "  // M3: Y-flip re-added -- this texture has no FBO render pass behind it\n"
+    "  // (see the removed comment this replaces), so flipping it draws the\n"
+    "  // buffer upside down.\n"
+    "  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);"
 )
 new_seg = seg.replace(old, new, 1)
 assert new_seg != seg
