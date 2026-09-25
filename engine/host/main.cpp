@@ -733,6 +733,16 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   if (idleSkip) {
     if (idleMutant != 3) {
       sceneGraph.setDamageWake([&surface]() { surface.postEmptyEvent(); });
+      // ENG-09: a WorldRaster.setPixels write is scene damage the version
+      // counter is otherwise blind to (it runs on the JS thread and never
+      // touches the scene graph). Route it through bumpVersion() — the SAME
+      // signal a Fabric commit uses — so the next frame is dirty AND a loop
+      // asleep in glfwWaitEventsTimeout wakes. Without this the animation
+      // freezes on the last painted frame under the default windowed idle-skip.
+      // Gated on mutant!=3 exactly like the wake above, so M3 (no wake) also
+      // covers the store path and its off-thread witness stalls the full budget.
+      host.worldRasterStore()->setDamageHook(
+          [&sceneGraph]() { sceneGraph.bumpVersion(); });
     } else {
       printf("rn-impeller: [idle] MUTANT M3: damage wake NOT installed\n");
       fflush(stdout);
