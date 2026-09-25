@@ -1873,19 +1873,30 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
 
   if (cacheEntry.texture == nullptr) return false;
 
-  // ⛔ Y-FLIP THE DRAW. WorldRaster's JS contract (package/src/worldraster/
-  // index.js) is explicit that callers hand over a TOP-TO-BOTTOM row-major
-  // buffer and never flip themselves -- "the engine performs the Y-flip at
-  // paint time". glTexImage2D/glTexSubImage2D upload that buffer row 0 first,
-  // which OpenGL treats as the texture's BOTTOM row (GL texture v=0 is the
-  // bottom), so an unflipped DrawTextureRect would render the buffer upside
-  // down. Same translate-then-scale(1,-1) pattern as halveTexture and the
-  // root/icon supersample composites, pivoted on this node's own box.
+  // ⛔ NO Y-FLIP HERE — AND THAT IS THE FIX, NOT AN OVERSIGHT.
+  //
+  // Every OTHER ImpellerTextureCreateWithOpenGLTextureHandleNew call in this
+  // file (renderSvgSubtreeToTexture, halveTexture, the root/icon supersample
+  // composites) wraps an FBO's COLOUR ATTACHMENT: GL renders into that FBO
+  // bottom-up (window-coordinate convention, v=0 at the bottom), so reading
+  // it back as a texture and drawing it right-side-up needs the
+  // translate+scale(-1) flip those call sites all share.
+  //
+  // This texture is different: it is populated by glTexImage2D/
+  // glTexSubImage2D directly from WorldRasterStore's CPU buffer, above --
+  // there is no FBO render pass, no GL window-coordinate origin in play at
+  // all. Row 0 of the buffer becomes row 0 of the texture's storage exactly
+  // as uploaded, and Impeller samples a plain 2D texture with a top-left
+  // origin (the same convention the CPU buffer and WorldRaster's JS contract
+  // both use). Applying the FBO-pattern flip here draws the buffer upside
+  // down — measured directly: tools/mutation-verify-world-raster.sh's M3
+  // seed (re-adding this flip) fails tools/ci-world-raster.sh's positional
+  // luma check with every off-centre sample point mismatched by ~200 levels,
+  // and the two renders are pixel-for-pixel identical with it removed.
   ImpellerRect srcRect = {0, 0, (float)srcW, (float)srcH};
   ImpellerRect dstRect = {0, 0, w, h};
   ImpellerDisplayListBuilderSave(builder);
-  ImpellerDisplayListBuilderTranslate(builder, x, y + h);
-  ImpellerDisplayListBuilderScale(builder, 1.0f, -1.0f);
+  ImpellerDisplayListBuilderTranslate(builder, x, y);
   ImpellerDisplayListBuilderDrawTextureRect(builder, cacheEntry.texture,
                                             &srcRect, &dstRect,
                                             kImpellerTextureSamplingLinear,

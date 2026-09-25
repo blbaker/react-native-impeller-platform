@@ -42,6 +42,12 @@ def luma_hist(px, n):
     return hist
 
 
+def luma_at(w, px, x, y):
+    o = (y * w + x) * 3
+    r, g, b = px[o], px[o + 1], px[o + 2]
+    return (299 * r + 587 * g + 114 * b) // 1000
+
+
 def main():
     if len(sys.argv) != 3:
         print('usage: luma-histogram-diff.py a.ppm b.ppm', file=sys.stderr)
@@ -65,6 +71,37 @@ def main():
     print(f'DISTINCT_LUMA_B {distinct_b}')
     print(f'HIST_L1_DIFF {l1}')
     print(f'HIST_L1_PCT {pct:.6f}')
+
+    # ⛔ A HISTOGRAM IS BLIND TO ORIENTATION. A vertical (or horizontal) flip
+    # relocates every pixel without changing the SET of luma values present,
+    # so a Y-flipped render of this exact ramp produces a histogram that is
+    # byte-identical to the correct one -- measured directly: the skipped-
+    # Y-flip mutant (tools/mutation-verify-world-raster.sh M3) survives on
+    # HIST_L1_PCT alone. Positional spot-checks at a handful of well-
+    # separated points close that hole: they compare the SAME (x,y)
+    # coordinate between the two images, which a flip necessarily disagrees
+    # on for any asymmetric pattern (this one is a monotonic ramp, the least
+    # symmetric shape available).
+    #
+    # 3x3 grid of points spread across the frame; a pure top-bottom flip
+    # disagrees at every row except the vertical center, so multiple rows off
+    # that line make the check robust to an accidental near-symmetric probe.
+    xs = [wa // 8, wa // 2, (wa * 7) // 8]
+    ys = [ha // 8, ha // 2, (ha * 7) // 8]
+    max_pt_diff = 0
+    worst = None
+    for y in ys:
+        for x in xs:
+            la = luma_at(wa, pxa, x, y)
+            lb = luma_at(wb, pxb, x, y)
+            d = abs(la - lb)
+            print(f'POINT {x},{y} a={la} b={lb} diff={d}')
+            if d > max_pt_diff:
+                max_pt_diff = d
+                worst = (x, y, la, lb)
+    print(f'MAX_POINT_DIFF {max_pt_diff}')
+    if worst:
+        print(f'MAX_POINT_DIFF_AT {worst[0]},{worst[1]} a={worst[2]} b={worst[3]}')
     return 0
 
 

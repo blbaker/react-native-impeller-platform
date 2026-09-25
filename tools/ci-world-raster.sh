@@ -189,6 +189,25 @@ MIN_DISTINCT=200
   "reference render has only $DISTINCT_B distinct luma levels (want >= $MIN_DISTINCT) -- \
 the reference fixture itself is degenerate; fix it before trusting this gate."
 
-echo "   OK: luma histogram L1 diff = ${PCT} (tolerance ${TOLERANCE}), distinct levels A=$DISTINCT_A B=$DISTINCT_B"
+# ⛔ THE HISTOGRAM ALONE CANNOT CATCH ORIENTATION. A luma histogram counts
+# HOW MANY pixels hold each value, not WHERE -- a vertically flipped render
+# of this exact ramp has an IDENTICAL histogram to the correct one (every
+# tile row just trades places with another row at the same luma level).
+# Measured directly by tools/mutation-verify-world-raster.sh's M3 (skipped
+# Y-flip): HIST_L1_PCT alone is 0.0 on that mutant, i.e. invisible to it.
+# MAX_POINT_DIFF compares the SAME (x,y) between the two renders at 9
+# well-separated points; the ramp is monotonic top-to-bottom, so a flip
+# disagrees by ~200 luma at every off-center row (measured) while a correct
+# render agrees to within antialiasing noise at all nine.
+POINT_TOLERANCE=10
+MAX_POINT_DIFF="$(get_field MAX_POINT_DIFF)"
+case "$MAX_POINT_DIFF" in ''|*[!0-9]*) fail "no numeric MAX_POINT_DIFF (got '$MAX_POINT_DIFF')";; esac
+[ "$MAX_POINT_DIFF" -le "$POINT_TOLERANCE" ] || fail \
+  "positional luma check failed: MAX_POINT_DIFF=$MAX_POINT_DIFF exceeds tolerance \
+$POINT_TOLERANCE (see $(get_field MAX_POINT_DIFF_AT) above). The two renders have matching \
+histograms but disagree at specific coordinates -- the classic signature of a correct \
+pattern painted in the WRONG ORIENTATION (e.g. a missing Y-flip)."
+
+echo "   OK: luma histogram L1 diff = ${PCT} (tolerance ${TOLERANCE}), distinct levels A=$DISTINCT_A B=$DISTINCT_B, max positional diff = $MAX_POINT_DIFF (tolerance $POINT_TOLERANCE)"
 
 echo "WORLD_RASTER_GATE_PASS (world_nodes=$world_nodes ref_nodes=$ref_nodes hist_l1_pct=$PCT)"
