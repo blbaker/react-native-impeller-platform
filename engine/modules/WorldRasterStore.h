@@ -31,6 +31,20 @@ struct WorldRasterEntry {
   std::vector<uint8_t> pixels;  // tightly packed RGBA8, width*height*4 bytes
 };
 
+// ENG-10. One quad in a drawSprites list: which registered atlas texture, where
+// (in the <world> node's own layout points, top-left origin), and a per-sprite
+// opacity in [0,1]. The list order IS the paint order (back-to-front).
+struct WorldSprite {
+  std::string textureId;
+  float x = 0, y = 0, w = 0, h = 0;
+  float alpha = 1.0f;
+};
+
+struct WorldSpriteList {
+  uint64_t version = 0;
+  std::vector<WorldSprite> sprites;
+};
+
 class WorldRasterStore {
  public:
   // Replaces whatever is stored at `id` with a new entry and bumps the
@@ -61,12 +75,55 @@ class WorldRasterStore {
     // wakes). Copied and called outside the lock: the hook takes SceneGraph's
     // wakeMutex_, never this store's mutex_, but a reader that grabbed the hook
     // could re-enter and we must not hold mutex_ across foreign code.
-    std::function<void()> hook;
+    fireDamage();
+  }
+
+  // ENG-10. Registers (or replaces) one sprite-atlas texture. Same immutable-
+  // Entry publish as setPixels, but a SEPARATE map: atlas ids and <world> ids
+  // are different namespaces, so a sprite called "bg" can never clobber the
+  // world buffer called "bg". Pixels arrive PREMULTIPLIED (the module does it).
+  void registerSprite(const std::string& textureId, std::vector<uint8_t> pixels,
+                      double width, double height) {
     {
-      std::lock_guard<std::mutex> lock(hookMutex_);
-      hook = damageHook_;
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto entry = std::make_shared<WorldRasterEntry>();
+      auto it = atlas_.find(textureId);
+      entry->version = (it == atlas_.end() ? 0 : it->second->version) + 1;
+      entry->width = width;
+      entry->height = height;
+      entry->pixels = std::move(pixels);
+      atlas_[textureId] = std::move(entry);
     }
-    if (hook) hook();
+    fireDamage();
+  }
+
+  // ENG-10. Replaces the sprite list painted over <world name=id>. Per-frame
+  // hot path: a new list is scene damage exactly like a setPixels write, so it
+  // MUST fire the same hook or the windowed idle-skip loop sleeps and the
+  // sprites freeze on the last presented frame.
+  void setSprites(const std::string& id, std::vector<WorldSprite> sprites) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto list = std::make_shared<WorldSpriteList>();
+      auto it = spriteLists_.find(id);
+      list->version = (it == spriteLists_.end() ? 0 : it->second->version) + 1;
+      list->sprites = std::move(sprites);
+      spriteLists_[id] = std::move(list);
+    }
+    fireDamage();
+  }
+
+  std::shared_ptr<const WorldRasterEntry> getSprite(
+      const std::string& textureId) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = atlas_.find(textureId);
+    return it == atlas_.end() ? nullptr : it->second;
+  }
+
+  std::shared_ptr<const WorldSpriteList> getSprites(const std::string& id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = spriteLists_.find(id);
+    return it == spriteLists_.end() ? nullptr : it->second;
   }
 
   // Install the hook fired after every setPixels publish. Guarded by its OWN
@@ -90,9 +147,25 @@ class WorldRasterStore {
   }
 
  private:
+  // Copied and called OUTSIDE mutex_ -- see the comment in setPixels.
+  void fireDamage() {
+    std::function<void()> hook;
+    {
+      std::lock_guard<std::mutex> lock(hookMutex_);
+      hook = damageHook_;
+    }
+    if (hook) hook();
+  }
+
   mutable std::mutex mutex_;
   std::unordered_map<std::string, std::shared_ptr<const WorldRasterEntry>>
       entries_;
+  // ENG-10 sprite atlas (textureId -> premultiplied RGBA) and per-<world>
+  // sprite lists (world id -> back-to-front quads). Guarded by mutex_.
+  std::unordered_map<std::string, std::shared_ptr<const WorldRasterEntry>>
+      atlas_;
+  std::unordered_map<std::string, std::shared_ptr<const WorldSpriteList>>
+      spriteLists_;
   // P12-01/ENG-09 damage wake. Separate mutex from mutex_ so setPixels, which
   // fires the hook, and setDamageHook cannot deadlock or invert lock order.
   mutable std::mutex hookMutex_;

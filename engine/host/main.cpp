@@ -875,8 +875,11 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
 
     int painted = shouldPaint ? paintFrame() : 0;
     ++frameIndex;
-    if (shouldPaint && frameIndex == 1)
+    if (shouldPaint && frameIndex == 1) {
       printf("rn-impeller: painted_nodes=%d\n", painted);
+      printf("rn-impeller: world_sprites_drawn=%d\n",
+             sceneGraph.worldSpritesDrawn());
+    }
 
     // ⛔ SYNTHETIC-CLICK HOOK — AND IT IS DELIBERATELY THE WEAKER EVIDENCE.
     // This calls the handler through GlfwSurface::synthesiseClick, so it
@@ -1964,6 +1967,9 @@ int main(int argc, char** argv) {
 
     ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
     painted = sceneGraph.paint(builder, pointScale);
+    // ENG-10: GPU sprite quads actually issued this paint (gate arm).
+    printf("rn-impeller: world_sprites_drawn=%d\n",
+           sceneGraph.worldSpritesDrawn());
     if (probeBanner) {
       DrawProbeBanner(builder, shimOk, bundleSize, width, height);
     }

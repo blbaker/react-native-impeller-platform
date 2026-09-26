@@ -34,7 +34,27 @@ function setPixels(id, rgba, w, h) {
   mod().setPixels(id, rgba, w, h);
 }
 
+// ENG-10 — GPU sprite compositing.
+//
+// registerSprite(textureId, rgba, w, h): upload ONE atlas entry, once.
+// rgba: ArrayBuffer of exactly w*h*4 bytes, STRAIGHT (non-premultiplied)
+// RGBA8, top-to-bottom — canvas ImageData layout. Re-registering the same
+// textureId replaces it.
+function registerSprite(textureId, rgba, w, h) {
+  mod().registerSprite(textureId, rgba, w, h);
+}
+
+// drawSprites(id, sprites): per frame. `id` is the <world name> to composite
+// over; sprites is an Array<{textureId, x, y, w, h, alpha?}> in layout points,
+// BACK-TO-FRONT (list order is paint order). Throws on an unregistered
+// textureId. Pass [] to clear.
+function drawSprites(id, sprites) {
+  mod().drawSprites(id, sprites);
+}
+
 module.exports = {
   isSupported,
   setPixels,
+  registerSprite,
+  drawSprites,
 };

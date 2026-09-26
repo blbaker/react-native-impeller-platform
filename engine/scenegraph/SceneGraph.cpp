@@ -234,6 +234,10 @@ SceneGraph::~SceneGraph() {
   for (auto& [tag, entry] : worldTextureCache_) {
     if (entry.texture) ImpellerTextureRelease(entry.texture);
   }
+  // ENG-10 sprite atlas -- same ownership rule.
+  for (auto& [id, entry] : spriteTextureCache_) {
+    if (entry.texture) ImpellerTextureRelease(entry.texture);
+  }
   // ENG item 2b — the double-buffered whole-tree offscreen, if a root
   // supersample ran on the final frame and nothing consumed the successor.
   if (treeTexture_) ImpellerTextureRelease(treeTexture_);
@@ -1006,6 +1010,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // surprise beyond "no image".
   if (node.isWorldRaster && renderContext_ != nullptr) {
     if (paintWorldNode(builder, node, x, y, w, h)) {
+      // ENG-10: the drawSprites list composites OVER the world buffer, on the
+      // GPU, inside this same single <world> node (no per-sprite nodes).
+      paintWorldSprites(builder, node, x, y, w, h);
       return;
     }
   }
@@ -1208,6 +1215,14 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
 
   paintBorders(builder, node, x, y, w, h, radii, rounded);
 
+#if RNI_SUPERSAMPLE_GL
+  // ENG-10: a <world> with a sprite list but NO setPixels buffer still
+  // composites its sprites, over its own background painted just above. (With
+  // a buffer, the early return in the <world> hook already drew them.)
+  if (node.isWorldRaster && renderContext_ != nullptr) {
+    paintWorldSprites(builder, node, x, y, w, h);
+  }
+#endif
 #if RNI_WITH_RNSVG
   // RNSVGPath: parse `d` fresh into an ImpellerPathBuilder every paint (no
   // cross-frame geometry cache exists in this SceneGraph, unlike gradients/
@@ -1910,6 +1925,116 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
   return true;
 }
 
+// <world> ENG-10. GPU sprite compositing. Draws the store's drawSprites list
+// for this node's name, in LIST ORDER (back-to-front: painter's algorithm falls
+// out of order for free), one DrawTextureRect per sprite, over whatever the
+// node already painted (the setPixels terrain, or its own background).
+//
+// Atlas textures are keyed by textureId and uploaded ONCE per registerSprite
+// version -- the per-frame cost is list parsing + N texture-rect draws, zero
+// texture uploads. That is the whole point vs the ENG-09 path, where JS
+// composites every sprite into one CPU buffer and re-uploads it per frame.
+//
+// ⛔ NO Y-FLIP, SAME RULE AS paintWorldNode. Atlas textures are glTexImage2D'd
+// straight from CPU top-left-origin buffers -- no FBO pass. Copying the FBO
+// composite's translate+scale(1,-1) here draws every sprite upside down;
+// tools/mutation-verify-world-sprites.sh's M-flip seeds exactly that.
+bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
+                                   const SceneNode& node, float x, float y,
+                                   float w, float h) {
+  if (worldRasterStore_ == nullptr) return false;
+  if (node.worldRasterName.empty()) return false;
+  if (w <= 0.0f || h <= 0.0f) return false;
+  std::shared_ptr<const WorldSpriteList> list =
+      worldRasterStore_->getSprites(node.worldRasterName);
+  if (list == nullptr || list->sprites.empty()) return false;
+
+  // Resolve each distinct textureId ONCE per frame (one store lock each, not
+  // one per sprite), uploading on first sight or when its registerSprite
+  // version advanced.
+  std::unordered_map<std::string, const WorldTextureEntry*> resolved;
+  auto resolve = [&](const std::string& textureId) -> const WorldTextureEntry* {
+    auto hit = resolved.find(textureId);
+    if (hit != resolved.end()) return hit->second;
+    const WorldTextureEntry* out = nullptr;
+    std::shared_ptr<const WorldRasterEntry> src =
+        worldRasterStore_->getSprite(textureId);
+    const int srcW = src ? (int)src->width : 0;
+    const int srcH = src ? (int)src->height : 0;
+    if (src && srcW > 0 && srcH > 0 &&
+        src->pixels.size() >= (size_t)srcW * (size_t)srcH * 4) {
+      WorldTextureEntry& e = spriteTextureCache_[textureId];
+      const bool sizeChanged = e.glTex == 0 || e.texW != srcW || e.texH != srcH;
+      if (sizeChanged) {
+        if (e.glTex == 0) {
+          GLuint tex = 0;
+          glGenTextures(1, &tex);
+          e.glTex = tex;
+        }
+        glBindTexture(GL_TEXTURE_2D, e.glTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, srcW, srcH, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, src->pixels.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        e.texW = srcW;
+        e.texH = srcH;
+        e.uploadedVersion = src->version;
+        if (e.texture) {
+          ImpellerTextureRelease(e.texture);
+          e.texture = nullptr;
+        }
+        ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
+                                          {srcW, srcH}, 1};
+        e.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
+            renderContext_, &desc, (uint64_t)e.glTex);
+      } else if (src->version != e.uploadedVersion) {
+        glBindTexture(GL_TEXTURE_2D, e.glTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH, GL_RGBA,
+                        GL_UNSIGNED_BYTE, src->pixels.data());
+        e.uploadedVersion = src->version;
+      }
+      if (e.texture) out = &e;
+    }
+    resolved.emplace(textureId, out);
+    return out;
+  };
+
+  ImpellerDisplayListBuilderSave(builder);
+  ImpellerDisplayListBuilderTranslate(builder, x, y);
+  // Sprites are positioned in the <world> node's own coordinate space; one
+  // that hangs off the edge is clipped to the node, like a canvas would.
+  ImpellerRect clip = {0, 0, w, h};
+  ImpellerDisplayListBuilderClipRect(builder, &clip,
+                                     kImpellerClipOperationIntersect);
+  for (const WorldSprite& s : list->sprites) {
+    if (s.w <= 0.0f || s.h <= 0.0f || s.alpha <= 0.0f) continue;
+    const WorldTextureEntry* tex = resolve(s.textureId);
+    if (tex == nullptr) continue;
+    ImpellerRect srcRect = {0, 0, (float)tex->texW, (float)tex->texH};
+    ImpellerRect dstRect = {s.x, s.y, s.w, s.h};
+    // Per-sprite globalAlpha: the paint's colour alpha modulates the
+    // (premultiplied) texture. Opaque sprites pass no paint at all.
+    ImpellerPaint alphaPaint = nullptr;
+    if (s.alpha < 1.0f) {
+      alphaPaint = ImpellerPaintNew();
+      ImpellerColor c = {1.0f, 1.0f, 1.0f, s.alpha, kImpellerColorSpaceSRGB};
+      ImpellerPaintSetColor(alphaPaint, &c);
+    }
+    ImpellerDisplayListBuilderDrawTextureRect(builder, tex->texture, &srcRect,
+                                              &dstRect,
+                                              kImpellerTextureSamplingLinear,
+                                              alphaPaint);
+    if (alphaPaint) ImpellerPaintRelease(alphaPaint);
+    ++spritesDrawn_;
+  }
+  ImpellerDisplayListBuilderRestore(builder);
+  // ⛔ Textures stay cached in spriteTextureCache_ (the pending display list
+  // references them after paint() returns); released in the destructor.
+  return true;
+}
+
 // ENG item 2 — SUPERSAMPLE-RNSVG. Render the <Svg> root subtree at N x into an
 // offscreen, halve it down toward native resolution, then composite the result
 // with a final LINEAR downsample. Each halving is an exact box average, so the
@@ -2421,6 +2546,7 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder,
   // a gate needs to tell "walked the tree" from "walked one root that had no
   // reachable children", and those differ by exactly this number.
   painted_ = 0;
+  spritesDrawn_ = 0;
   for (auto rootTag : roots_) {
     auto it = nodes_.find(rootTag);
     if (it == nodes_.end()) continue;

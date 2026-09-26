@@ -319,6 +319,11 @@ class SceneGraph {
   void setWorldRasterStore(std::shared_ptr<WorldRasterStore> store) {
     worldRasterStore_ = std::move(store);
   }
+  // ENG-10. Sprite quads the <world> painter actually issued as GPU
+  // DrawTextureRect calls during the LAST paint(). Reset per paint(). The gate
+  // asserts this equals the drawSprites list length -- proof the quads went
+  // through the GPU path, not a silent no-op or a per-sprite node fallback.
+  int worldSpritesDrawn() const { return spritesDrawn_; }
 
 
   // Applies one MountingTransaction's mutations, in order.
@@ -550,6 +555,12 @@ class SceneGraph {
   // "unset image source" convention the rest of this file uses.
   bool paintWorldNode(ImpellerDisplayListBuilder builder, const SceneNode& node,
                       float x, float y, float w, float h);
+  // <world> ENG-10. Paints the store's drawSprites list for node.worldRasterName
+  // OVER the world buffer, back-to-front, one DrawTextureRect per sprite from
+  // the textureId-keyed atlas cache. Returns false when there is no list.
+  bool paintWorldSprites(ImpellerDisplayListBuilder builder,
+                         const SceneNode& node, float x, float y, float w,
+                         float h);
   // Content key for the per-icon texture cache: every input that changes the
   // rasterised pixels. Two icons with the same key reuse one ImpellerTexture.
   std::string svgSubtreeCacheKey(const SceneNode& node, int pxW, int pxH) const;
@@ -638,6 +649,12 @@ class SceneGraph {
     uint64_t uploadedVersion{0};
   };
   std::unordered_map<facebook::react::Tag, WorldTextureEntry> worldTextureCache_;
+  // <world> ENG-10. Sprite-atlas GPU textures keyed by textureId (NOT by node
+  // tag -- one peep texture is shared by every sprite and every <world> that
+  // references it). Uploaded once per registerSprite version; drawSprites
+  // frames only re-reference. Released in the destructor.
+  std::unordered_map<std::string, WorldTextureEntry> spriteTextureCache_;
+  int spritesDrawn_{0};  // reset per paint(); see worldSpritesDrawn()
   // ENG-06. Count of PROPS applied by updateViewProps(), not calls made.
   unsigned long directPropUpdates_{0};
   // P12-01: idle-frame damage revision, bumped by bumpVersion(). Atomic so an
