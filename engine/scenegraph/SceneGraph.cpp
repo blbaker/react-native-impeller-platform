@@ -1846,9 +1846,24 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
 
   if (sizeChanged) {
     // First frame for this node, or its buffer's dimensions changed --
-    // (re)allocate. A size change with the SAME glTex name is fine: glTexImage2D
-    // reallocates storage for an existing texture object, it does not need a
-    // fresh glGenTextures.
+    // (re)allocate.
+    //
+    // ⛔ A RESIZE NEEDS A FRESH GL NAME. RELEASE FIRST, THEN glGenTextures.
+    // ImpellerTextureCreateWithOpenGLTextureHandleNew TAKES OWNERSHIP of the
+    // handle: Impeller calls glDeleteTextures on it when the last reference
+    // drops (impeller.h, "Ownership of the handle is transferred"). The old
+    // order reused the adopted name: glTexImage2D the new pixels into it,
+    // THEN release the old wrapper, which DELETED that name along with the
+    // pixels just uploaded, THEN adopt the dead name. Every frame after a
+    // size change sampled a texture with no storage: pure black terrain on
+    // Mesa, with world_sprites_drawn and scene_nodes still reporting success.
+    // Measured by tools/ci-world-resize.sh (a 160x120 -> 320x240 swap
+    // mid-session). Once adopted, the name belongs to Impeller; never reuse it.
+    if (cacheEntry.texture) {
+      ImpellerTextureRelease(cacheEntry.texture);
+      cacheEntry.texture = nullptr;
+      cacheEntry.glTex = 0;  // Impeller deletes it; it is no longer ours
+    }
     if (cacheEntry.glTex == 0) {
       GLuint tex = 0;
       glGenTextures(1, &tex);
@@ -1862,14 +1877,6 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
     cacheEntry.texW = srcW;
     cacheEntry.texH = srcH;
     cacheEntry.uploadedVersion = entry->version;
-    // (Re)adopt. A resize means the OLD ImpellerTexture wrapped a GL texture
-    // whose storage glTexImage2D just reallocated out from under it -- release
-    // the stale adoption before creating a new one over the same GL name, same
-    // as any other adopt-after-reallocate would require.
-    if (cacheEntry.texture) {
-      ImpellerTextureRelease(cacheEntry.texture);
-      cacheEntry.texture = nullptr;
-    }
     ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
                                       {srcW, srcH}, 1};
     cacheEntry.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
@@ -1966,6 +1973,15 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
       WorldTextureEntry& e = spriteTextureCache_[textureId];
       const bool sizeChanged = e.glTex == 0 || e.texW != srcW || e.texH != srcH;
       if (sizeChanged) {
+        // ⛔ Same ownership rule as paintWorldNode: the adopted name is
+        // Impeller's and dies with the old wrapper. Release FIRST, then take a
+        // fresh name, or a re-registered sprite of a new size adopts a deleted
+        // texture and draws black.
+        if (e.texture) {
+          ImpellerTextureRelease(e.texture);
+          e.texture = nullptr;
+          e.glTex = 0;
+        }
         if (e.glTex == 0) {
           GLuint tex = 0;
           glGenTextures(1, &tex);
@@ -1981,10 +1997,6 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
         e.texW = srcW;
         e.texH = srcH;
         e.uploadedVersion = src->version;
-        if (e.texture) {
-          ImpellerTextureRelease(e.texture);
-          e.texture = nullptr;
-        }
         ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
                                           {srcW, srcH}, 1};
         e.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
