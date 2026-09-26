@@ -35,6 +35,17 @@ FIXDIR="$ROOT/fixtures/eng10-world-sprites"
 W=320
 H=240
 
+# ⛔ PIN THE ROOT SUPERSAMPLE OFF. The engine's DEFAULT differs by platform
+# (--supersample-rnsvg 4 on darwin, 0 elsewhere). At N>=2 the whole tree is
+# drawn into an N x offscreen: every world texture is linear-MAGNIFIED 4x and
+# linearly shrunk back, which blurs each hard edge by up to ~44 levels. The
+# oracle is ONE texture and the sprites are 145 separate ones, so their edges
+# blur DIFFERENTLY and ARM B fails on a correct sprite path (darwin 2026-09-26:
+# 10952 bad px; linux forced to N=4 reproduces the Mac shots to 2 levels).
+# This gate proves the SPRITE path, so both renders take the exact in-place
+# path on every platform. RNI_SUPERSAMPLE=4 reproduces the darwin default.
+SUPERSAMPLE="${RNI_SUPERSAMPLE:-0}"
+
 fail() { echo "WORLD_SPRITES_GATE_FAIL: $*" >&2; exit 1; }
 
 [ -d "$BASE_APP/node_modules/react-native" ] || bash tools/base-app.sh
@@ -81,7 +92,8 @@ run_headless() {
       >/dev/null 2>&1 || fail "bundle failed for $entry"
   [ -s "$bundle_out" ] || fail "no bundle produced for $entry"
   "$ENGINE" --bundle "$bundle_out" --app-name "$appname" --headless \
-    --probe-banner off --width "$W" --height "$H" --screenshot "$shot" \
+    --probe-banner off --width "$W" --height "$H" \
+    --supersample-rnsvg "$SUPERSAMPLE" --screenshot "$shot" \
     > "$log" 2>&1 &
   local pid=$!
   rni_track "$pid"
@@ -122,6 +134,12 @@ case "$spr_nodes" in ''|*[!0-9]*) fail "no numeric scene_nodes in sprites log (g
 case "$drawn" in ''|*[!0-9]*) fail "no numeric world_sprites_drawn in sprites log (got '$drawn')";; esac
 case "$want" in ''|*[!0-9]*) fail "fixture never logged ENG10_SPRITES n= (JS effect did not run?)";; esac
 echo "   scene_nodes=$spr_nodes world_sprites_drawn=$drawn list_len=$want reference_drawn=$ref_drawn"
+# The pin above is only real if the engine honoured it in BOTH renders.
+for lg in "$SPR_LOG" "$REF_LOG"; do
+  ss="$(num_field supersample_rnsvg "$lg")"
+  [ "$ss" = "$SUPERSAMPLE" ] || fail \
+    "engine ran with supersample_rnsvg='$ss', gate pinned $SUPERSAMPLE ($(basename "$lg")) -- ARM B would compare two differently-resampled renders."
+done
 NODES_MAX=10
 [ "$spr_nodes" -le "$NODES_MAX" ] || fail \
   "scene_nodes=$spr_nodes exceeds $NODES_MAX -- sprites are NOT collapsing into one <world> node (per-sprite node regression)."
