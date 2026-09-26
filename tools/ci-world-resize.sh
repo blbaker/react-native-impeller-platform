@@ -95,8 +95,12 @@ run_window() {
 
 echo "== 1. windowed run: size A (160x120) -> tap -> size B (320x240) =="
 RS_LOG="$WORK/resize.log"; FIRST="$WORK/first.ppm"; LATE="$WORK/late.ppm"
+# Tap at SCREEN 80,60. With --scale 1 pinned, a 2x (Retina) framebuffer maps
+# screen->layout by x2, so this lands at layout 160,120 there and 80,60 on a 1x
+# display -- inside the 320x240 tap target either way. 160,120 would land on
+# the target's far edge (320,240) on Retina and could miss.
 run_window "$RESIZE_BUNDLE" Eng10Resize "$RS_LOG" \
-  --click-after-frames 5:160,120 \
+  --click-after-frames 5:80,60 \
   --screenshot-first "$FIRST" --screenshot-after 400 --screenshot "$LATE"
 [ -s "$FIRST" ] || fail "no frame-1 capture"
 [ -s "$LATE" ] || fail "no post-resize capture"
