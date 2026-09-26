@@ -395,6 +395,19 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // captures it.
   int paintsTotal = 0;
 
+  // ⛔ WINDOWED CAPTURE READS BACK BEFORE THE PRESENT, NEVER AFTER IT.
+  // eglSwapBuffers hands the frame to the compositor and leaves the back
+  // buffer UNDEFINED (EGL_BUFFER_DESTROYED is the default swap behaviour). On
+  // ANGLE-Metal the next glReadPixels on fbo 0 gets a FRESH, CLEARED drawable:
+  // darwin windowed --screenshot / --screenshot-first came back as 3,072,000
+  // zero bytes at 1280x800 on every frame (ENG-10, 2026-09-26), while Mesa/X11
+  // happened to keep the old back buffer, so linux gates never saw it. The
+  // loop arms grabArmed for the frame it wants; paintFrame reads the pixels
+  // between drawDisplayList (which glFinish()es) and present().
+  bool grabArmed = false;
+  bool grabOk = false;
+  std::vector<rni::Px> grabPx;
+
   auto paintFrame = [&]() -> int {
     // ⛔ THE PAINT-IN-FLIGHT SCOPE GOES HERE, AT THE ONE SHARED BODY.
     // Both the frame loop and the window-refresh callback paint through this
@@ -413,6 +426,10 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       ImpellerDisplayListRelease(dl);
     }
     ImpellerDisplayListBuilderRelease(builder);
+    if (grabArmed) {
+      grabOk = surface.readPixels(&grabPx);
+      grabArmed = false;
+    }
     surface.present();
     // ⛔ COUNTED HERE, AT THE PRESENT, NOT AT THE CALLER.
     // refreshPaints is derived from this counter, so "a frame was painted
@@ -705,11 +722,18 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // timed capture so the two images are produced by literally the same code
   // path -- if they differed in how they were read back, a difference between
   // them would not prove anything about repainting.
+  // The pixels come from grabPx, filled PRE-PRESENT inside paintFrame (see
+  // grabArmed above); reading fbo 0 here, after the swap, is the darwin
+  // all-zero bug.
   auto capture = [&](const std::string& path, const char* label) {
     if (path.empty()) return;
-    std::vector<rni::Px> px;
-    if (!surface.readPixels(&px)) return;
-    if (!rni::GlfwSurface::writePpm(path, px, surface.width(), surface.height()))
+    if (!grabOk) {
+      fprintf(stderr, "rn-impeller: WARN: %s readback failed (%s)\n", label,
+              path.c_str());
+      return;
+    }
+    if (!rni::GlfwSurface::writePpm(path, grabPx, surface.width(),
+                                    surface.height()))
       return;
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   std::chrono::steady_clock::now() - start)
@@ -873,7 +897,22 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       if (shouldPaint) lastPresentedVersion = curVersion;
     }
 
+    // Decide BEFORE the paint which captures this frame serves, and arm the
+    // pre-present readback for it. Deciding after the paint (as before) read
+    // fbo 0 post-swap -- all zeros on darwin.
+    const bool wantFirst = shouldPaint && !capturedFirst && frameIndex == 0 &&
+                           !screenshotFirstPath.empty();
+    const bool wantTimed =
+        shouldPaint && !screenshotPath.empty() && screenshotAfterMs >= 0 &&
+        !capturedTimed &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start)
+                .count() >= screenshotAfterMs;
+    grabOk = false;
+    grabArmed = wantFirst || wantTimed;
+
     int painted = shouldPaint ? paintFrame() : 0;
+    grabArmed = false;
     ++frameIndex;
     if (shouldPaint && frameIndex == 1) {
       printf("rn-impeller: painted_nodes=%d\n", painted);
@@ -966,19 +1005,15 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // at frame 1, so with no --screenshot-first the windowed run tried to write
     // a file named "". Also: the flag is now honoured in the HEADLESS path too
     // (see the frame loop in main()), which is where CI can actually use it.
-    if (!capturedFirst && frameIndex == 1 && !screenshotFirstPath.empty()) {
+    if (!capturedFirst && frameIndex == 1 && !screenshotFirstPath.empty() &&
+        wantFirst) {
       capture(screenshotFirstPath, "screenshot_first");
       capturedFirst = true;
     }
 
-    if (!screenshotPath.empty() && screenshotAfterMs >= 0 && !capturedTimed) {
-      auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - start)
-                           .count();
-      if (elapsedMs >= screenshotAfterMs) {
-        capture(screenshotPath, "screenshot");
-        capturedTimed = true;
-      }
+    if (wantTimed && !capturedTimed) {
+      capture(screenshotPath, "screenshot");
+      capturedTimed = true;
     }
 
     // ── P12-01: off-thread repaint witness + idle sleep + run-window exit ─────
