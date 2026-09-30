@@ -509,6 +509,13 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       if (tp->placeholderTextColor) {
         colorToFloats(tp->placeholderTextColor, node.tiPlaceholderColor);
       }
+      // item 4a: the field's own selectionColor prop, when the fork exposes
+      // one -- BaseTextInputProps carries it unconditionally (RN core, not
+      // an iOS/Android-only extension). Falls through to the struct's own
+      // default (rgba(51,144,255,0.35)) when the prop is unset.
+      if (tp->selectionColor) {
+        colorToFloats(tp->selectionColor, node.tiSelectionColor);
+      }
     }
   }
 
@@ -1431,6 +1438,36 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           ImpellerParagraphBuilderBuildParagraphNew(pb, w > pad ? w - pad : 1e6f);
       if (paragraph != nullptr) {
         ImpellerPoint at = {x + pad, ty};
+        // item 4a: selection highlight, BEHIND the glyphs. The x-extent uses
+        // the same prefix-width measurement as the caret, so the highlight
+        // edges and the caret positions agree.
+        if (focused && !showPlaceholder && tiSelAnchor_ != tiCaret_) {
+          const size_t lo = std::min(tiSelAnchor_, tiCaret_);
+          const size_t hi = std::min(std::max(tiSelAnchor_, tiCaret_),
+                                     tiEditValue_.size());
+          auto prefixW = [&](size_t n) -> float {
+            if (n == 0) return 0.0f;
+            ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(typography_);
+            ImpellerParagraphBuilderPushStyle(sb, style);
+            ImpellerParagraphBuilderAddText(sb, (const uint8_t*)tiEditValue_.data(), n);
+            ImpellerParagraph sp = ImpellerParagraphBuilderBuildParagraphNew(sb, 1e6f);
+            float wv = 0.0f;
+            if (sp != nullptr) {
+              wv = ImpellerParagraphGetMaxIntrinsicWidth(sp);
+              ImpellerParagraphRelease(sp);
+            }
+            ImpellerParagraphBuilderRelease(sb);
+            return wv;
+          };
+          const float x0 = x + pad + prefixW(lo);
+          const float x1 = x + pad + prefixW(hi);
+          ImpellerPaint selPaint = ImpellerPaintNew();
+          ImpellerColor sc = impellerColor(node.tiSelectionColor, node.opacity);
+          ImpellerPaintSetColor(selPaint, &sc);
+          ImpellerRect selRect = {x0, ty, x1 - x0, lineH};
+          ImpellerDisplayListBuilderDrawRect(builder, &selRect, selPaint);
+          ImpellerPaintRelease(selPaint);
+        }
         ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
         // item 2a: the caret is painted at its CURRENT index, not always at
         // end-of-text. A paragraph built from the UTF-8 prefix up to
@@ -1469,7 +1506,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // the last caret reset (focus/click/keystroke) -- see CaretBlink.h -- so a
     // burst of typing always re-shows it and a screenshot in an off phase is a
     // real off phase, not a missing caret.
-    if (focused) {
+    // item 4a: no caret while a non-empty selection is shown (macOS and
+    // Windows both hide it; the highlight marks the insertion range).
+    if (focused && tiSelAnchor_ == tiCaret_) {
       const long long msSinceReset =
           std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::steady_clock::now() - tiCaretResetAt_)
@@ -2719,6 +2758,10 @@ void SceneGraph::setTextInputFocus(facebook::react::Tag tag) {
   auto it = nodes_.find(tag);
   tiEditValue_ = (it != nodes_.end()) ? it->second.tiValue : std::string();
   tiCaret_ = tiEditValue_.size();
+  // item 4a: focusing always starts with a COLLAPSED selection at the caret
+  // (focus end == anchor end). Mouse-drag selection (item 4b) is not built
+  // yet, so every focus path collapses.
+  tiSelAnchor_ = tiCaret_;
   // item 5: focusing a field shows the caret immediately, then blinks from
   // here. Without this reset the caret's phase would be whatever the free clock
   // happened to be at, so a field could focus into an off phase and look dead.
@@ -2733,6 +2776,10 @@ void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
   if (tiFocused_ != tag) return;  // ignore edits for a field that lost focus
   tiEditValue_ = value;
   tiCaret_ = caret > value.size() ? value.size() : caret;
+  // item 4a: EVERY plain edit/caret-move through this entry point COLLAPSES
+  // the selection to the new caret. setTextInputSelection (below) is the ONLY
+  // entry point that can leave anchor != caret -- see its header.
+  tiSelAnchor_ = tiCaret_;
   // item 5: EVERY keystroke re-shows the caret. This is the half a free-running
   // `(now/500)%2` blink gets wrong -- typing during an off phase would land the
   // character next to an invisible caret. Resetting the phase here guarantees
@@ -2742,11 +2789,25 @@ void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
   bumpVersion();
 }
 
+void SceneGraph::setTextInputSelection(facebook::react::Tag tag,
+                                       const std::string& value,
+                                       size_t anchor, size_t caret) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (tiFocused_ != tag) return;  // ignore edits for a field that lost focus
+  tiEditValue_ = value;
+  tiCaret_ = caret > value.size() ? value.size() : caret;
+  tiSelAnchor_ = anchor > value.size() ? value.size() : anchor;
+  tiCaretResetAt_ = std::chrono::steady_clock::now();
+  // P12-01: a selection change repaints the highlight rect — scene damage.
+  bumpVersion();
+}
+
 void SceneGraph::clearTextInputFocus() {
   std::lock_guard<std::mutex> lock(mutex_);
   tiFocused_ = 0;
   tiEditValue_.clear();
   tiCaret_ = 0;
+  tiSelAnchor_ = 0;
   // P12-01: blur erases the caret the cached frame still shows — scene damage.
   bumpVersion();
 }
@@ -2866,6 +2927,11 @@ std::string SceneGraph::textInputValueFor(facebook::react::Tag tag) {
 size_t SceneGraph::textInputCaretFor(facebook::react::Tag tag) {
   std::lock_guard<std::mutex> lock(mutex_);
   return (tiFocused_ == tag) ? tiCaret_ : 0;
+}
+
+size_t SceneGraph::textInputSelectionAnchorFor(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return (tiFocused_ == tag) ? tiSelAnchor_ : 0;
 }
 
 std::string SceneGraph::paragraphTextReport() {
