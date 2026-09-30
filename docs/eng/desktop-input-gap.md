@@ -133,7 +133,7 @@ P0 (blocks basic use on every OS):
 
 1. A: full key events + modifiers, `onKeyDown/onKeyUp` on View, TextInput `onKeyPress` -- **LANDED** on feat/desktop-input (gate `tools/ci-key-events.sh`, mutants `tools/mutation-verify-key-events.sh` M1-M4)
 2. B: caret, click-to-caret, forward Delete, **UTF-8 input** (drop the ASCII filter) -- caret keys + forward Delete + UTF-8 **LANDED** (gate `tools/ci-caret-edit.sh`, mutants `tools/mutation-verify-caret-edit.sh` M1-M4); click-to-caret **LANDED** (gate `tools/ci-click-caret.sh`, mutants `tools/mutation-verify-click-caret.sh` M1-M4)
-3. B/C: selection in TextInput (ENG-11) + highlight
+3. B/C: selection in TextInput (ENG-11) + highlight -- keyboard selection **LANDED** (gate `tools/ci-select-keys.sh`, mutants `tools/mutation-verify-select-keys.sh` M1-M4); mouse selection pending
 4. E: Clipboard module + Cut/Copy/Paste keys, Cmd on macOS, Ctrl elsewhere
 5. D: right/middle/back/forward buttons, click count, modifiers on clicks
 6. F: Tab / Shift+Tab focus traversal
