@@ -307,6 +307,14 @@ struct CharSpec {
   unsigned int codepoint = 0;
 };
 
+// item 4b. One synthetic mouse event: op 0 press, 1 release, 2 move; x/y in
+// SCREEN coords; shift held for a press.
+struct MouseSpec {
+  int op = 0;
+  double x = 0.0, y = 0.0;
+  bool shift = false;
+};
+
 #if RNI_WITH_WINDOW
 // The windowed repaint loop.
 //
@@ -339,6 +347,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 bool hoverLeaveAtEnd,
                 int keyAfterFrames, const std::vector<KeySpec>& keySequence,
                 int charAfterFrames, const std::vector<CharSpec>& charSequence,
+                int mouseAfterFrames, const std::vector<MouseSpec>& mouseSequence,
                 int supersampleRnsvg,
                 bool idleSkip, double idleRunSec, int idleBudgetMs,
                 bool idleLog, int idleMutant, int idleOffthreadAfter) {
@@ -586,14 +595,19 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // track, or a button pressed and slid off, lost the gesture.
     const int hit = down ? fabric.beginTouchCapture(x, y)
                          : fabric.endTouchCapture(x, y);
+    if (!down) fabric.endTextSelectionDrag();  // item 4b
     if (down) {
       // <TextInput>. ENG-01b. A press also (re)assigns keyboard focus: click a
       // field to edit it, click elsewhere to blur. This must run on the DOWN so
       // the caret appears on the same click that a user expects it to, and is
       // separate from the touch dispatch above -- a field both receives the
       // press (for onPressIn-style handlers) AND takes focus.
-      const int focused = fabric.focusTextInputAt(x, y);
-      printf("rn-impeller: textinput_focus=%d at=%.1f,%.1f\n", focused, x, y);
+      // item 4b: the click count (double = word, triple = line) and Shift
+      // (extend) come from the surface, which counted this press.
+      const int focused = fabric.focusTextInputAt(
+          x, y, surface.lastClickCount(), surface.lastPressShift());
+      printf("rn-impeller: textinput_focus=%d at=%.1f,%.1f clicks=%d\n",
+             focused, x, y, surface.lastClickCount());
       ++touchDowns;
       if (hit) ++touchHits;
       // Machine-readable, and printed for the DOWN only: a gate asserting on
@@ -644,6 +658,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // 2c0ed10); returning the last shape keeps this path from fighting it.
     if (fabric.isTouchCaptured()) {
       fabric.dispatchCapturedMove(x, y);
+      // item 4b: a drag that began in a TextInput also extends its selection.
+      fabric.dragTextSelection(x, y);
       return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
     }
     const auto r = fabric.dispatchHover(x, y);
@@ -907,6 +923,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
            frameIndex <= keyAfterFrames + (int)keySequence.size()) ||
           (charAfterFrames > 0 &&
            frameIndex <= charAfterFrames + (int)charSequence.size()) ||
+          (mouseAfterFrames > 0 &&
+           frameIndex <= mouseAfterFrames + (int)mouseSequence.size()) ||
           (!screenshotFirstPath.empty() && !capturedFirst) ||
           (!screenshotPath.empty() && !capturedTimed);
       // A caret blink is a time-based clock nothing marks dirty: refuse the skip
@@ -1066,6 +1084,24 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       }
     }
 
+
+    // item 4b. SYNTHETIC MOUSE HOOK: one press/release/move per frame through
+    // GlfwSurface::synthesiseMouse (the same dispatchCursorPoint /
+    // dispatchHoverPoint the real callbacks use, so click counting and drag
+    // routing are exercised). Weaker evidence than a real XTest drag, which
+    // ci-select-mouse.sh also runs.
+    if (mouseAfterFrames > 0 && frameIndex >= mouseAfterFrames &&
+        !mouseSequence.empty()) {
+      const size_t idx = (size_t)(frameIndex - mouseAfterFrames);
+      if (idx < mouseSequence.size()) {
+        const auto& ms = mouseSequence[idx];
+        printf("rn-impeller: mouse_requested op=%d at=%.1f,%.1f shift=%d\n",
+               ms.op, ms.x, ms.y, ms.shift ? 1 : 0);
+        fflush(stdout);
+        surface.synthesiseMouse(ms.op, ms.x, ms.y, ms.shift);
+        host.waitForJsIdle(5000);
+      }
+    }
 
     // ⛔ The frame-0 capture is what makes an animation gate possible at all.
     // A single timed screenshot proves only that SOMETHING was drawn; it
@@ -1306,6 +1342,10 @@ int main(int argc, char** argv) {
   // for the "--char-after-frames N:CP1;CP2;..." syntax.
   int charAfterFrames = 0;
   std::vector<CharSpec> charSequence;
+  // item 4b. "--mouse-after-frames N:OP@X,Y;..." OP = down|up|move|sdown
+  // (sdown = press with Shift). One event per frame from frame N.
+  int mouseAfterFrames = 0;
+  std::vector<MouseSpec> mouseSequence;
   int width = 400, height = 300;
   // ⛔ WINDOWED DEFAULT IS THE DISPLAY, NOT THESE NUMBERS — SEE GlfwSurface::init.
   // 400x300 is the HEADLESS default and every headless gate depends on it byte
@@ -1683,6 +1723,47 @@ int main(int argc, char** argv) {
     // characters with no physical key on the host's layout (emoji, most
     // accented letters), so a gate needs an in-process path to prove
     // InsertChar's UTF-8 handling independent of key-event delivery.
+    else if (a == "--mouse-after-frames") {
+      std::string spec = next("--mouse-after-frames");
+      auto colon = spec.find(':');
+      mouseAfterFrames =
+          colon == std::string::npos ? 0 : atoi(spec.substr(0, colon).c_str());
+      if (mouseAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --mouse-after-frames wants N:OP@X,Y;... with "
+                "N > 0 (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      std::string rest = spec.substr(colon + 1);
+      size_t pos = 0;
+      while (pos < rest.size()) {
+        size_t semi = rest.find(';', pos);
+        std::string seg = rest.substr(
+            pos, semi == std::string::npos ? std::string::npos : semi - pos);
+        if (!seg.empty()) {
+          MouseSpec ms;
+          auto at = seg.find('@');
+          auto comma = seg.find(',', at == std::string::npos ? 0 : at);
+          const std::string op = seg.substr(0, at);
+          if (at == std::string::npos || comma == std::string::npos ||
+              (op != "down" && op != "up" && op != "move" && op != "sdown")) {
+            fprintf(stderr,
+                    "rn-impeller: --mouse-after-frames bad event '%s' (want "
+                    "down|up|move|sdown@X,Y)\n",
+                    seg.c_str());
+            return 2;
+          }
+          ms.op = op == "up" ? 1 : op == "move" ? 2 : 0;
+          ms.shift = op == "sdown";
+          ms.x = atof(seg.substr(at + 1, comma - at - 1).c_str());
+          ms.y = atof(seg.substr(comma + 1).c_str());
+          mouseSequence.push_back(ms);
+        }
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+      }
+    }
     else if (a == "--char-after-frames") {
       std::string spec = next("--char-after-frames");
       auto colon = spec.find(':');
@@ -1867,6 +1948,7 @@ int main(int argc, char** argv) {
                        hoverAfterFrames, hoverPoints, hoverLeaveAtEnd,
                        keyAfterFrames, keySequence,
                        charAfterFrames, charSequence,
+                       mouseAfterFrames, mouseSequence,
                        supersampleRnsvg,
                        idleSkip, idleRunSec, idleBudgetMs, idleLog, idleMutant,
                        idleOffthreadAfter);

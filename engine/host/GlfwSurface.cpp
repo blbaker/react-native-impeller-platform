@@ -1,3 +1,5 @@
+#include <cmath>
+#include <chrono>
 #include "host/GlfwSurface.h"
 
 #include <GLFW/glfw3.h>
@@ -562,7 +564,7 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   // callback would additionally fire hundreds of times per second to maintain
   // state nothing reads between presses.
   glfwSetMouseButtonCallback(window_, [](GLFWwindow* w, int button, int action,
-                                         int /*mods*/) {
+                                         int mods) {
     auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
     if (!self || !self->mouseButtonHandler_) return;
     // One mouse == one finger. RN has no touch phase for a right or middle
@@ -571,7 +573,8 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
     if (action != GLFW_PRESS && action != GLFW_RELEASE) return;
     double cx = 0.0, cy = 0.0;
     glfwGetCursorPos(w, &cx, &cy);
-    self->dispatchCursorPoint(cx, cy, action == GLFW_PRESS);
+    // item 4b: mods carry Shift for Shift+click selection extension.
+    self->dispatchCursorPoint(cx, cy, action == GLFW_PRESS, mods);
   });
 
   // <ScrollView>. ENG-02. THE SECOND REGISTRATION THAT WAS ABSENT.
@@ -786,8 +789,23 @@ void GlfwSurface::setMouseButtonHandler(
 }
 
 void GlfwSurface::dispatchCursorPoint(double screenX, double screenY,
-                                      bool down) {
+                                      bool down, int glfwMods) {
   if (!mouseButtonHandler_) return;
+  // item 4b: count multi-clicks on the PRESS, before the handler reads it.
+  if (down) {
+    const double nowMs =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    const bool near = std::fabs(screenX - lastPressX_) <= kMultiClickSlopPx &&
+                      std::fabs(screenY - lastPressY_) <= kMultiClickSlopPx;
+    clickCount_ =
+        (near && nowMs - lastPressMs_ <= kMultiClickMs) ? clickCount_ + 1 : 1;
+    lastPressMs_ = nowMs;
+    lastPressX_ = screenX;
+    lastPressY_ = screenY;
+    pressShift_ = (glfwMods & GLFW_MOD_SHIFT) != 0;
+  }
   // ⛔ RE-READ THE SIZES, DO NOT USE THE CACHED width_/pointWidth_.
   // Those are refreshed by consumeDirty(), which the frame loop calls. During
   // a macOS modal resize drag the loop is blocked, so a click that arrives
@@ -995,6 +1013,15 @@ void GlfwSurface::synthesiseHover(double screenX, double screenY) {
 void GlfwSurface::synthesiseCursorLeave() {
   if (cursorLeaveHandler_) cursorLeaveHandler_();
   applyCursorKind(0);
+}
+
+void GlfwSurface::synthesiseMouse(int op, double screenX, double screenY,
+                                  bool shift) {
+  if (op == 2) {
+    dispatchHoverPoint(screenX, screenY);
+    return;
+  }
+  dispatchCursorPoint(screenX, screenY, op == 0, shift ? GLFW_MOD_SHIFT : 0);
 }
 
 void GlfwSurface::synthesiseClick(double screenX, double screenY) {
