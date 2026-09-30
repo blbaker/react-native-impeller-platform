@@ -170,20 +170,77 @@ class GlfwSurface {
   //     glfwSetCharCallback), which is the ONLY correct source of a typed
   //     character: it honours the keyboard layout and dead keys, whereas
   //     mapping GLFW_KEY_* to ASCII hardcodes a US QWERTY layout.
-  //   - the KEY handler receives Backspace/Enter, which are NOT characters and
-  //     never reach the char callback at all.
+  //   - the KEY handler (below) receives EVERY key, including the control
+  //     keys that never reach the char callback at all.
   void setCharHandler(std::function<void(unsigned int codepoint)> handler);
-  // The editing control keys the single-line field acts on. GLFW_KEY_* codes
-  // are translated to this NEUTRAL enum inside GlfwSurface.cpp (the only TU that
-  // includes <GLFW/glfw3.h>), so the host never names a GLFW symbol -- the same
-  // encapsulation the forward-declared GLFWwindow keeps for the window handle.
+
+  // desktop-input-gap P0 item 1. Full keyboard forwarding: every key
+  // press/repeat/release, with modifiers and a scancode, translated to W3C
+  // `key`/`code` strings HERE -- the only TU with <GLFW/glfw3.h> in scope --
+  // so the host never names a GLFW symbol. Until this, the key callback
+  // (GlfwSurface.cpp ~line 470) forwarded ONLY Backspace/Enter press/repeat
+  // and silently dropped every other key, every release, and every modifier
+  // except Shift. That made Escape/Delete/arrows/Tab/letters-while-not-typing
+  // and ctrl/alt/meta/capsLock all invisible to JS: a <View onKeyDown> could
+  // never fire, and a focused TextInput's onKeyPress never saw a modifier.
+  enum class KeyPhase { Down, Repeat, Up };
+  struct KeyEvent {
+    // W3C-shaped strings (ArrowLeft, Home, Delete, Escape, Tab, F1, "a",
+    // "A", "1", ...). Built from GLFW_KEY_* plus glfwGetKeyName for the
+    // layout-correct printable case; see the translation table in the .cpp.
+    std::string key;
+    // W3C `code` (physical position: KeyA, Digit1, ArrowLeft, ...), derived
+    // from the GLFW_KEY_* token itself (layout-independent), NOT from the
+    // scancode -- glfwGetKeyName gives the layout-correct *character*, which
+    // is what `key` wants, but `code` names the PHYSICAL key regardless of
+    // layout, so it is built from the same GLFW_KEY_* table as `key`'s
+    // non-printable branch.
+    std::string code;
+    KeyPhase phase{KeyPhase::Down};
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};       // GLFW_MOD_SUPER (Cmd on macOS, Super/Win elsewhere)
+    bool capsLock{false};
+    int scancode{0};
+  };
+  // Fires for EVERY key press, repeat AND release (release was previously
+  // dropped entirely). Printable characters still do NOT come through here --
+  // they arrive layout-decoded via the char handler above; this is for
+  // key identity + modifiers + phase, which the char callback cannot carry.
+  void setFullKeyHandler(std::function<void(const KeyEvent&)> handler);
+
+  // Backward-compatible editing-control shape, kept ONLY so the existing
+  // Backspace/Enter single-line edit path (FabricHost::dispatchKey) stays
+  // byte-for-byte unchanged and ci-textedit.sh needs no edits. Derived from
+  // the SAME full KeyEvent the callback above just built -- not a second,
+  // independent translation -- so the two handlers cannot disagree about
+  // what GLFW reported. Fires on Down/Repeat only, matching the old
+  // behaviour (release was, and remains, not an edit).
   enum class EditKey { Backspace, Enter };
-  // Fires only for the editing control keys above, on press/repeat (release is
-  // dropped so one keypress is one edit). `shift` carries the Shift modifier so
-  // the host can distinguish a submit from a multiline newline. Printable
-  // characters do NOT come through here -- they arrive layout-decoded via the
-  // char handler above.
   void setKeyHandler(std::function<void(EditKey key, bool shift)> handler);
+
+  // Neutral modifier set for synthesiseKey, below -- NOT a GLFW_MOD_* bitmask,
+  // so a caller (main.cpp's CLI test hooks) never has to name one. GlfwSurface
+  // is the only TU allowed to know GLFW_MOD_* exists.
+  struct KeyMods {
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};
+    bool capsLock{false};
+  };
+  // Synthesises a key event by its W3C `key` NAME (e.g. "ArrowLeft", "a",
+  // "Tab"), through the EXACT SAME reverse-lookup + dispatch path the real
+  // glfwSetKeyCallback forward-translation uses (see the .cpp), for gates on
+  // hosts where XTest cannot reach every modifier combination (Super is
+  // refused by some window managers) or to pin a case independent of keyboard
+  // layout. Returns false if `key` has no known GLFW mapping (a typo in a
+  // gate, not a silent no-op). NOT proof the registration exists -- see the
+  // synthesiseClick warning above, same reasoning applies: this calls the
+  // handler directly.
+  bool synthesiseKey(const std::string& key, KeyPhase phase,
+                     const KeyMods& mods);
 
   // The effective layout scale, kept in sync by the host on every resize so the
   // cursor conversion cannot drift from the painter's root transform. Set from
@@ -334,6 +391,13 @@ class GlfwSurface {
   // already that shape so a per-move stream does not thrash the cursor.
   void applyCursorKind(int kind);
 
+  // desktop-input-gap P0 item 1. Builds a KeyEvent from a GLFW key/scancode/
+  // action/mods tuple and fires fullKeyHandler_ + (on Down/Repeat) the
+  // legacy keyHandler_. The ONE place this translation happens, shared by
+  // the real glfwSetKeyCallback and synthesiseKey(), so a synthetic gate
+  // exercises the identical table a real keypress does.
+  void dispatchKeyEvent(int key, int scancode, int action, int mods);
+
   int width_{0};
   int height_{0};
   int pointWidth_{0};
@@ -370,6 +434,9 @@ class GlfwSurface {
   // JS thread inside them.
   std::function<void(unsigned int)> charHandler_;
   std::function<void(EditKey, bool)> keyHandler_;
+  // desktop-input-gap P0 item 1. Full keyboard forwarding. Same threading
+  // discipline as charHandler_/keyHandler_ above.
+  std::function<void(const KeyEvent&)> fullKeyHandler_;
   // ENG-09 hover/cursor. The three standard cursors, created ONCE at init()
   // and destroyed in the destructor. arrowCursor_ is applied on creation and
   // whenever a point resolves to arrow; keeping the objects rather than

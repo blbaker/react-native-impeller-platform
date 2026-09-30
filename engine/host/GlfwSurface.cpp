@@ -18,6 +18,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <unordered_map>
 
 namespace rni {
 
@@ -52,6 +54,180 @@ void* ProcAddr(const char* name, void*) { return (void*)glfwGetProcAddress(name)
 void GlfwErrorCallback(int error, const char* description) {
   fprintf(stderr, "rn-impeller: GLFW error (%d): %s\n", error, description);
   fflush(stderr);
+}
+
+// desktop-input-gap P0 item 1. GLFW_KEY_* -> W3C `key`/`code` translation.
+//
+// ⛔ WHY TWO STRINGS, TWO DIFFERENT SOURCES.
+// `code` names the PHYSICAL key position and is layout-INDEPENDENT (the key
+// two right of Tab is always "KeyA" on a US keyboard's physical layout, even
+// when a French AZERTY layout makes it type 'q') -- it comes straight out of
+// the GLFW_KEY_* token, which IS physical. `key` names what the key actually
+// PRODUCES and must honour the layout, which for the printable range only
+// glfwGetKeyName can answer; for control keys (arrows, Tab, Escape, ...) the
+// two happen to read the same because there is no alternate layout mapping
+// for "the Escape key".
+//
+// Returns false only for GLFW_KEY_UNKNOWN (scancode not recognised by GLFW
+// at all) -- every recognised key gets SOME mapping, falling back to the
+// bare code name for anything this table does not name individually (rare
+// OEM/world keys) rather than silently producing an empty string.
+bool TranslateGlfwKey(int glfwKey, int scancode, std::string* outKey,
+                      std::string* outCode) {
+  switch (glfwKey) {
+    case GLFW_KEY_UNKNOWN:
+      return false;
+    // Navigation / editing.
+    case GLFW_KEY_LEFT:      *outKey = *outCode = "ArrowLeft"; return true;
+    case GLFW_KEY_RIGHT:     *outKey = *outCode = "ArrowRight"; return true;
+    case GLFW_KEY_UP:        *outKey = *outCode = "ArrowUp"; return true;
+    case GLFW_KEY_DOWN:      *outKey = *outCode = "ArrowDown"; return true;
+    case GLFW_KEY_HOME:      *outKey = *outCode = "Home"; return true;
+    case GLFW_KEY_END:       *outKey = *outCode = "End"; return true;
+    case GLFW_KEY_PAGE_UP:   *outKey = *outCode = "PageUp"; return true;
+    case GLFW_KEY_PAGE_DOWN: *outKey = *outCode = "PageDown"; return true;
+    case GLFW_KEY_DELETE:    *outKey = *outCode = "Delete"; return true;
+    case GLFW_KEY_BACKSPACE: *outKey = *outCode = "Backspace"; return true;
+    case GLFW_KEY_ENTER:     *outKey = *outCode = "Enter"; return true;
+    case GLFW_KEY_TAB:       *outKey = *outCode = "Tab"; return true;
+    case GLFW_KEY_ESCAPE:    *outKey = *outCode = "Escape"; return true;
+    case GLFW_KEY_INSERT:    *outKey = *outCode = "Insert"; return true;
+    case GLFW_KEY_MENU:      *outKey = "ContextMenu"; *outCode = "ContextMenu"; return true;
+    case GLFW_KEY_PRINT_SCREEN: *outKey = *outCode = "PrintScreen"; return true;
+    case GLFW_KEY_PAUSE:     *outKey = *outCode = "Pause"; return true;
+    case GLFW_KEY_SCROLL_LOCK: *outKey = *outCode = "ScrollLock"; return true;
+    // Locks and modifiers -- `key` is the neutral W3C name; `code` carries
+    // the physical left/right distinction the DOM also exposes.
+    case GLFW_KEY_CAPS_LOCK:    *outKey = *outCode = "CapsLock"; return true;
+    case GLFW_KEY_NUM_LOCK:     *outKey = *outCode = "NumLock"; return true;
+    case GLFW_KEY_LEFT_SHIFT:   *outKey = "Shift"; *outCode = "ShiftLeft"; return true;
+    case GLFW_KEY_RIGHT_SHIFT:  *outKey = "Shift"; *outCode = "ShiftRight"; return true;
+    case GLFW_KEY_LEFT_CONTROL: *outKey = "Control"; *outCode = "ControlLeft"; return true;
+    case GLFW_KEY_RIGHT_CONTROL:*outKey = "Control"; *outCode = "ControlRight"; return true;
+    case GLFW_KEY_LEFT_ALT:     *outKey = "Alt"; *outCode = "AltLeft"; return true;
+    case GLFW_KEY_RIGHT_ALT:    *outKey = "Alt"; *outCode = "AltRight"; return true;
+    // GLFW_MOD_SUPER / W3C "Meta" -- Cmd on macOS, Super/Win elsewhere.
+    case GLFW_KEY_LEFT_SUPER:   *outKey = "Meta"; *outCode = "MetaLeft"; return true;
+    case GLFW_KEY_RIGHT_SUPER:  *outKey = "Meta"; *outCode = "MetaRight"; return true;
+    // Numpad. GLFW_KEY_KP_0..KP_EQUAL are in GLFW's own "printable" set
+    // (glfwGetKeyName answers them), but KP_ENTER is not -- it has a fixed
+    // "Enter"/"NumpadEnter" identity like the control keys above.
+    case GLFW_KEY_KP_ENTER: *outKey = "Enter"; *outCode = "NumpadEnter"; return true;
+    case GLFW_KEY_KP_0: case GLFW_KEY_KP_1: case GLFW_KEY_KP_2:
+    case GLFW_KEY_KP_3: case GLFW_KEY_KP_4: case GLFW_KEY_KP_5:
+    case GLFW_KEY_KP_6: case GLFW_KEY_KP_7: case GLFW_KEY_KP_8:
+    case GLFW_KEY_KP_9: {
+      *outCode = "Numpad" + std::to_string(glfwKey - GLFW_KEY_KP_0);
+      const char* name = glfwGetKeyName(glfwKey, scancode);
+      *outKey = name ? name : outCode->substr(6);
+      return true;
+    }
+    case GLFW_KEY_KP_DECIMAL:  *outCode = "NumpadDecimal"; goto numpad_name;
+    case GLFW_KEY_KP_DIVIDE:   *outCode = "NumpadDivide"; goto numpad_name;
+    case GLFW_KEY_KP_MULTIPLY: *outCode = "NumpadMultiply"; goto numpad_name;
+    case GLFW_KEY_KP_SUBTRACT: *outCode = "NumpadSubtract"; goto numpad_name;
+    case GLFW_KEY_KP_ADD:      *outCode = "NumpadAdd"; goto numpad_name;
+    case GLFW_KEY_KP_EQUAL:    *outCode = "NumpadEqual"; goto numpad_name;
+    numpad_name: {
+      const char* name = glfwGetKeyName(glfwKey, scancode);
+      *outKey = name ? name : *outCode;
+      return true;
+    }
+    default:
+      break;
+  }
+  // Function keys: F1..F25, code == key.
+  if (glfwKey >= GLFW_KEY_F1 && glfwKey <= GLFW_KEY_F25) {
+    *outKey = *outCode = "F" + std::to_string(glfwKey - GLFW_KEY_F1 + 1);
+    return true;
+  }
+  // Letters: A..Z. `code` is the PHYSICAL position (always "KeyA" for the
+  // key GLFW calls GLFW_KEY_A, regardless of what it types under a non-US
+  // layout); `key` is what it actually produces -- glfwGetKeyName, which IS
+  // layout-correct, falling back to the US letter if the platform cannot
+  // name it (a is GLFW's baseline; shift-casing is applied by the caller
+  // reading the `shift` modifier, matching every other browser's `key`
+  // which reports the unshifted letter -- 'a', not 'A' -- for a plain press
+  // and leaves case-folding to the consumer, exactly as `onKeyPress`'s text
+  // callback already does via the separate, layout-aware char callback).
+  if (glfwKey >= GLFW_KEY_A && glfwKey <= GLFW_KEY_Z) {
+    *outCode = std::string("Key") + char('A' + (glfwKey - GLFW_KEY_A));
+    const char* name = glfwGetKeyName(glfwKey, scancode);
+    *outKey = name ? name : std::string(1, char('a' + (glfwKey - GLFW_KEY_A)));
+    return true;
+  }
+  // Digits: 0..9.
+  if (glfwKey >= GLFW_KEY_0 && glfwKey <= GLFW_KEY_9) {
+    *outCode = "Digit" + std::to_string(glfwKey - GLFW_KEY_0);
+    const char* name = glfwGetKeyName(glfwKey, scancode);
+    *outKey = name ? name : std::to_string(glfwKey - GLFW_KEY_0);
+    return true;
+  }
+  // Remaining printable punctuation: GLFW names them layout-correctly for
+  // `key`; `code` gets the W3C UI Events physical name for the US position.
+  struct PunctCode { int glfwKey; const char* code; };
+  static const PunctCode kPunct[] = {
+      {GLFW_KEY_SPACE, "Space"},          {GLFW_KEY_APOSTROPHE, "Quote"},
+      {GLFW_KEY_COMMA, "Comma"},          {GLFW_KEY_MINUS, "Minus"},
+      {GLFW_KEY_PERIOD, "Period"},        {GLFW_KEY_SLASH, "Slash"},
+      {GLFW_KEY_SEMICOLON, "Semicolon"},  {GLFW_KEY_EQUAL, "Equal"},
+      {GLFW_KEY_LEFT_BRACKET, "BracketLeft"},
+      {GLFW_KEY_BACKSLASH, "Backslash"},
+      {GLFW_KEY_RIGHT_BRACKET, "BracketRight"},
+      {GLFW_KEY_GRAVE_ACCENT, "Backquote"},
+  };
+  for (const auto& p : kPunct) {
+    if (p.glfwKey == glfwKey) {
+      *outCode = p.code;
+      const char* name = glfwGetKeyName(glfwKey, scancode);
+      *outKey = name ? name : p.code;
+      return true;
+    }
+  }
+  // GLFW_KEY_WORLD_1/2 and anything else recognised but unnamed here: report
+  // the GLFW-given printable name if there is one, else "Unidentified" -- a
+  // real key that this table has no individual entry for, not a dropped one.
+  const char* name = glfwGetKeyName(glfwKey, scancode);
+  *outKey = name ? name : "Unidentified";
+  *outCode = "Unidentified";
+  return true;
+}
+
+// Reverse of TranslateGlfwKey, for synthesiseKey(): W3C `key` name -> the
+// GLFW_KEY_* token that produces it. Only needs to cover the names the gate
+// fixture and the mutation suite actually send; unknown names return false
+// rather than guessing, so a typo in a gate fails loudly instead of silently
+// synthesising nothing.
+bool GlfwKeyFromName(const std::string& name, int* outKey) {
+  static const std::unordered_map<std::string, int> kByName = {
+      {"ArrowLeft", GLFW_KEY_LEFT},       {"ArrowRight", GLFW_KEY_RIGHT},
+      {"ArrowUp", GLFW_KEY_UP},           {"ArrowDown", GLFW_KEY_DOWN},
+      {"Home", GLFW_KEY_HOME},            {"End", GLFW_KEY_END},
+      {"PageUp", GLFW_KEY_PAGE_UP},       {"PageDown", GLFW_KEY_PAGE_DOWN},
+      {"Delete", GLFW_KEY_DELETE},        {"Backspace", GLFW_KEY_BACKSPACE},
+      {"Enter", GLFW_KEY_ENTER},          {"Tab", GLFW_KEY_TAB},
+      {"Escape", GLFW_KEY_ESCAPE},        {"Insert", GLFW_KEY_INSERT},
+      {"ContextMenu", GLFW_KEY_MENU},     {"CapsLock", GLFW_KEY_CAPS_LOCK},
+      {"Shift", GLFW_KEY_LEFT_SHIFT},     {"Control", GLFW_KEY_LEFT_CONTROL},
+      {"Alt", GLFW_KEY_LEFT_ALT},         {"Meta", GLFW_KEY_LEFT_SUPER},
+      {"Space", GLFW_KEY_SPACE},
+  };
+  auto it = kByName.find(name);
+  if (it != kByName.end()) {
+    *outKey = it->second;
+    return true;
+  }
+  if (name.size() == 1) {
+    const char c = name[0];
+    if (c >= 'a' && c <= 'z') { *outKey = GLFW_KEY_A + (c - 'a'); return true; }
+    if (c >= 'A' && c <= 'Z') { *outKey = GLFW_KEY_A + (c - 'A'); return true; }
+    if (c >= '0' && c <= '9') { *outKey = GLFW_KEY_0 + (c - '0'); return true; }
+  }
+  if (name.size() == 2 && name[0] == 'F') {
+    const int n = name[1] - '0';
+    if (n >= 1 && n <= 9) { *outKey = GLFW_KEY_F1 + (n - 1); return true; }
+  }
+  return false;
 }
 }  // namespace
 
@@ -334,6 +510,12 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   // API has no other channel. Only the flag is set here: see GlfwSurface.h on
   // why the GL work belongs to the frame loop.
   glfwSetWindowUserPointer(window_, this);
+  // desktop-input-gap P0 item 1. Ask X11/Win32 to fold Caps/Num Lock into the
+  // mods bitmask every key event carries (GLFW_MOD_CAPS_LOCK/NUM_LOCK),
+  // rather than the default of reporting only transient modifiers. Without
+  // this a real Caps Lock key produces a key event with capsLock=false no
+  // matter how the lock state sits, because GLFW_LOCK_KEY_MODS defaults OFF.
+  glfwSetInputMode(window_, GLFW_LOCK_KEY_MODS, GLFW_TRUE);
   glfwSetFramebufferSizeCallback(
       window_, [](GLFWwindow* w, int, int) {
         auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
@@ -455,32 +637,32 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   //
   // The CHAR callback carries a DECODED codepoint (layout- and dead-key-aware);
   // it is the only correct source of a typed character. Control keys never reach
-  // it, which is why Backspace/Enter go through the KEY callback below.
+  // it, which is why they go through the KEY callback below.
   glfwSetCharCallback(window_, [](GLFWwindow* w, unsigned int codepoint) {
     auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
     if (!self || !self->charHandler_) return;
     self->charHandler_(codepoint);
   });
-  // The KEY callback delivers Backspace and Enter -- not characters, so absent
-  // from the char callback. GLFW_PRESS and GLFW_REPEAT both act (holding
-  // Backspace should keep deleting); GLFW_RELEASE is ignored so one keypress is
-  // one edit. GLFW_KEY_* is translated to the neutral EditKey enum HERE -- the
-  // only place <GLFW/glfw3.h> is in scope -- so the host never sees a GLFW code.
-  // Non-editing keys are dropped at this boundary, never forwarded.
-  glfwSetKeyCallback(window_, [](GLFWwindow* w, int key, int /*scancode*/,
+  // desktop-input-gap P0 item 1. THE KEY CALLBACK NOW FORWARDS EVERY KEY.
+  //
+  // ⛔ WHAT THIS REPLACES. Until now this callback dropped GLFW_RELEASE
+  // outright, recognised only GLFW_KEY_BACKSPACE/ENTER/KP_ENTER, ignored
+  // every other key entirely, and read mods for Shift only. An
+  // ArrowLeft/Tab/Escape/Ctrl+A/etc. keypress produced NOTHING: no callback
+  // ran, no line printed, no event reached JS. That is invisible to
+  // ci-textedit.sh (which only ever sends Backspace/Enter/characters) and to
+  // every mouse/scroll/hover gate, so it shipped unnoticed the same way the
+  // absent mouse-button registration once did (see the P9 note on
+  // setMouseButtonHandler above).
+  //
+  // The full translation lives in dispatchKeyEvent (below), shared with
+  // synthesiseKey() so a synthetic gate exercises the identical table a real
+  // keypress does. This callback's only job is handing GLFW's raw ints to it.
+  glfwSetKeyCallback(window_, [](GLFWwindow* w, int key, int scancode,
                                  int action, int mods) {
     auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
-    if (!self || !self->keyHandler_) return;
-    if (action == GLFW_RELEASE) return;
-    EditKey ek;
-    if (key == GLFW_KEY_BACKSPACE) {
-      ek = EditKey::Backspace;
-    } else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
-      ek = EditKey::Enter;
-    } else {
-      return;  // not an editing control key
-    }
-    self->keyHandler_(ek, (mods & GLFW_MOD_SHIFT) != 0);
+    if (!self) return;
+    self->dispatchKeyEvent(key, scancode, action, mods);
   });
 
   // ENG-09 hover/cursor. The three standard cursors, created ONCE (not per
@@ -680,6 +862,71 @@ void GlfwSurface::setCharHandler(std::function<void(unsigned int)> handler) {
 void GlfwSurface::setKeyHandler(
     std::function<void(EditKey, bool)> handler) {
   keyHandler_ = std::move(handler);
+}
+void GlfwSurface::setFullKeyHandler(
+    std::function<void(const KeyEvent&)> handler) {
+  fullKeyHandler_ = std::move(handler);
+}
+
+// desktop-input-gap P0 item 1. THE ONE PLACE A GLFW KEY TUPLE BECOMES A
+// KeyEvent, shared by the real glfwSetKeyCallback and synthesiseKey() below
+// -- exactly the discipline dispatchCursorPoint/dispatchScrollPoint already
+// use for clicks and scroll, so a synthetic gate exercises the identical
+// table a real keypress does rather than a parallel copy that could drift.
+void GlfwSurface::dispatchKeyEvent(int key, int scancode, int action,
+                                   int mods) {
+  std::string w3cKey, w3cCode;
+  if (!TranslateGlfwKey(key, scancode, &w3cKey, &w3cCode)) return;
+
+  KeyEvent ev;
+  ev.key = w3cKey;
+  ev.code = w3cCode;
+  ev.phase = action == GLFW_RELEASE ? KeyPhase::Up
+            : action == GLFW_REPEAT ? KeyPhase::Repeat
+                                     : KeyPhase::Down;
+  ev.shift = (mods & GLFW_MOD_SHIFT) != 0;
+  ev.ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+  ev.alt = (mods & GLFW_MOD_ALT) != 0;
+  ev.meta = (mods & GLFW_MOD_SUPER) != 0;
+  ev.capsLock = (mods & GLFW_MOD_CAPS_LOCK) != 0;
+  ev.scancode = scancode;
+
+  if (fullKeyHandler_) fullKeyHandler_(ev);
+
+  // Backward-compatible editing path: Backspace/Enter on Down/Repeat only,
+  // BYTE-IDENTICAL to the pre-existing behaviour (release was never an edit,
+  // and no other key was ever forwarded here) so ci-textedit.sh needs no
+  // changes and stays the regression guard for this exact path.
+  if (keyHandler_ && ev.phase != KeyPhase::Up) {
+    if (key == GLFW_KEY_BACKSPACE) {
+      keyHandler_(EditKey::Backspace, ev.shift);
+    } else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
+      keyHandler_(EditKey::Enter, ev.shift);
+    }
+  }
+}
+
+// Synthesises a key event by W3C name through the SAME dispatchKeyEvent the
+// real callback uses, converting the neutral KeyMods into the GLFW_MOD_*
+// bitmask HERE -- the only place outside dispatchKeyEvent itself that is
+// allowed to know the bit values -- so main.cpp's CLI test hooks never name
+// a GLFW symbol, matching the encapsulation the rest of this class keeps.
+bool GlfwSurface::synthesiseKey(const std::string& key, KeyPhase phase,
+                                const KeyMods& mods) {
+  int glfwKey = 0;
+  if (!GlfwKeyFromName(key, &glfwKey)) return false;
+  int glfwMods = 0;
+  if (mods.shift) glfwMods |= GLFW_MOD_SHIFT;
+  if (mods.ctrl) glfwMods |= GLFW_MOD_CONTROL;
+  if (mods.alt) glfwMods |= GLFW_MOD_ALT;
+  if (mods.meta) glfwMods |= GLFW_MOD_SUPER;
+  if (mods.capsLock) glfwMods |= GLFW_MOD_CAPS_LOCK;
+  const int action = phase == KeyPhase::Up ? GLFW_RELEASE
+                    : phase == KeyPhase::Repeat ? GLFW_REPEAT
+                                                 : GLFW_PRESS;
+  const int scancode = glfwGetKeyScancode(glfwKey);
+  dispatchKeyEvent(glfwKey, scancode, action, glfwMods);
+  return true;
 }
 
 // ENG-09 hover/cursor. The one place a hover's screen->points conversion

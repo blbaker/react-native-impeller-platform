@@ -32,6 +32,17 @@ const SHIM_TARGETS = {
   // shims/Alert.impeller.js for the full note; this is a distinct failure from
   // the self-resolving RCTAlertManager.js stub below, and BOTH had to be fixed.
   'react-native/Libraries/Alert/Alert.js': 'Alert.impeller.js',
+  // desktop-input-gap P0 item 1. Bare BaseViewConfig.js is ALSO covered by
+  // the PLATFORM_FORKED ios-stub redirect below (it is a genuine ios-stub-
+  // disease file, unrelated to this entry), but SHIM_TARGETS is consulted
+  // FIRST in shimForResolvedPath -- see below -- so this entry wins and the
+  // PLATFORM_FORKED one is inert for this specifier. Kept that way
+  // deliberately (not removed from PLATFORM_FORKED) so it stays the ios-stub-
+  // disease REFERENCE case the P2 gate's mutation suite targets, and this
+  // shim is additive on top of it (see shims/BaseViewConfig.impeller.js for
+  // why): the ios-stub-disease fix is still exactly what runs underneath.
+  'react-native/Libraries/NativeComponent/BaseViewConfig.js':
+    'BaseViewConfig.impeller.js',
 };
 
 // ---------------------------------------------------------------------------

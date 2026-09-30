@@ -826,4 +826,95 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint) {
   return (int)tag;
 }
 
+// desktop-input-gap P0 item 1. Full keyboard forwarding to JS -- see the
+// header for the two-channel design (TextInput onKeyPress + a generic
+// keyDown/keyUp dispatchEvent) and why RN 0.86's C++ BaseViewEventEmitter
+// cannot carry a real onKeyDown method.
+int FabricHost::dispatchKeyEvent(const std::string& key,
+                                 const std::string& code, KeyEventPhase phase,
+                                 const KeyModifiers& mods) {
+  if (!sceneGraph_ || !runtimeScheduler_) return 0;
+  // Focused field first; fall back to the surface root so a key event
+  // always has SOMEWHERE to land rather than being silently swallowed the
+  // instant nothing has focus -- the ask explicitly requires this fallback.
+  react::Tag target = sceneGraph_->focusedTextInput();
+  if (target == 0) target = sceneGraph_->rootTag();
+  if (target == 0) return 0;
+
+  auto emitter = sceneGraph_->eventEmitterFor(target);
+  if (!emitter) return 0;
+
+  // (a) TextInput onKeyPress. Down/Repeat only -- onKeyPress has no release
+  // concept in RN core (see RN's KeyPressMetrics: text + eventCount, no
+  // phase). Only fires when the target IS a focused TextInput; the root
+  // fallback above is a base EventEmitter and this cast simply fails for it,
+  // exactly the "there but cannot receive this event" discrimination every
+  // other dispatch path in this file already makes.
+  //
+  // `text` mirrors RN's OWN keyPressMetricsPayload derivation exactly
+  // (TextInputEventEmitter.cpp: empty->"Backspace", "\n"->"Enter",
+  // "\t"->"Tab", "\x1B"->"Escape", else passed through) so the emitter's
+  // built-in logic reproduces our W3C `key` string byte for byte instead of
+  // this file guessing at RN's internal convention a second time.
+  if (phase != KeyEventPhase::Up) {
+    if (auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
+            emitter)) {
+      std::string text;
+      if (key == "Backspace") {
+        text = "";
+      } else if (key == "Enter") {
+        text = "\n";
+      } else if (key == "Tab") {
+        text = "\t";
+      } else if (key == "Escape") {
+        text = "\x1B";
+      } else {
+        text = key;
+      }
+      react::TextInputEventEmitter::KeyPressMetrics kpm{};
+      kpm.text = text;
+      kpm.eventCount = ++tiEventCount_;
+      runtimeScheduler_->scheduleWork(
+          [te, kpm](facebook::jsi::Runtime&) { te->onKeyPress(kpm); });
+    }
+  }
+
+  // (b) Generic keyDown/keyUp, delivered to WHATEVER is at `target` --
+  // TextInput or plain View alike -- via the base EventEmitter::dispatchEvent
+  // every emitter inherits. `dispatchEvent("keyDown", ...)` normalises
+  // through EventEmitter::normalizeEventType's "no on/top prefix -> add top"
+  // rule to "topKeyDown"/"topKeyUp", matching the bubbling registration this
+  // commit adds to the view-config shim (package/src/metro-shims -- see
+  // PLATFORM_FORKED's BaseViewConfig.ios.js redirect) so a plain <View
+  // onKeyDown>/<View onKeyUp> receives it. Payload shape follows
+  // react-native-windows: key, code, altKey, ctrlKey, metaKey, shiftKey,
+  // plus capsLockKey and repeat (neither fork's payload carries these, but
+  // the gap doc's ask requires them).
+  const std::string eventName = phase == KeyEventPhase::Up ? "keyUp" : "keyDown";
+  const bool repeat = phase == KeyEventPhase::Repeat;
+  runtimeScheduler_->scheduleWork(
+      [emitter, eventName, key, code, mods, repeat](facebook::jsi::Runtime&) {
+        emitter->dispatchEvent(
+            eventName,
+            [key, code, mods, repeat](facebook::jsi::Runtime& runtime) {
+              auto payload = facebook::jsi::Object(runtime);
+              payload.setProperty(
+                  runtime, "key",
+                  facebook::jsi::String::createFromUtf8(runtime, key));
+              payload.setProperty(
+                  runtime, "code",
+                  facebook::jsi::String::createFromUtf8(runtime, code));
+              payload.setProperty(runtime, "shiftKey", mods.shift);
+              payload.setProperty(runtime, "ctrlKey", mods.ctrl);
+              payload.setProperty(runtime, "altKey", mods.alt);
+              payload.setProperty(runtime, "metaKey", mods.meta);
+              payload.setProperty(runtime, "capsLockKey", mods.capsLock);
+              payload.setProperty(runtime, "repeat", repeat);
+              return facebook::jsi::Value(std::move(payload));
+            });
+      });
+
+  return (int)target;
+}
+
 }  // namespace rni

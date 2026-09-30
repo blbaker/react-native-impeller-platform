@@ -163,6 +163,32 @@ class FabricHost {
   // --type harness to settle the mount before the first focus. See the .cpp.
   bool isTextInputAt(float x, float y);
 
+  // desktop-input-gap P0 item 1. Full keyboard forwarding to JS, delivered
+  // to the focused tag (falling back to the surface root when nothing is
+  // focused, so the event has somewhere to land) via TWO channels:
+  //   (a) if the focused tag is a TextInput, TextInputEventEmitter::onKeyPress
+  //       (RN 0.86 core; KeyPressMetrics) on Down/Repeat -- NOT on Up, which
+  //       onKeyPress has no concept of.
+  //   (b) EventEmitter::dispatchEvent(name, payload) with a generic
+  //       'keyDown'/'keyUp' event on EVERY key (focused TextInput or not),
+  //       because RN 0.86's C++ BaseViewEventEmitter has no onKeyDown/onKeyUp
+  //       method at all -- see docs/eng/desktop-input-gap.md. Payload shape
+  //       follows react-native-windows: key, code, altKey, ctrlKey, metaKey,
+  //       shiftKey (+ capsLockKey, repeat, which neither fork's payload
+  //       carries but the gap doc's ask requires).
+  // Returns the tag the event was delivered to (focused tag or root), or 0 if
+  // nothing has mounted at all.
+  struct KeyModifiers {
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};
+    bool capsLock{false};
+  };
+  enum class KeyEventPhase { Down, Repeat, Up };
+  int dispatchKeyEvent(const std::string& key, const std::string& code,
+                       KeyEventPhase phase, const KeyModifiers& mods);
+
   // The component names this host can actually mount. Handed to ReactHost so
   // RN's NativeComponentRegistry and this registry cannot drift apart.
   static std::vector<std::string> knownComponentNames();

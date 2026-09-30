@@ -131,7 +131,7 @@ do. `TextInputEventEmitter::onKeyPress` already exists in core.
 
 P0 (blocks basic use on every OS):
 
-1. A: full key events + modifiers, `onKeyDown/onKeyUp` on View, TextInput `onKeyPress`
+1. A: full key events + modifiers, `onKeyDown/onKeyUp` on View, TextInput `onKeyPress` -- **LANDED** on feat/desktop-input (gate `tools/ci-key-events.sh`, mutants `tools/mutation-verify-key-events.sh` M1-M4)
 2. B: caret, click-to-caret, forward Delete, **UTF-8 input** (drop the ASCII filter)
 3. B/C: selection in TextInput (ENG-11) + highlight
 4. E: Clipboard module + Cut/Copy/Paste keys, Cmd on macOS, Ctrl elsewhere
