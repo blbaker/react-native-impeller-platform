@@ -30,6 +30,12 @@ Legend: **Host** = our `GlfwSurface` / `FabricHost` / `ReactHost`.
 | Keyboard scroll: arrows, PageUp/Down, Home/End scroll the focused ScrollView | rn-windows `ScrollViewComponentView` handles Up/Down/Left/Right/PageUp/PageDown/Home/End | wheel only | Host |
 | Ctrl vs Cmd: shortcuts use Cmd on macOS, Ctrl on Windows/Linux | platform convention | n/a yet | Host |
 
+Note: RN 0.86's C++ `BaseViewEventEmitter` has no `onKeyDown`/`onKeyUp`
+(only focus, blur, layout, a11y), even though the JS `ViewPropTypes` declares
+them. View key events need a generic `dispatchEvent("keyDown", ...)` plus the
+`topKeyDown`/`topKeyUp` bubbling registration in the view config, as both forks
+do. `TextInputEventEmitter::onKeyPress` already exists in core.
+
 ## B. TextInput editing
 
 | Item | Ref | Impeller today | Where |
