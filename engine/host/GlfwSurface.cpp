@@ -929,6 +929,16 @@ bool GlfwSurface::synthesiseKey(const std::string& key, KeyPhase phase,
   return true;
 }
 
+// desktop-input-gap item 2a. Synthesises a character event with NO GLFW
+// translation at all -- charHandler_ already takes a decoded codepoint, so
+// this is a direct call, the same "identical path, zero parallel logic"
+// discipline synthesiseKey keeps for dispatchKeyEvent.
+bool GlfwSurface::synthesiseChar(unsigned int codepoint) {
+  if (!charHandler_) return false;
+  charHandler_(codepoint);
+  return true;
+}
+
 // ENG-09 hover/cursor. The one place a hover's screen->points conversion
 // happens; see the header. Applies the cursor shape the handler resolved so
 // the shape decision rides with the hit test rather than being recomputed.

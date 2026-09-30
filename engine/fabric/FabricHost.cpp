@@ -160,6 +160,187 @@ class ImpellerEventBeat : public react::EventBeat {
   mutable std::atomic<bool> isInduceScheduled_{false};
 };
 
+// desktop-input-gap item 2a. Caret + UTF-8 helpers.
+//
+// ⛔ EVERY CALLER LANDS THE CARET ONLY THROUGH THESE FUNCTIONS, NEVER A BARE
+// +/-1. The edit buffer is UTF-8 (variable-width); a caret held as a byte
+// offset that is not on a codepoint boundary would split a multi-byte
+// sequence the next time it is used to substr/insert/erase, corrupting the
+// buffer into invalid UTF-8 (exactly M3 in the mutation suite).
+
+// True if `c` is a UTF-8 continuation byte (10xxxxxx).
+bool IsUtf8Continuation(unsigned char c) { return (c & 0xC0) == 0x80; }
+
+// The byte offset of the codepoint boundary immediately BEFORE `pos` (`pos`
+// must itself be a boundary; 0 returns 0). MoveLeft/Backspace.
+size_t Utf8PrevBoundary(const std::string& s, size_t pos) {
+  if (pos == 0) return 0;
+  size_t i = pos - 1;
+  while (i > 0 && IsUtf8Continuation((unsigned char)s[i])) --i;
+  return i;
+}
+
+// The byte offset of the codepoint boundary immediately AFTER `pos` (`pos`
+// must itself be a boundary; s.size() returns s.size()). MoveRight/
+// DeleteForward.
+size_t Utf8NextBoundary(const std::string& s, size_t pos) {
+  if (pos >= s.size()) return s.size();
+  size_t i = pos + 1;
+  while (i < s.size() && IsUtf8Continuation((unsigned char)s[i])) ++i;
+  return i;
+}
+
+// Encodes one Unicode scalar value as UTF-8 and appends it to `out`, or
+// returns false and leaves `out` untouched. Rejects control bytes (< 0x20,
+// == 0x7F -- a control byte here would corrupt the buffer and paint a tofu
+// box, same reasoning the old ASCII-only filter had), UTF-16 surrogate
+// halves (0xD800-0xDFFF: not valid Unicode SCALAR values, only valid as one
+// half of a UTF-16 pair -- a caller decoding a JS string one UTF-16 unit at
+// a time must never forward a lone surrogate here), and anything past the
+// Unicode range. Every other codepoint >= 0x20 is accepted, unlike the old
+// InsertChar which silently dropped everything outside 0x20..0x7E.
+bool Utf8EncodeAppend(std::string* out, unsigned int cp) {
+  if (cp < 0x20 || cp == 0x7F) return false;
+  if (cp >= 0xD800 && cp <= 0xDFFF) return false;
+  if (cp > 0x10FFFF) return false;
+  if (cp <= 0x7F) {
+    out->push_back((char)cp);
+  } else if (cp <= 0x7FF) {
+    out->push_back((char)(0xC0 | (cp >> 6)));
+    out->push_back((char)(0x80 | (cp & 0x3F)));
+  } else if (cp <= 0xFFFF) {
+    out->push_back((char)(0xE0 | (cp >> 12)));
+    out->push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+    out->push_back((char)(0x80 | (cp & 0x3F)));
+  } else {
+    out->push_back((char)(0xF0 | (cp >> 18)));
+    out->push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+    out->push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+    out->push_back((char)(0x80 | (cp & 0x3F)));
+  }
+  return true;
+}
+
+// Decodes the codepoint starting at byte offset `i` (must be a boundary),
+// for the word-move scan below, which needs to classify codepoints as
+// whitespace without splitting a multi-byte sequence. A malformed/truncated
+// sequence decodes as U+FFFD and advances by one byte, so a bad byte can
+// never hang the scan.
+unsigned int Utf8DecodeAt(const std::string& s, size_t i, size_t* outLen) {
+  unsigned char c0 = (unsigned char)s[i];
+  if (c0 < 0x80) {
+    *outLen = 1;
+    return c0;
+  }
+  size_t len = (c0 & 0xE0) == 0xC0   ? 2
+             : (c0 & 0xF0) == 0xE0   ? 3
+             : (c0 & 0xF8) == 0xF0   ? 4
+                                     : 0;
+  if (len == 0 || i + len > s.size()) {
+    *outLen = 1;
+    return 0xFFFD;
+  }
+  unsigned int cp = c0 & (0xFFu >> (len + 1));
+  for (size_t k = 1; k < len; ++k) {
+    unsigned char c = (unsigned char)s[i + k];
+    if (!IsUtf8Continuation(c)) {
+      *outLen = 1;
+      return 0xFFFD;
+    }
+    cp = (cp << 6) | (c & 0x3F);
+  }
+  *outLen = len;
+  return cp;
+}
+
+bool IsWordBreakSpace(unsigned int cp) { return cp == ' ' || cp == '\t'; }
+
+// Word-left: skip whitespace immediately before the caret, then skip the
+// word itself, landing at its start. Word-right: skip the word under/after
+// the caret, then skip trailing whitespace, landing at the start of the
+// NEXT word (or end of buffer). Deliberately simple (ASCII whitespace only)
+// -- item 2a asks for caret movement, not full Unicode word-segmentation
+// (UAX #29).
+size_t Utf8WordLeft(const std::string& s, size_t pos) {
+  size_t i = pos;
+  while (i > 0) {
+    size_t prev = Utf8PrevBoundary(s, i);
+    size_t len;
+    unsigned int cp = Utf8DecodeAt(s, prev, &len);
+    if (!IsWordBreakSpace(cp)) break;
+    i = prev;
+  }
+  while (i > 0) {
+    size_t prev = Utf8PrevBoundary(s, i);
+    size_t len;
+    unsigned int cp = Utf8DecodeAt(s, prev, &len);
+    if (IsWordBreakSpace(cp)) break;
+    i = prev;
+  }
+  return i;
+}
+
+size_t Utf8WordRight(const std::string& s, size_t pos) {
+  size_t i = pos;
+  while (i < s.size()) {
+    size_t len;
+    unsigned int cp = Utf8DecodeAt(s, i, &len);
+    if (IsWordBreakSpace(cp)) break;
+    i += len;
+  }
+  while (i < s.size()) {
+    size_t len;
+    unsigned int cp = Utf8DecodeAt(s, i, &len);
+    if (!IsWordBreakSpace(cp)) break;
+    i += len;
+  }
+  return i;
+}
+
+// UTF-8 byte offset -> UTF-16 code unit count, the units RN's selection event
+// expects (TextInputEventEmitter::Metrics::selectionRange mirrors iOS
+// NSString / Android jchar, both UTF-16). A codepoint above U+FFFF is a
+// surrogate PAIR (2 units, e.g. an emoji); everything else is 1 unit,
+// regardless of its UTF-8 byte length -- so e-acute (2 UTF-8 bytes) counts
+// as 1 unit and an emoji (4 UTF-8 bytes) counts as 2.
+size_t Utf8OffsetToUtf16Units(const std::string& s, size_t byteOffset) {
+  size_t units = 0;
+  size_t i = 0;
+  while (i < byteOffset && i < s.size()) {
+    size_t len;
+    unsigned int cp = Utf8DecodeAt(s, i, &len);
+    units += (cp > 0xFFFF) ? 2 : 1;
+    i += len;
+  }
+  return units;
+}
+
+// Escapes control bytes for the `rn-impeller: caret ...` log line so a
+// newline/tab embedded in the buffer can never split the machine-readable
+// line a gate greps. Multi-byte UTF-8 sequences pass through RAW (not
+// escaped) so a gate can grep for the literal UTF-8 bytes of e.g. the emoji
+// it typed.
+std::string EscapeForLog(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (unsigned char c : s) {
+    if (c == '\n') {
+      out += "\\n";
+    } else if (c == '\t') {
+      out += "\\t";
+    } else if (c == '\r') {
+      out += "\\r";
+    } else if (c < 0x20 || c == 0x7F) {
+      char buf[8];
+      std::snprintf(buf, sizeof(buf), "\\x%02x", c);
+      out += buf;
+    } else {
+      out.push_back((char)c);
+    }
+  }
+  return out;
+}
+
 }  // namespace
 
 std::vector<std::string> FabricHost::knownComponentNames() {
@@ -763,77 +944,141 @@ bool FabricHost::isTextInputAt(float x, float y) {
       emitter);
 }
 
-// <TextInput>. ENG-01b. One editing keystroke.
+// <TextInput>. ENG-01b + item 2a. One editing keystroke OR caret move.
 //
-// ⛔ TWO EFFECTS, BOTH REQUIRED (the same rule as dispatchScroll):
-//   1. The SceneGraph edit buffer changes, so the next paint shows the new
-//      glyphs and the caret at the new index.
-//   2. onChange fires in JS carrying the new text, so a controlled field's
-//      onChangeText runs and React state (the len=/v= label) updates.
+// ⛔ THREE EFFECTS, EACH INDEPENDENTLY OBSERVABLE (extends dispatchScroll's
+// two-effect rule):
+//   1. The SceneGraph edit buffer/caret changes, so the next paint shows the
+//      new glyphs AND the caret at its new index -- painted by a prefix-width
+//      measurement (SceneGraph.cpp), not pinned to end-of-text.
+//   2. onSelectionChange fires with a COLLAPSED {start,end} in UTF-16 CODE
+//      UNITS (RN convention: TextInputEventEmitter::Metrics::selectionRange
+//      mirrors iOS NSString / Android jchar, not UTF-8 bytes) for EVERY
+//      action here that reaches a focused field -- including a pure caret
+//      move that never touches the buffer (Left/Right/word/Home/End), since
+//      the caret moved even though the text did not.
+//   3. onChange fires ONLY when the text ACTUALLY changed (Insert/Backspace/
+//      DeleteForward). A pure caret move must never fire onChange -- there is
+//      no text delta, and firing it anyway would make a cursor move look like
+//      an edit to JS.
 // Effect (1) alone types beautifully into a field JS never hears about;
-// effect (2) alone reports text that is not on screen. Enter is the exception:
-// it emits onSubmitEditing and does NOT alter the buffer.
+// effect (3) alone reports text that is not on screen. Enter is the
+// exception: it emits onSubmitEditing and touches neither buffer nor caret.
+//
+// ⛔ ONE EDITING PATH PER KEY -- see the header. MoveLeft/Right/Word*/Home/
+// End/DeleteForward are reached ONLY from dispatchKeyEvent's caret-routing
+// branch below (ArrowLeft/Right/Home/End/Delete); Backspace/Submit/Newline
+// stay reachable ONLY from the legacy GlfwSurface::keyHandler_ path
+// (main.cpp's setKeyHandler, Backspace/Enter). The two sets of W3C key names
+// are disjoint, so a single physical keystroke can never reach this function
+// twice for the same press.
 int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint) {
   if (!sceneGraph_ || !runtimeScheduler_) return 0;
   react::Tag tag = sceneGraph_->focusedTextInput();
   if (tag == 0) return 0;
-  std::string value = sceneGraph_->textInputValueFor(tag);
-  size_t caret = value.size();  // caret tracked at end (single-line append/erase)
-
-  bool submit = false;
-  switch (action) {
-    case KeyAction::InsertChar:
-      // Single-line ASCII: printable range only. A control byte here would
-      // corrupt the buffer and paint a tofu box.
-      if (codepoint >= 0x20 && codepoint < 0x7F) {
-        value.push_back((char)codepoint);
-        caret = value.size();
-      }
-      break;
-    case KeyAction::Backspace:
-      if (!value.empty()) {
-        value.pop_back();
-        caret = value.size();
-      }
-      break;
-    case KeyAction::Submit:
-      submit = true;
-      break;
-    case KeyAction::Newline:
-      // Single-line field: a bare Enter submits rather than inserting. The
-      // multiline path (Shift+Enter) is a later arm; called out, not silently
-      // swallowed.
-      submit = true;
-      break;
-  }
 
   auto emitter = sceneGraph_->eventEmitterFor(tag);
   auto te =
       std::dynamic_pointer_cast<const react::TextInputEventEmitter>(emitter);
   if (!te) return 0;
 
-  if (submit) {
+  if (action == KeyAction::Submit || action == KeyAction::Newline) {
+    // Single-line field: a bare Enter (or Shift+Enter, routed the same until
+    // a real multiline buffer exists) submits rather than inserting or
+    // moving. Buffer and caret are untouched.
     react::TextInputEventEmitter::Metrics m{};
-    m.text = value;
+    m.text = sceneGraph_->textInputValueFor(tag);
     m.eventCount = ++tiEventCount_;
     runtimeScheduler_->scheduleWork(
         [te, m](facebook::jsi::Runtime&) { te->onSubmitEditing(m); });
     return (int)tag;
   }
 
+  std::string value = sceneGraph_->textInputValueFor(tag);
+  size_t caret = sceneGraph_->textInputCaretFor(tag);
+  if (caret > value.size()) caret = value.size();  // defensive clamp
+
+  bool textChanged = false;
+  switch (action) {
+    case KeyAction::InsertChar: {
+      // Any Unicode scalar value >= 0x20 except 0x7F (DEL) and surrogate
+      // halves -- see Utf8EncodeAppend's header. Inserted AT THE CARET, not
+      // appended at the end.
+      std::string encoded;
+      if (Utf8EncodeAppend(&encoded, codepoint)) {
+        value.insert(caret, encoded);
+        caret += encoded.size();
+        textChanged = true;
+      }
+      break;
+    }
+    case KeyAction::Backspace: {
+      // Deletes ONE WHOLE CODEPOINT before the caret, never a single byte --
+      // popping a byte off a multi-byte sequence (the pre-item-2a behaviour)
+      // corrupts the buffer into invalid UTF-8.
+      if (caret > 0) {
+        size_t prev = Utf8PrevBoundary(value, caret);
+        value.erase(prev, caret - prev);
+        caret = prev;
+        textChanged = true;
+      }
+      break;
+    }
+    case KeyAction::DeleteForward: {
+      if (caret < value.size()) {
+        size_t next = Utf8NextBoundary(value, caret);
+        value.erase(caret, next - caret);
+        textChanged = true;
+      }
+      break;
+    }
+    case KeyAction::MoveLeft:
+      caret = Utf8PrevBoundary(value, caret);
+      break;
+    case KeyAction::MoveRight:
+      caret = Utf8NextBoundary(value, caret);
+      break;
+    case KeyAction::MoveWordLeft:
+      caret = Utf8WordLeft(value, caret);
+      break;
+    case KeyAction::MoveWordRight:
+      caret = Utf8WordRight(value, caret);
+      break;
+    case KeyAction::MoveHome:
+      caret = 0;
+      break;
+    case KeyAction::MoveEnd:
+      caret = value.size();
+      break;
+    case KeyAction::Submit:
+    case KeyAction::Newline:
+      break;  // handled above; unreachable here
+  }
+
   // Apply to the paint buffer first so a paint scheduled by the JS re-render
-  // below never briefly shows the pre-edit string.
+  // below never briefly shows the pre-edit string or the caret at its old
+  // index. setTextInputEdit clamps caret to value.size() defensively too.
   sceneGraph_->setTextInputEdit(tag, value, caret);
+  printf("rn-impeller: caret tag=%d pos=%zu text=%s\n", (int)tag, caret,
+         EscapeForLog(value).c_str());
+  fflush(stdout);
 
   react::TextInputEventEmitter::Metrics m{};
   m.text = value;
   m.eventCount = ++tiEventCount_;
-  runtimeScheduler_->scheduleWork([te, m](facebook::jsi::Runtime&) {
+  // UTF-16 code units, per RN's own selectionRange convention -- NOT the
+  // UTF-8 byte offset the engine stores internally.
+  const int caretUnits = (int)Utf8OffsetToUtf16Units(value, caret);
+  m.selectionRange.location = caretUnits;
+  m.selectionRange.length = 0;  // collapsed: caret only, no selection (2a)
+  runtimeScheduler_->scheduleWork([te, m, textChanged](facebook::jsi::Runtime&) {
     // onChange is what RN's TextInput.js turns into onChangeText(text): its
-    // _onChange reads nativeEvent.text and calls props.onChangeText. Firing
-    // onChange alone drives a controlled field; onChangeText is not a separate
-    // native event.
-    te->onChange(m);
+    // _onChange reads nativeEvent.text and calls props.onChangeText. Fired
+    // ONLY when the text changed -- see the header's effect (3).
+    if (textChanged) te->onChange(m);
+    // onSelectionChange fires unconditionally: the caret moved (or stayed,
+    // for a no-op edit at a buffer edge) either way.
+    te->onSelectionChange(m);
   });
   return (int)tag;
 }
@@ -855,6 +1100,57 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
 
   auto emitter = sceneGraph_->eventEmitterFor(target);
   if (!emitter) return 0;
+
+  // desktop-input-gap item 2a. Caret navigation + forward Delete, routed
+  // through dispatchKey -- the ONE editing path for these keys (see its
+  // header). Down/Repeat only, the same discipline the legacy Backspace/
+  // Enter handler uses (GlfwSurface.cpp's `ev.phase != KeyPhase::Up`), so a
+  // held arrow key repeats the move and a release does nothing. Only reached
+  // when a TextInput is ACTUALLY focused -- `target` above may have fallen
+  // back to the surface root, which must never receive a caret move.
+  //
+  // Word move: Alt+Arrow on darwin (__APPLE__), Ctrl+Arrow elsewhere --
+  // matching the platform convention neither fork's own keyboard shortcuts
+  // deviate from (macOS reserves Ctrl+Arrow for Mission Control/Spaces).
+  // Line start/end: Home/End on every platform, PLUS Cmd(meta)+Left/Right on
+  // darwin (there is no Linux/Windows convention for meta+Left/Right moving
+  // the caret, so it is intentionally NOT wired there and falls through to a
+  // plain character move).
+  if (sceneGraph_->focusedTextInput() != 0 && phase != KeyEventPhase::Up) {
+#if defined(__APPLE__)
+    const bool wordMod = mods.alt;
+#else
+    const bool wordMod = mods.ctrl;
+#endif
+    KeyAction caretAction = KeyAction::MoveLeft;
+    bool isCaretKey = true;
+    if (key == "ArrowLeft") {
+#if defined(__APPLE__)
+      caretAction = mods.meta        ? KeyAction::MoveHome
+                  : wordMod          ? KeyAction::MoveWordLeft
+                                     : KeyAction::MoveLeft;
+#else
+      caretAction = wordMod ? KeyAction::MoveWordLeft : KeyAction::MoveLeft;
+#endif
+    } else if (key == "ArrowRight") {
+#if defined(__APPLE__)
+      caretAction = mods.meta        ? KeyAction::MoveEnd
+                  : wordMod          ? KeyAction::MoveWordRight
+                                     : KeyAction::MoveRight;
+#else
+      caretAction = wordMod ? KeyAction::MoveWordRight : KeyAction::MoveRight;
+#endif
+    } else if (key == "Home") {
+      caretAction = KeyAction::MoveHome;
+    } else if (key == "End") {
+      caretAction = KeyAction::MoveEnd;
+    } else if (key == "Delete") {
+      caretAction = KeyAction::DeleteForward;
+    } else {
+      isCaretKey = false;
+    }
+    if (isCaretKey) dispatchKey(caretAction, 0);
+  }
 
   // (a) TextInput onKeyPress. Down/Repeat only -- onKeyPress has no release
   // concept in RN core (see RN's KeyPressMetrics: text + eventCount, no

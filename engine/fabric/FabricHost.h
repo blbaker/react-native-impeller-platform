@@ -147,13 +147,36 @@ class FabricHost {
   // seeds the edit buffer from the field's value and schedules onFocus.
   int focusTextInputAt(float x, float y);
 
-  // A single editing keystroke, applied to the focused field's buffer. `phase`
-  // is one of the KeyAction values below; for InsertChar, `codepoint` is the
-  // ASCII character to insert at the caret. Returns the focused tag the edit
-  // was applied to, or 0 if nothing is focused. Mutates the SceneGraph edit
-  // buffer AND schedules the matching JS event (onChange/onChangeText on an
-  // edit, onSubmitEditing on Enter) so the pixels and the JS state agree.
-  enum class KeyAction { InsertChar, Backspace, Submit, Newline };
+  // A single editing keystroke, applied to the focused field's buffer AT THE
+  // PERSISTED CARET (SceneGraph::textInputCaretFor), not always at the end --
+  // item 2a. `codepoint` is a full Unicode scalar value for InsertChar
+  // (encoded to UTF-8 here; see FabricHost.cpp's Utf8Encode), ignored by
+  // every other action. Returns the focused tag the edit/move was applied
+  // to, or 0 if nothing is focused. Mutates the SceneGraph edit buffer (for
+  // the actions that change it) and the caret (every action), then schedules
+  // onSelectionChange (every action that reaches the field) and onChange
+  // (only when the text actually changed) so the pixels and the JS state
+  // agree.
+  //
+  // ⛔ ONE EDITING PATH. MoveLeft/Right/Word*/Home/End/DeleteForward are
+  // reached ONLY from FabricHost::dispatchKeyEvent (the full key path) --
+  // see its header. Backspace/Submit/Newline stay reachable ONLY from the
+  // LEGACY GlfwSurface::keyHandler_ path (main.cpp's setKeyHandler), which
+  // dispatchKeyEvent's editing branch deliberately does NOT re-handle, so a
+  // single physical keystroke can never mutate the buffer twice.
+  enum class KeyAction {
+    InsertChar,
+    Backspace,
+    Submit,
+    Newline,
+    MoveLeft,
+    MoveRight,
+    MoveWordLeft,
+    MoveWordRight,
+    MoveHome,
+    MoveEnd,
+    DeleteForward,
+  };
   int dispatchKey(KeyAction action, unsigned int codepoint);
 
   // True when a field is focused, so the windowed host knows whether to route a

@@ -1423,10 +1423,14 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       if (paragraph != nullptr) {
         ImpellerPoint at = {x + pad, ty};
         ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
-        // The caret sits after the edit buffer up to the caret index. When the
-        // caret is at end (the common case: typing appends), the paragraph's
-        // max intrinsic width is the advance to place it at. Placeholder text
-        // is not editable, so no caret offset is taken from it.
+        // item 2a: the caret is painted at its CURRENT index, not always at
+        // end-of-text. A paragraph built from the UTF-8 prefix up to
+        // tiCaret_ (which FabricHost::dispatchKey always keeps on a
+        // codepoint boundary) gives the exact advance to place the bar at --
+        // this is the SAME measurement typing-at-end used before item 2a,
+        // just no longer assuming the caret is always the whole string.
+        // Placeholder text is not editable, so no caret offset is taken from
+        // it.
         if (focused && !showPlaceholder) {
           const std::string upto = tiEditValue_.substr(0, tiCaret_);
           if (!upto.empty()) {

@@ -242,6 +242,18 @@ class GlfwSurface {
   bool synthesiseKey(const std::string& key, KeyPhase phase,
                      const KeyMods& mods);
 
+  // desktop-input-gap item 2a. Synthesises a CHARACTER event -- a decoded
+  // Unicode codepoint -- through the exact charHandler_ callback a real
+  // glfwSetCharCallback delivers, for gates typing non-ASCII (e-acute,
+  // emoji) where XTest cannot easily synthesise the raw keysym. Unlike
+  // synthesiseKey there is no reverse GLFW table to consult: GLFW's char
+  // callback is already keyed by codepoint, so this calls charHandler_
+  // directly with no translation at all. Same caveat as synthesiseKey: NOT
+  // proof glfwSetCharCallback is registered, only that InsertChar's codepoint
+  // handling + the dispatch plumbing downstream of it are correct. Returns
+  // false if no char handler is installed.
+  bool synthesiseChar(unsigned int codepoint);
+
   // The effective layout scale, kept in sync by the host on every resize so the
   // cursor conversion cannot drift from the painter's root transform. Set from
   // the SAME DeriveWindowPointScale result the layout uses; see the host's
