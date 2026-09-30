@@ -912,15 +912,42 @@ int FabricHost::focusTextInputAt(float x, float y) {
     sceneGraph_->clearTextInputFocus();
     return 0;
   }
-  sceneGraph_->setTextInputFocus(target);
+  // item 3: clicking the field that ALREADY has focus must not re-seed the
+  // edit buffer from the controlled value (that would drop uncommitted typing
+  // on an uncontrolled field) and must not re-fire onFocus. It only moves the
+  // caret.
+  const bool alreadyFocused = (sceneGraph_->focusedTextInput() == target);
+  if (!alreadyFocused) sceneGraph_->setTextInputFocus(target);
   auto emitter = sceneGraph_->eventEmitterFor(target);
-  if (auto te = std::dynamic_pointer_cast<
-          const react::TextInputEventEmitter>(emitter)) {
+  auto te =
+      std::dynamic_pointer_cast<const react::TextInputEventEmitter>(emitter);
+  if (te && !alreadyFocused) {
     react::TextInputEventEmitter::Metrics m{};
     m.text = sceneGraph_->textInputValueFor(target);
     m.eventCount = ++tiEventCount_;
     runtimeScheduler_->scheduleWork(
         [te, m](facebook::jsi::Runtime&) { te->onFocus(m); });
+  }
+  // item 3: click-to-caret. The caret goes to the codepoint boundary nearest
+  // the click x, measured by SceneGraph with the painter's own text layout.
+  // Before item 3 a click always left the caret at END (setTextInputFocus's
+  // seed) no matter where in the text the user clicked.
+  const std::string value = sceneGraph_->textInputValueFor(target);
+  const size_t caret = sceneGraph_->caretIndexForClick(target, x, y);
+  sceneGraph_->setTextInputEdit(target, value, caret);
+  const std::string report = sceneGraph_->glyphBoundaryReportFor(target);
+  if (!report.empty()) printf("%s\n", report.c_str());
+  printf("rn-impeller: caret tag=%d pos=%zu text=%s\n", (int)target, caret,
+         EscapeForLog(value).c_str());
+  fflush(stdout);
+  if (te) {
+    react::TextInputEventEmitter::Metrics m{};
+    m.text = value;
+    m.eventCount = ++tiEventCount_;
+    m.selectionRange.location = (int)Utf8OffsetToUtf16Units(value, caret);
+    m.selectionRange.length = 0;
+    runtimeScheduler_->scheduleWork(
+        [te, m](facebook::jsi::Runtime&) { te->onSelectionChange(m); });
   }
   return (int)target;
 }

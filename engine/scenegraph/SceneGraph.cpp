@@ -35,6 +35,13 @@
 #include <functional>
 #include <variant>
 
+namespace {
+// <TextInput> text inset from the field's left edge, in layout points. Used by
+// paintNode (glyphs + caret) AND glyphBoundariesLocked (click-to-caret, item
+// 3). One constant so the two cannot drift.
+constexpr float kTextInputPad = 4.0f;
+}  // namespace
+
 namespace rni {
 
 namespace react = facebook::react;
@@ -1404,7 +1411,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     const float lineH = node.fontSize * 1.2f;
     const float ty = y + (h - lineH) * 0.5f;
     // A small left inset so the glyphs (and caret) do not sit on the border.
-    const float pad = 4.0f;
+    // Shared with glyphBoundariesLocked (item 3 click-to-caret): a click and
+    // the painted text must agree on where the text starts.
+    const float pad = kTextInputPad;
     float caretX = x + pad;
     if (!drawStr.empty()) {
       ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
@@ -2745,6 +2754,106 @@ void SceneGraph::clearTextInputFocus() {
 facebook::react::Tag SceneGraph::focusedTextInput() {
   std::lock_guard<std::mutex> lock(mutex_);
   return tiFocused_;
+}
+
+// desktop-input-gap item 3: click-to-caret.
+bool SceneGraph::absoluteOriginLocked(facebook::react::Tag tag, float* ox,
+                                      float* oy) {
+  float x = 0.0f, y = 0.0f;
+  facebook::react::Tag cur = tag;
+  bool self = true;
+  for (int guard = 0; cur != 0 && guard < 4096; ++guard) {
+    auto it = nodes_.find(cur);
+    if (it == nodes_.end()) return false;
+    const SceneNode& n = it->second;
+    // hitTestNode shifts a ScrollView's CHILDREN by -scroll; the ScrollView
+    // itself is not shifted. So subtract only for ancestors, never for self.
+    if (!self && n.isScrollView) {
+      x -= n.scrollX;
+      y -= n.scrollY;
+    }
+    x += (float)n.layoutMetrics.frame.origin.x;
+    y += (float)n.layoutMetrics.frame.origin.y;
+    self = false;
+    if (n.parent == cur) break;
+    cur = n.parent;
+  }
+  *ox = x;
+  *oy = y;
+  return true;
+}
+
+bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
+                                       std::vector<size_t>* offsets,
+                                       std::vector<float>* xs) {
+  offsets->clear();
+  xs->clear();
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end() || !it->second.isTextInput || typography_ == nullptr)
+    return false;
+  const SceneNode& node = it->second;
+  float ox = 0.0f, oy = 0.0f;
+  if (!absoluteOriginLocked(tag, &ox, &oy)) return false;
+  const std::string shown = (tiFocused_ == tag) ? tiEditValue_ : node.tiValue;
+  const float textX = ox + kTextInputPad;
+  // Boundary 0 is the text start. Then one boundary after every codepoint
+  // (a UTF-8 lead byte is any byte that is not 10xxxxxx).
+  offsets->push_back(0);
+  xs->push_back(textX);
+  ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
+  ImpellerParagraphStyleSetFontSize(style, node.fontSize);
+  for (size_t i = 1; i <= shown.size(); ++i) {
+    if (i < shown.size() && (((unsigned char)shown[i]) & 0xC0) == 0x80) continue;
+    ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
+    ImpellerParagraphBuilderPushStyle(pb, style);
+    ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shown.data(), i);
+    ImpellerParagraph par = ImpellerParagraphBuilderBuildParagraphNew(pb, 1e6f);
+    float wpx = 0.0f;
+    if (par != nullptr) {
+      wpx = ImpellerParagraphGetMaxIntrinsicWidth(par);
+      ImpellerParagraphRelease(par);
+    }
+    ImpellerParagraphBuilderRelease(pb);
+    offsets->push_back(i);
+    xs->push_back(textX + wpx);
+  }
+  ImpellerParagraphStyleRelease(style);
+  return true;
+}
+
+size_t SceneGraph::caretIndexForClick(facebook::react::Tag tag, float screenX,
+                                      float /*screenY*/) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<size_t> offsets;
+  std::vector<float> xs;
+  if (!glyphBoundariesLocked(tag, &offsets, &xs) || offsets.empty()) return 0;
+  // Nearest boundary: a click on the left half of a glyph lands before it,
+  // on the right half after it. Past-end clamps to the end, before-start to 0.
+  size_t best = 0;
+  float bestD = std::fabs(screenX - xs[0]);
+  for (size_t i = 1; i < xs.size(); ++i) {
+    const float d = std::fabs(screenX - xs[i]);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return offsets[best];
+}
+
+std::string SceneGraph::glyphBoundaryReportFor(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<size_t> offsets;
+  std::vector<float> xs;
+  if (!glyphBoundariesLocked(tag, &offsets, &xs)) return std::string();
+  std::string out = "rn-impeller: ti_glyph_x tag=" + std::to_string((int)tag) +
+                    " xs=";
+  char buf[32];
+  for (size_t i = 0; i < xs.size(); ++i) {
+    snprintf(buf, sizeof(buf), "%s%.2f", i ? "," : "", xs[i]);
+    out += buf;
+  }
+  return out;
 }
 
 std::string SceneGraph::textInputValueFor(facebook::react::Tag tag) {

@@ -145,6 +145,9 @@ class FabricHost {
   // <TextInput>. ENG-01b. Focus the field under (x, y) in POINTS, or blur if
   // the point is over no TextInput. Returns the focused tag, or 0. Focusing
   // seeds the edit buffer from the field's value and schedules onFocus.
+  // item 3: the caret goes to the glyph boundary nearest x (click-to-caret),
+  // onSelectionChange fires, and clicking the already-focused field only
+  // moves the caret (no re-seed, no second onFocus).
   int focusTextInputAt(float x, float y);
 
   // A single editing keystroke, applied to the focused field's buffer AT THE

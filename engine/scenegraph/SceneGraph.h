@@ -495,12 +495,49 @@ class SceneGraph {
   // that the buffer changed -- a buffer that grows while the caret stays at 0
   // is a real editing bug the value-only check cannot see.
   size_t textInputCaretFor(facebook::react::Tag tag);
+
+  // desktop-input-gap item 3. Click-to-caret: the UTF-8 BYTE OFFSET of the
+  // codepoint boundary nearest (screenX, screenY) inside `tag`'s displayed
+  // text (the live edit buffer if focused, else its controlled tiValue).
+  // Uses the EXACT SAME prefix-width paragraph measurement paintNode's caret
+  // branch already performs to place the painted bar -- see
+  // glyphBoundariesFor's header -- so a click and the caret it produces can
+  // never disagree about where a boundary sits. (screenX, screenY) are in the
+  // SAME coordinate space hitTest/paintNode use (layout points; identical to
+  // screen pixels on a 1x host with no --scale override -- see
+  // host/PointScale.h). `y` is currently unused (single-line fields only; a
+  // future multiline field would use it to pick the line first).
+  //
+  // Returns 0 when `tag` is not a text field, has no typography context, or
+  // its displayed text is empty -- 0 is the only sensible caret for an empty
+  // field, matching setTextInputFocus's own seed for that case.
+  size_t caretIndexForClick(facebook::react::Tag tag, float screenX,
+                            float screenY);
+
+  // desktop-input-gap item 3 debug/gate hook. One
+  // `rn-impeller: ti_glyph_x tag=<t> xs=<x0>,<x1>,...` line giving the SCREEN
+  // x (see caretIndexForClick's coordinate-space note) of EVERY codepoint
+  // boundary in `tag`'s displayed text -- so a gate can aim a REAL XTest
+  // click at the midpoint between two boundaries instead of guessing font
+  // metrics. Empty string if `tag` is not a text field with displayed text.
+  std::string glyphBoundaryReportFor(facebook::react::Tag tag);
   // One `paragraph_text tag=<t> "<text>"` line per Paragraph node, for the
   // ENG-01b edit gate: the fixture's controlled label renders `len=N v=...`, so
   // this exposes the JS re-render result to a headless assertion.
   std::string paragraphTextReport();
 
  private:
+  // item 3. Codepoint-boundary byte offsets of `tag`'s displayed text and the
+  // SCREEN x (layout points) of each, measured with the SAME prefix-width
+  // paragraph build paintNode uses for the caret. Caller holds mutex_.
+  // Returns false when `tag` is not a text field or typography is missing.
+  bool glyphBoundariesLocked(facebook::react::Tag tag,
+                             std::vector<size_t>* offsets,
+                             std::vector<float>* xs);
+  // item 3. Absolute origin of `tag`, walked exactly as hitTestNode does
+  // (sum of frame origins, minus each ScrollView ancestor's scroll offset).
+  // Caller holds mutex_.
+  bool absoluteOriginLocked(facebook::react::Tag tag, float* ox, float* oy);
   // Returns the hit tag, or 0. `originX/originY` accumulate exactly as in
   // paintNode: frames are PARENT-RELATIVE, so absolute position is the running
   // sum down the tree, never the node's own frame alone.
