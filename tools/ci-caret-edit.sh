@@ -89,10 +89,13 @@ cd "$ROOT"
 WIN_W=400
 WIN_H=300
 # Field 1 (defaultValue "abcdef"): marginTop:20 marginLeft:20, 300x36.
-F1_XY="40,38"
+# Clicks land at x=300, PAST the end of the text: since item 3
+# (click-to-caret) a click puts the caret at the nearest glyph boundary, so
+# only a past-the-end click still starts every arm with the caret at END.
+F1_XY="300,38"
 # Field 2 (defaultValue "abc def", word-move arm): marginTop:20 BELOW field 1
 # (margins stack in a column: 20+36+20 = y 76..112), marginLeft:20.
-F2_XY="40,94"
+F2_XY="300,94"
 
 assert_scene_mounted() {  # $1 = log path
   local nodes
@@ -215,7 +218,14 @@ run_win "$LOG_C" 60 \
 # fullKeyHandler_ AND the legacy keyHandler_ (both installed on the same
 # GLFW callback; see GlfwSurface::dispatchKeyEvent). So the synthetic hook
 # exercises Backspace correctly even though editing-Backspace is legacy.
-C_POS_AFTER_EACUTE="$(sed -n 's/^rn-impeller: caret tag=[0-9-]* pos=\([0-9]*\) .*/\1/p' "$LOG_C" | sed -n '1p')"
+# Since item 3 the focusing CLICK also prints a caret line and fires
+# onSelectionChange (past-end click -> pos 6, selection {6,6}), so the typed
+# edits are the 2nd and 3rd entries. Assert the click's entry explicitly so a
+# shifted sequence cannot pass by accident.
+C_POS_CLICK="$(sed -n 's/^rn-impeller: caret tag=[0-9-]* pos=\([0-9]*\) .*/\1/p' "$LOG_C" | sed -n '1p')"
+[ "$C_POS_CLICK" = "6" ] \
+  || fail "C: the focusing click (past the end of 'abcdef') should put the caret at 6; got $C_POS_CLICK"
+C_POS_AFTER_EACUTE="$(sed -n 's/^rn-impeller: caret tag=[0-9-]* pos=\([0-9]*\) .*/\1/p' "$LOG_C" | sed -n '2p')"
 [ "$C_POS_AFTER_EACUTE" = "8" ] \
   || { tail -50 "$LOG_C" | sed 's/^/   /' >&2; fail "C: after typing e-acute (2 UTF-8 bytes) onto 'abcdef' (6 bytes) caret should be at UTF-8 byte offset 8; got $C_POS_AFTER_EACUTE"; }
 CHANGE_EACUTE="$(change1_nth "$LOG_C" 1)"
@@ -234,10 +244,10 @@ want = b"abcdef\xc3\xa9\xf0\x9f\x98\x80"
 sys.exit(0 if got == want else 1)
 ' "$CHANGE_EMOJI" \
   || fail "C: onChangeText after typing the emoji should be 'abcdef'+e-acute's 2 bytes + the emoji's 4 UTF-8 bytes; got '$CHANGE_EMOJI' -- either the emoji codepoint was rejected (ASCII-only filter regression) or it was mangled"
-C_SEL1_S="$(sed -n 's/^\[js\] ONSEL1 start=\([0-9-]*\) end=[0-9-]*$/\1/p' "$LOG_C" | sed -n '1p')"
+C_SEL1_S="$(sed -n 's/^\[js\] ONSEL1 start=\([0-9-]*\) end=[0-9-]*$/\1/p' "$LOG_C" | sed -n '2p')"
 [ "$C_SEL1_S" = "7" ] \
   || fail "C: selection after e-acute should be UTF-16 offset 7 (6 ASCII + 1 BMP unit); got $C_SEL1_S"
-C_SEL2_S="$(sed -n 's/^\[js\] ONSEL1 start=\([0-9-]*\) end=[0-9-]*$/\1/p' "$LOG_C" | sed -n '2p')"
+C_SEL2_S="$(sed -n 's/^\[js\] ONSEL1 start=\([0-9-]*\) end=[0-9-]*$/\1/p' "$LOG_C" | sed -n '3p')"
 [ "$C_SEL2_S" = "9" ] \
   || fail "C: selection after the emoji should be UTF-16 offset 9 (7 + 2 surrogate units for the astral codepoint); got $C_SEL2_S -- selection is not being converted UTF-8 bytes -> UTF-16 units correctly"
 # Backspace: removes the emoji WHOLE (4 UTF-8 bytes), not one byte.
@@ -277,8 +287,8 @@ D_POS="$(caret_pos "$LOG_D")"
 echo "   OK: word-left from end of 'abc def' -> caret 4"
 
 echo "== E. pixel: caret painted LEFT of its end-of-text column after Left x3 =="
-# Field 1 fresh-focuses to caret=END every run (SceneGraph::setTextInputFocus
-# seeds tiCaret_ = value.size()). ONE run captures BOTH a --screenshot-first
+# Field 1 fresh-focuses to caret=END every run (the click at F1_XY is past the
+# end of the text, so click-to-caret places the caret at value.size()). ONE run captures BOTH a --screenshot-first
 # (frame 1, BEFORE the click at frame 5 -- no focus, no caret at all) and a
 # timed --screenshot (after the click, caret at end, no moves): diffing these
 # two gives the TRUE end-of-text caret column, since the caret is the ONLY
