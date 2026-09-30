@@ -1395,6 +1395,36 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           ImpellerParagraphBuilderBuildParagraphNew(pb, w > pad ? w - pad : 1e6f);
       if (paragraph != nullptr) {
         ImpellerPoint at = {x + pad, ty};
+        // item 4a: selection highlight, BEHIND the glyphs. The x-extent uses
+        // the same prefix-width measurement as the caret, so the highlight
+        // edges and the caret positions agree.
+        if (focused && !showPlaceholder && tiSelAnchor_ != tiCaret_) {
+          const size_t lo = std::min(tiSelAnchor_, tiCaret_);
+          const size_t hi = std::min(std::max(tiSelAnchor_, tiCaret_),
+                                     tiEditValue_.size());
+          auto prefixW = [&](size_t n) -> float {
+            if (n == 0) return 0.0f;
+            ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(typography_);
+            ImpellerParagraphBuilderPushStyle(sb, style);
+            ImpellerParagraphBuilderAddText(sb, (const uint8_t*)tiEditValue_.data(), n);
+            ImpellerParagraph sp = ImpellerParagraphBuilderBuildParagraphNew(sb, 1e6f);
+            float wv = 0.0f;
+            if (sp != nullptr) {
+              wv = ImpellerParagraphGetMaxIntrinsicWidth(sp);
+              ImpellerParagraphRelease(sp);
+            }
+            ImpellerParagraphBuilderRelease(sb);
+            return wv;
+          };
+          const float x0 = x + pad + prefixW(lo);
+          const float x1 = x + pad + prefixW(hi);
+          ImpellerPaint selPaint = ImpellerPaintNew();
+          ImpellerColor sc = impellerColor(node.tiSelectionColor, node.opacity);
+          ImpellerPaintSetColor(selPaint, &sc);
+          ImpellerRect selRect = {x0, ty, x1 - x0, lineH};
+          ImpellerDisplayListBuilderDrawRect(builder, &selRect, selPaint);
+          ImpellerPaintRelease(selPaint);
+        }
         ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
         // item 2a: the caret is painted at its CURRENT index, not always at
         // end-of-text. A paragraph built from the UTF-8 prefix up to
@@ -1433,7 +1463,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // the last caret reset (focus/click/keystroke) -- see CaretBlink.h -- so a
     // burst of typing always re-shows it and a screenshot in an off phase is a
     // real off phase, not a missing caret.
-    if (focused) {
+    // item 4a: no caret while a non-empty selection is shown (macOS and
+    // Windows both hide it; the highlight marks the insertion range).
+    if (focused && tiSelAnchor_ == tiCaret_) {
       const long long msSinceReset =
           std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::steady_clock::now() - tiCaretResetAt_)

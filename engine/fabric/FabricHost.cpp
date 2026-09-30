@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "fabric/FabricHost.h"
 
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
@@ -987,7 +988,8 @@ bool FabricHost::isTextInputAt(float x, float y) {
 // (main.cpp's setKeyHandler, Backspace/Enter). The two sets of W3C key names
 // are disjoint, so a single physical keystroke can never reach this function
 // twice for the same press.
-int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint) {
+int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
+                            bool extendSelection) {
   if (!sceneGraph_ || !runtimeScheduler_) return 0;
   react::Tag tag = sceneGraph_->focusedTextInput();
   if (tag == 0) return 0;
@@ -1012,9 +1014,41 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint) {
   std::string value = sceneGraph_->textInputValueFor(tag);
   size_t caret = sceneGraph_->textInputCaretFor(tag);
   if (caret > value.size()) caret = value.size();  // defensive clamp
-
+  // item 4a: the selection's fixed end. anchor == caret means no selection.
+  size_t anchor = sceneGraph_->textInputSelectionAnchorFor(tag);
+  if (anchor > value.size()) anchor = value.size();
+  const size_t selLo = std::min(anchor, caret);
+  const size_t selHi = std::max(anchor, caret);
+  const bool hasSel = selLo != selHi;
+  const bool isMove =
+      action == KeyAction::MoveLeft || action == KeyAction::MoveRight ||
+      action == KeyAction::MoveWordLeft || action == KeyAction::MoveWordRight ||
+      action == KeyAction::MoveHome || action == KeyAction::MoveEnd;
+  // Editing with a selection first removes the selected range; the edit then
+  // happens at its start (typing replaces, Backspace/Delete delete only it).
   bool textChanged = false;
-  switch (action) {
+  bool consumed = false;
+  if (hasSel && (action == KeyAction::InsertChar ||
+                 action == KeyAction::Backspace ||
+                 action == KeyAction::DeleteForward)) {
+    value.erase(selLo, selHi - selLo);
+    caret = selLo;
+    textChanged = true;
+    consumed = action != KeyAction::InsertChar;
+  }
+  // A plain (unshifted) Left/Right with a selection collapses it to its
+  // near edge instead of moving one more step (macOS + Windows behaviour).
+  if (hasSel && !extendSelection &&
+      (action == KeyAction::MoveLeft || action == KeyAction::MoveRight)) {
+    caret = action == KeyAction::MoveLeft ? selLo : selHi;
+    consumed = true;
+  }
+  if (action == KeyAction::SelectAll) {
+    anchor = 0;
+    caret = value.size();
+    consumed = true;
+  }
+  if (!consumed) switch (action) {
     case KeyAction::InsertChar: {
       // Any Unicode scalar value >= 0x20 except 0x7F (DEL) and surrogate
       // halves -- see Utf8EncodeAppend's header. Inserted AT THE CARET, not
@@ -1067,15 +1101,28 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint) {
       break;
     case KeyAction::Submit:
     case KeyAction::Newline:
+    case KeyAction::SelectAll:
       break;  // handled above; unreachable here
   }
 
+  // item 4a: the anchor stays put only for a Shift+move and for SelectAll;
+  // every other action collapses the selection onto the new caret.
+  const bool keepAnchor =
+      (isMove && extendSelection) || action == KeyAction::SelectAll;
+  if (!keepAnchor) anchor = caret;
+
   // Apply to the paint buffer first so a paint scheduled by the JS re-render
   // below never briefly shows the pre-edit string or the caret at its old
-  // index. setTextInputEdit clamps caret to value.size() defensively too.
-  sceneGraph_->setTextInputEdit(tag, value, caret);
+  // index. Both setters clamp to value.size() defensively too.
+  if (anchor == caret) {
+    sceneGraph_->setTextInputEdit(tag, value, caret);
+  } else {
+    sceneGraph_->setTextInputSelection(tag, value, anchor, caret);
+  }
   printf("rn-impeller: caret tag=%d pos=%zu text=%s\n", (int)tag, caret,
          EscapeForLog(value).c_str());
+  printf("rn-impeller: selection tag=%d anchor=%zu caret=%zu\n", (int)tag,
+         anchor, caret);
   fflush(stdout);
 
   react::TextInputEventEmitter::Metrics m{};
@@ -1083,9 +1130,13 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint) {
   m.eventCount = ++tiEventCount_;
   // UTF-16 code units, per RN's own selectionRange convention -- NOT the
   // UTF-8 byte offset the engine stores internally.
-  const int caretUnits = (int)Utf8OffsetToUtf16Units(value, caret);
-  m.selectionRange.location = caretUnits;
-  m.selectionRange.length = 0;  // collapsed: caret only, no selection (2a)
+  // item 4a: ordered {start,end}; length 0 when collapsed.
+  const int loUnits =
+      (int)Utf8OffsetToUtf16Units(value, std::min(anchor, caret));
+  const int hiUnits =
+      (int)Utf8OffsetToUtf16Units(value, std::max(anchor, caret));
+  m.selectionRange.location = loUnits;
+  m.selectionRange.length = hiUnits - loUnits;
   runtimeScheduler_->scheduleWork([te, m, textChanged](facebook::jsi::Runtime&) {
     // onChange is what RN's TextInput.js turns into onChangeText(text): its
     // _onChange reads nativeEvent.text and calls props.onChangeText. Fired
@@ -1134,8 +1185,10 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
   if (sceneGraph_->focusedTextInput() != 0 && phase != KeyEventPhase::Up) {
 #if defined(__APPLE__)
     const bool wordMod = mods.alt;
+    const bool selectAllMod = mods.meta;
 #else
     const bool wordMod = mods.ctrl;
+    const bool selectAllMod = mods.ctrl;
 #endif
     KeyAction caretAction = KeyAction::MoveLeft;
     bool isCaretKey = true;
@@ -1161,10 +1214,14 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
       caretAction = KeyAction::MoveEnd;
     } else if (key == "Delete") {
       caretAction = KeyAction::DeleteForward;
+    } else if ((key == "a" || key == "A") && selectAllMod && !mods.alt) {
+      // item 4a: select all. Cmd+A on darwin, Ctrl+A elsewhere.
+      caretAction = KeyAction::SelectAll;
     } else {
       isCaretKey = false;
     }
-    if (isCaretKey) dispatchKey(caretAction, 0);
+    // item 4a: Shift extends the selection for caret moves.
+    if (isCaretKey) dispatchKey(caretAction, 0, mods.shift);
   }
 
   // (a) TextInput onKeyPress. Down/Repeat only -- onKeyPress has no release
