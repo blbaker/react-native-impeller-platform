@@ -148,7 +148,14 @@ class FabricHost {
   // item 3: the caret goes to the glyph boundary nearest x (click-to-caret),
   // onSelectionChange fires, and clicking the already-focused field only
   // moves the caret (no re-seed, no second onFocus).
-  int focusTextInputAt(float x, float y);
+  // item 4b: clickCount 2 selects the word, 3 the line; shift extends an
+  // existing selection on the focused field. Every press arms a drag.
+  int focusTextInputAt(float x, float y, int clickCount = 1,
+                       bool shift = false);
+  // item 4b: extend the selection while the button is held after a press in a
+  // TextInput. Returns true when the move was handled as a selection drag.
+  bool dragTextSelection(float x, float y);
+  void endTextSelectionDrag();
 
   // A single editing keystroke, applied to the focused field's buffer AT THE
   // PERSISTED CARET (SceneGraph::textInputCaretFor), not always at the end --
@@ -263,6 +270,11 @@ class FabricHost {
   // endTouchCapture to route Move/Up WITHOUT re-hit-testing, cleared on release.
   // Accessed only from the event thread (all callers are), same as hoveredTag_.
   int capturedTag_{0};
+  // item 4b: mouse text-selection drag state (0 = no drag).
+  int dragTag_{0};
+  int dragUnit_{1};
+  size_t dragAnchorLo_{0};
+  size_t dragAnchorHi_{0};
 
   // <TextInput>. ENG-01b. Monotonic native event counter. RN's TextInput.js
   // discards a native onChange whose eventCount is <= the last it saw, to drop

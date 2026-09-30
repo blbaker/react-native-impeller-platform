@@ -295,6 +295,21 @@ class GlfwSurface {
   // event; this hook covers the transition logic where there is no display.
   void synthesiseHover(double screenX, double screenY);
 
+  // item 4b. One synthetic mouse event through the SAME entry points the real
+  // callbacks use: op 0 = left press, 1 = left release (dispatchCursorPoint,
+  // so click counting and the Shift state apply), 2 = move
+  // (dispatchHoverPoint, so a move while pressed is a drag).
+  void synthesiseMouse(int op, double screenX, double screenY, bool shift);
+
+  // item 4b. State of the most recent left PRESS, valid inside the
+  // mouse-button handler. clickCount: 1 single, 2 double, 3 triple (keeps
+  // counting on further quick clicks). A press counts as the next click when
+  // it lands within kMultiClickMs and kMultiClickSlopPx of the previous
+  // press, the same rule macOS (NSEvent.doubleClickInterval) and Windows
+  // (GetDoubleClickTime / SM_CXDOUBLECLK) use with their default settings.
+  int lastClickCount() const { return clickCount_; }
+  bool lastPressShift() const { return pressShift_; }
+
   // ENG-09 hover/cursor. Synthesises the cursor LEAVING the window, entering
   // the same cursor-leave handler the real GLFW cursor-enter callback does.
   void synthesiseCursorLeave();
@@ -384,7 +399,8 @@ class GlfwSurface {
   // real GLFW mouse-button callback and synthesiseClick() both route through
   // it, so a gate driving a synthetic click exercises the same arithmetic a
   // human click does rather than a parallel copy of it.
-  void dispatchCursorPoint(double screenX, double screenY, bool down);
+  void dispatchCursorPoint(double screenX, double screenY, bool down,
+                           int glfwMods = 0);
 
   // <ScrollView>. ENG-02. Same role for scroll that dispatchCursorPoint plays
   // for clicks: the ONE place the screen->points conversion AND the GLFW sign
@@ -466,6 +482,14 @@ class GlfwSurface {
   // pointScale; kept here so the conversion happens once, at the callback,
   // rather than at every caller.
   float pointScale_{1.0f};
+  // item 4b: multi-click counting (see lastClickCount()).
+  static constexpr double kMultiClickMs = 500.0;
+  static constexpr double kMultiClickSlopPx = 4.0;
+  double lastPressMs_{-1e9};
+  double lastPressX_{0.0};
+  double lastPressY_{0.0};
+  int clickCount_{0};
+  bool pressShift_{false};
   // ⛔ REENTRANCY GUARD, AND IT IS NOT THEORETICAL.
   // Set by PaintScope around EVERY paint (see PaintScope above), not merely
   // while inside the refresh handler. The handler paints and presents; on

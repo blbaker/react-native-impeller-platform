@@ -281,6 +281,37 @@ size_t Utf8WordLeft(const std::string& s, size_t pos) {
   return i;
 }
 
+// item 4b: the word CONTAINING pos (double-click). A word is a maximal run
+// of non-space codepoints; clicking on a space selects that space run. pos is
+// a codepoint boundary; the codepoint AT pos decides (at the end of the text,
+// the codepoint before it).
+size_t Utf8WordStartAt(const std::string& s, size_t pos) {
+  if (s.empty()) return 0;
+  size_t probe = pos >= s.size() ? Utf8PrevBoundary(s, s.size()) : pos;
+  size_t len;
+  const bool space = IsWordBreakSpace(Utf8DecodeAt(s, probe, &len));
+  size_t i = probe;
+  while (i > 0) {
+    size_t prev = Utf8PrevBoundary(s, i);
+    if (IsWordBreakSpace(Utf8DecodeAt(s, prev, &len)) != space) break;
+    i = prev;
+  }
+  return i;
+}
+
+size_t Utf8WordEndAt(const std::string& s, size_t pos) {
+  if (s.empty()) return 0;
+  size_t probe = pos >= s.size() ? Utf8PrevBoundary(s, s.size()) : pos;
+  size_t len;
+  const bool space = IsWordBreakSpace(Utf8DecodeAt(s, probe, &len));
+  size_t i = probe;
+  while (i < s.size()) {
+    if (IsWordBreakSpace(Utf8DecodeAt(s, i, &len)) != space) break;
+    i = Utf8NextBoundary(s, i);
+  }
+  return i;
+}
+
 size_t Utf8WordRight(const std::string& s, size_t pos) {
   size_t i = pos;
   while (i < s.size()) {
@@ -887,7 +918,8 @@ int FabricHost::clearHover() {
 // separates a real editable field (registered descriptor -> concrete emitter)
 // from a plain View that merely happens to sit under the cursor. Same
 // discrimination discipline as dispatchTouch/dispatchHover.
-int FabricHost::focusTextInputAt(float x, float y) {
+int FabricHost::focusTextInputAt(float x, float y, int clickCount,
+                                 bool shift) {
   if (!sceneGraph_) return 0;
   react::Tag target = sceneGraph_->hitTest(x, y);
   bool isField = false;
@@ -911,6 +943,7 @@ int FabricHost::focusTextInputAt(float x, float y) {
       }
     }
     sceneGraph_->clearTextInputFocus();
+    dragTag_ = 0;
     return 0;
   }
   // item 3: clicking the field that ALREADY has focus must not re-seed the
@@ -934,8 +967,35 @@ int FabricHost::focusTextInputAt(float x, float y) {
   // Before item 3 a click always left the caret at END (setTextInputFocus's
   // seed) no matter where in the text the user clicked.
   const std::string value = sceneGraph_->textInputValueFor(target);
-  const size_t caret = sceneGraph_->caretIndexForClick(target, x, y);
-  sceneGraph_->setTextInputEdit(target, value, caret);
+  const size_t hitPos = sceneGraph_->caretIndexForClick(target, x, y);
+  // item 4b: mouse selection. clickCount 2 selects the word under the click,
+  // 3 (or more) the whole line (single-line field: all text). Shift+click on
+  // the already-focused field extends the selection from its anchor. Every
+  // press arms a drag: moves while the button is held extend from dragAnchor_.
+  size_t anchor = hitPos;
+  size_t caret = hitPos;
+  dragUnit_ = 1;
+  if (clickCount >= 3) {
+    anchor = 0;
+    caret = value.size();
+    dragUnit_ = 3;
+  } else if (clickCount == 2) {
+    anchor = Utf8WordStartAt(value, hitPos);
+    caret = Utf8WordEndAt(value, hitPos);
+    dragUnit_ = 2;
+  } else if (shift && alreadyFocused) {
+    anchor = sceneGraph_->textInputSelectionAnchorFor(target);
+  }
+  dragTag_ = target;
+  dragAnchorLo_ = std::min(anchor, caret);
+  dragAnchorHi_ = std::max(anchor, caret);
+  if (anchor == caret) {
+    sceneGraph_->setTextInputEdit(target, value, caret);
+  } else {
+    sceneGraph_->setTextInputSelection(target, value, anchor, caret);
+  }
+  printf("rn-impeller: selection tag=%d anchor=%zu caret=%zu clicks=%d\n",
+         (int)target, anchor, caret, clickCount);
   const std::string report = sceneGraph_->glyphBoundaryReportFor(target);
   if (!report.empty()) printf("%s\n", report.c_str());
   printf("rn-impeller: caret tag=%d pos=%zu text=%s\n", (int)target, caret,
@@ -945,13 +1005,77 @@ int FabricHost::focusTextInputAt(float x, float y) {
     react::TextInputEventEmitter::Metrics m{};
     m.text = value;
     m.eventCount = ++tiEventCount_;
-    m.selectionRange.location = (int)Utf8OffsetToUtf16Units(value, caret);
-    m.selectionRange.length = 0;
+    const int lo = (int)Utf8OffsetToUtf16Units(value, std::min(anchor, caret));
+    const int hi = (int)Utf8OffsetToUtf16Units(value, std::max(anchor, caret));
+    m.selectionRange.location = lo;
+    m.selectionRange.length = hi - lo;
     runtimeScheduler_->scheduleWork(
         [te, m](facebook::jsi::Runtime&) { te->onSelectionChange(m); });
   }
   return (int)target;
 }
+
+// item 4b. A cursor move while the left button is held after a press that
+// landed in a TextInput: extend the selection from the press's anchor, in the
+// unit the press chose (1 char, 2 word, 3 line). Returns true when it handled
+// the move (the caller skips hover dispatch).
+bool FabricHost::dragTextSelection(float x, float y) {
+  if (!sceneGraph_ || !runtimeScheduler_ || dragTag_ == 0) return false;
+  const react::Tag tag = (react::Tag)dragTag_;
+  if (sceneGraph_->focusedTextInput() != tag) {
+    dragTag_ = 0;
+    return false;
+  }
+  const std::string value = sceneGraph_->textInputValueFor(tag);
+  const size_t hitPos = sceneGraph_->caretIndexForClick(tag, x, y);
+  size_t anchor = dragAnchorLo_;
+  size_t caret = hitPos;
+  if (dragUnit_ >= 3) {
+    anchor = 0;
+    caret = value.size();
+  } else if (dragUnit_ == 2) {
+    // Word drag: grow by whole words, keeping the originally clicked word.
+    if (hitPos < dragAnchorLo_) {
+      anchor = dragAnchorHi_;
+      caret = Utf8WordStartAt(value, hitPos);
+    } else {
+      anchor = dragAnchorLo_;
+      caret = std::max(dragAnchorHi_, Utf8WordEndAt(value, hitPos));
+    }
+  } else if (hitPos < dragAnchorLo_) {
+    anchor = dragAnchorHi_;
+  }
+  if (anchor > value.size()) anchor = value.size();
+  if (caret > value.size()) caret = value.size();
+  if (anchor == sceneGraph_->textInputSelectionAnchorFor(tag) &&
+      caret == sceneGraph_->textInputCaretFor(tag)) {
+    return true;  // no change: stay quiet, one line per real change
+  }
+  if (anchor == caret) {
+    sceneGraph_->setTextInputEdit(tag, value, caret);
+  } else {
+    sceneGraph_->setTextInputSelection(tag, value, anchor, caret);
+  }
+  printf("rn-impeller: selection tag=%d anchor=%zu caret=%zu drag=1\n",
+         (int)tag, anchor, caret);
+  fflush(stdout);
+  auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
+      sceneGraph_->eventEmitterFor(tag));
+  if (te) {
+    react::TextInputEventEmitter::Metrics m{};
+    m.text = value;
+    m.eventCount = ++tiEventCount_;
+    const int lo = (int)Utf8OffsetToUtf16Units(value, std::min(anchor, caret));
+    const int hi = (int)Utf8OffsetToUtf16Units(value, std::max(anchor, caret));
+    m.selectionRange.location = lo;
+    m.selectionRange.length = hi - lo;
+    runtimeScheduler_->scheduleWork(
+        [te, m](facebook::jsi::Runtime&) { te->onSelectionChange(m); });
+  }
+  return true;
+}
+
+void FabricHost::endTextSelectionDrag() { dragTag_ = 0; }
 
 bool FabricHost::hasTextInputFocus() {
   return sceneGraph_ && sceneGraph_->focusedTextInput() != 0;
