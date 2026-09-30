@@ -140,7 +140,7 @@ echo "== c. click at 1, Shift+click at 4 =="
 run_win "$WORK/c.log" 60 --mouse-after-frames \
   "8:down@${B1[1]},$F1_Y;up@${B1[1]},$F1_Y;sdown@${B1[4]},$F1_Y;up@${B1[4]},$F1_Y"
 [ "$(sel_line "$WORK/c.log")" = "anchor=1 caret=4" ] \
-  || { dump "$WORK/c.log"; fail "c: Shift+click at 4 after a click at 1 should select {1,4}; got '$(sel_line "$WORK/c.log")' -- Shift+click does not extend"; }
+  || { dump "$WORK/c.log"; fail "c: Shift+click at 4 after a click at 1 should select {1,4}; got '$(sel_line "$WORK/c.log")' -- Shift+click does not extend, or the distant second press was counted as a double click"; }
 echo "   OK: {1,4}"
 
 echo "== d. double click inside 'def' =="
