@@ -298,6 +298,15 @@ struct KeySpec {
        capsLock = false;
 };
 
+// desktop-input-gap item 2a. One synthetic CHARACTER (decoded Unicode
+// codepoint), consumed one-per-frame the same way KeySpec is -- see
+// --char-after-frames's flag-parser comment for the wire format. File-scope
+// for the same reason KeySpec is: RunWindowed (RNI_WITH_WINDOW only) and
+// main()'s flag parser (built unconditionally) both need the type.
+struct CharSpec {
+  unsigned int codepoint = 0;
+};
+
 #if RNI_WITH_WINDOW
 // The windowed repaint loop.
 //
@@ -329,6 +338,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 const std::vector<std::pair<double, double>>& hoverPoints,
                 bool hoverLeaveAtEnd,
                 int keyAfterFrames, const std::vector<KeySpec>& keySequence,
+                int charAfterFrames, const std::vector<CharSpec>& charSequence,
                 int supersampleRnsvg,
                 bool idleSkip, double idleRunSec, int idleBudgetMs,
                 bool idleLog, int idleMutant, int idleOffthreadAfter) {
@@ -895,6 +905,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
            frameIndex <= hoverAfterFrames + (int)hoverPoints.size()) ||
           (keyAfterFrames > 0 &&
            frameIndex <= keyAfterFrames + (int)keySequence.size()) ||
+          (charAfterFrames > 0 &&
+           frameIndex <= charAfterFrames + (int)charSequence.size()) ||
           (!screenshotFirstPath.empty() && !capturedFirst) ||
           (!screenshotPath.empty() && !capturedTimed);
       // A caret blink is a time-based clock nothing marks dirty: refuse the skip
@@ -1024,6 +1036,30 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                   "rn-impeller: FATAL: --key-after-frames key '%s' has no "
                   "known GLFW mapping\n",
                   ks.key.c_str());
+          return 1;
+        }
+        host.waitForJsIdle(5000);
+      }
+    }
+
+    // desktop-input-gap item 2a. SYNTHETIC-CHAR HOOK. One CharSpec consumed
+    // per frame starting at charAfterFrames -- same one-per-frame discipline
+    // as the key/hover sequences above, and the same "weaker evidence"
+    // caveat (GlfwSurface::synthesiseChar calls charHandler_ directly; it is
+    // NOT proof glfwSetCharCallback is registered -- that registration is
+    // already covered by ci-key-events.sh's real-XTest arm, whose Ctrl+A/
+    // Escape/Delete keys exercise the SAME callback-registration bug class).
+    if (charAfterFrames > 0 && frameIndex >= charAfterFrames &&
+        !charSequence.empty()) {
+      const size_t idx = (size_t)(frameIndex - charAfterFrames);
+      if (idx < charSequence.size()) {
+        const auto& cs = charSequence[idx];
+        printf("rn-impeller: char_requested cp=%u\n", cs.codepoint);
+        fflush(stdout);
+        if (!surface.synthesiseChar(cs.codepoint)) {
+          fprintf(stderr,
+                  "rn-impeller: FATAL: --char-after-frames: no char handler "
+                  "installed\n");
           return 1;
         }
         host.waitForJsIdle(5000);
@@ -1265,6 +1301,11 @@ int main(int argc, char** argv) {
   // "--key-after-frames N:KEY:PHASE[:MODS];..." syntax.
   int keyAfterFrames = 0;
   std::vector<KeySpec> keySequence;
+  // desktop-input-gap item 2a. Windowed synthetic-char test hook state
+  // (CharSpec is file-scope, above RunWindowed). See the flag parser below
+  // for the "--char-after-frames N:CP1;CP2;..." syntax.
+  int charAfterFrames = 0;
+  std::vector<CharSpec> charSequence;
   int width = 400, height = 300;
   // ⛔ WINDOWED DEFAULT IS THE DISPLAY, NOT THESE NUMBERS — SEE GlfwSurface::init.
   // 400x300 is the HEADLESS default and every headless gate depends on it byte
@@ -1630,6 +1671,63 @@ int main(int argc, char** argv) {
         return 2;
       }
     }
+    // desktop-input-gap item 2a. Windowed synthetic-char test hook:
+    // "--char-after-frames N:CP1;CP2;..." synthesises one CHARACTER event
+    // per segment, one per frame starting at frame N, through
+    // GlfwSurface::synthesiseChar -- the same charHandler_ a real
+    // glfwSetCharCallback delivers to. CP is a decimal codepoint or
+    // "U+XXXX" hex (e.g. "233" or "U+E9" for e-acute, "U+1F600" for an
+    // emoji) -- accepting hex makes a gate's intent legible (U+1F600 reads
+    // as "grinning face", 128512 does not) without adding a second field.
+    // Exists because XTest cannot easily synthesise a raw keysym for
+    // characters with no physical key on the host's layout (emoji, most
+    // accented letters), so a gate needs an in-process path to prove
+    // InsertChar's UTF-8 handling independent of key-event delivery.
+    else if (a == "--char-after-frames") {
+      std::string spec = next("--char-after-frames");
+      auto colon = spec.find(':');
+      if (colon == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --char-after-frames wants N:CP[;CP...] "
+                "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      charAfterFrames = atoi(spec.substr(0, colon).c_str());
+      if (charAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --char-after-frames needs N > 0 (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      std::string rest = spec.substr(colon + 1);
+      size_t pos = 0;
+      while (pos < rest.size()) {
+        size_t semi = rest.find(';', pos);
+        std::string seg = rest.substr(
+            pos, semi == std::string::npos ? std::string::npos : semi - pos);
+        if (!seg.empty()) {
+          CharSpec cs;
+          if (seg.size() > 2 && (seg[0] == 'U' || seg[0] == 'u') &&
+              seg[1] == '+') {
+            cs.codepoint =
+                (unsigned int)strtoul(seg.c_str() + 2, nullptr, 16);
+          } else {
+            cs.codepoint = (unsigned int)strtoul(seg.c_str(), nullptr, 10);
+          }
+          charSequence.push_back(cs);
+        }
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+      }
+      if (charSequence.empty()) {
+        fprintf(stderr,
+                "rn-impeller: --char-after-frames needs at least one CP "
+                "segment (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
@@ -1768,6 +1866,7 @@ int main(int argc, char** argv) {
                        scrollAfterFrames, scrollX, scrollY, scrollDx, scrollDy,
                        hoverAfterFrames, hoverPoints, hoverLeaveAtEnd,
                        keyAfterFrames, keySequence,
+                       charAfterFrames, charSequence,
                        supersampleRnsvg,
                        idleSkip, idleRunSec, idleBudgetMs, idleLog, idleMutant,
                        idleOffthreadAfter);
