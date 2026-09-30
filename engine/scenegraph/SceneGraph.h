@@ -420,6 +420,15 @@ class SceneGraph {
   size_t nodeCount();
   std::string describe();
 
+  // desktop-input-gap P0 item 1. The first mounted surface root tag, or 0 if
+  // nothing has mounted yet. Used as the keyDown/keyUp fallback target when
+  // no TextInput (or other view) is focused, so a key event has SOMEWHERE to
+  // land rather than being silently swallowed the instant nothing has focus
+  // -- the same "nothing focused is a no-op, but the event still exists"
+  // shape dispatchKey's TextInput path already draws, just for the case
+  // where there is no focus target at all.
+  facebook::react::Tag rootTag();
+
   // One `node_frame=<Component>,<tag>,<x>,<y>,<w>,<h>` line per node.
   //
   // This exists because PAINTED INK DOES NOT PROVE MEASUREMENT. A <Text> whose

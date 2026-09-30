@@ -2573,6 +2573,11 @@ size_t SceneGraph::nodeCount() {
   return nodes_.size();
 }
 
+facebook::react::Tag SceneGraph::rootTag() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return roots_.empty() ? 0 : roots_.front();
+}
+
 std::string SceneGraph::frameReport() {
   std::lock_guard<std::mutex> lock(mutex_);
   std::string out;

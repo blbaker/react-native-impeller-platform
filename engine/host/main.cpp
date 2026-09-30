@@ -288,6 +288,18 @@ int CountDistinctColors(const std::vector<rni::Px>& px) {
 
 }  // namespace
 
+// desktop-input-gap P0 item 1. Windowed keyboard test hook payload, shared
+// between main()'s --key-after-frames parser (built unconditionally) and
+// RunWindowed's consumer loop (RNI_WITH_WINDOW only). Defined OUTSIDE the
+// RNI_WITH_WINDOW guard below so main() can reference it on every platform,
+// including a headless-only build where RunWindowed does not exist at all.
+struct KeySpec {
+  std::string key;
+  int phase = 0;  // 0=down 1=repeat 2=up
+  bool shift = false, ctrl = false, alt = false, meta = false,
+       capsLock = false;
+};
+
 #if RNI_WITH_WINDOW
 // The windowed repaint loop.
 //
@@ -317,7 +329,9 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 double scrollDx, double scrollDy,
                 int hoverAfterFrames,
                 const std::vector<std::pair<double, double>>& hoverPoints,
-                bool hoverLeaveAtEnd, int supersampleRnsvg,
+                bool hoverLeaveAtEnd,
+                int keyAfterFrames, const std::vector<KeySpec>& keySequence,
+                int supersampleRnsvg,
                 bool idleSkip, double idleRunSec, int idleBudgetMs,
                 bool idleLog, int idleMutant, int idleOffthreadAfter) {
   (void)nodeReportOnly;
@@ -718,6 +732,42 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     fflush(stdout);
   });
 
+  // desktop-input-gap P0 item 1. FULL keyboard forwarding to JS: every key
+  // press/repeat/release, with modifiers, routed into
+  // FabricHost::dispatchKeyEvent (onKeyPress on the focused TextInput, plus
+  // a generic keyDown/keyUp on whatever is focused or the surface root).
+  // Installed ALONGSIDE the legacy char/key handlers above, not instead of
+  // them: those still own Backspace/Enter single-line editing byte for byte
+  // (ci-textedit.sh's regression guard), and the char callback stays the
+  // ONLY source of typed characters. This handler's printed line is the one
+  // machine-readable proof a gate needs that a key of ANY kind, not just
+  // Backspace/Enter, reached the host at all.
+  surface.setFullKeyHandler([&](const rni::GlfwSurface::KeyEvent& ev) {
+    rni::FabricHost::KeyModifiers mods;
+    mods.shift = ev.shift;
+    mods.ctrl = ev.ctrl;
+    mods.alt = ev.alt;
+    mods.meta = ev.meta;
+    mods.capsLock = ev.capsLock;
+    const rni::FabricHost::KeyEventPhase phase =
+        ev.phase == rni::GlfwSurface::KeyPhase::Up
+            ? rni::FabricHost::KeyEventPhase::Up
+        : ev.phase == rni::GlfwSurface::KeyPhase::Repeat
+            ? rni::FabricHost::KeyEventPhase::Repeat
+            : rni::FabricHost::KeyEventPhase::Down;
+    const int tag = fabric.dispatchKeyEvent(ev.key, ev.code, phase, mods);
+    const char* typeStr = ev.phase == rni::GlfwSurface::KeyPhase::Up ? "up"
+                         : ev.phase == rni::GlfwSurface::KeyPhase::Repeat
+                             ? "repeat"
+                             : "down";
+    printf(
+        "rn-impeller: key_event type=%s key=%s code=%s "
+        "mods=shift:%d,ctrl:%d,alt:%d,meta:%d,caps:%d scancode=%d tag=%d\n",
+        typeStr, ev.key.c_str(), ev.code.c_str(), (int)ev.shift, (int)ev.ctrl,
+        (int)ev.alt, (int)ev.meta, (int)ev.capsLock, ev.scancode, tag);
+    fflush(stdout);
+  });
+
   // Reads the framebuffer and writes a PPM. Shared by the frame-0 and the
   // timed capture so the two images are produced by literally the same code
   // path -- if they differed in how they were read back, a difference between
@@ -882,6 +932,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
           (scrollAfterFrames > 0 && frameIndex <= scrollAfterFrames) ||
           (hoverAfterFrames > 0 &&
            frameIndex <= hoverAfterFrames + (int)hoverPoints.size()) ||
+          (keyAfterFrames > 0 &&
+           frameIndex <= keyAfterFrames + (int)keySequence.size()) ||
           (!screenshotFirstPath.empty() && !capturedFirst) ||
           (!screenshotPath.empty() && !capturedTimed);
       // A caret blink is a time-based clock nothing marks dirty: refuse the skip
@@ -994,6 +1046,47 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       }
     }
 
+    // desktop-input-gap P0 item 1. SYNTHETIC-KEY HOOK -- weaker evidence,
+    // exactly like the click/scroll/hover hooks above: it calls
+    // GlfwSurface::synthesiseKey, which enters the identical translation +
+    // dispatchKeyEvent path a real glfwSetKeyCallback does, but is NOT proof
+    // glfwSetKeyCallback is registered (deleting that registration leaves
+    // this hook passing). tools/ci-key-events.sh pairs it with a REAL XTest
+    // key event for the registration arm; this hook exists for modifier
+    // combinations some window managers refuse to let XTest deliver (Super)
+    // and so the gate is host-independent for the rest.
+    //
+    // One KeySpec is consumed per frame starting at keyAfterFrames, same
+    // one-per-frame discipline as the hover sequence above.
+    if (keyAfterFrames > 0 && frameIndex >= keyAfterFrames &&
+        !keySequence.empty()) {
+      const size_t idx = (size_t)(frameIndex - keyAfterFrames);
+      if (idx < keySequence.size()) {
+        const auto& ks = keySequence[idx];
+        rni::GlfwSurface::KeyMods mods;
+        mods.shift = ks.shift;
+        mods.ctrl = ks.ctrl;
+        mods.alt = ks.alt;
+        mods.meta = ks.meta;
+        mods.capsLock = ks.capsLock;
+        const rni::GlfwSurface::KeyPhase phase =
+            ks.phase == 2   ? rni::GlfwSurface::KeyPhase::Up
+            : ks.phase == 1 ? rni::GlfwSurface::KeyPhase::Repeat
+                            : rni::GlfwSurface::KeyPhase::Down;
+        printf("rn-impeller: key_requested key=%s phase=%d\n", ks.key.c_str(),
+               ks.phase);
+        fflush(stdout);
+        if (!surface.synthesiseKey(ks.key, phase, mods)) {
+          fprintf(stderr,
+                  "rn-impeller: FATAL: --key-after-frames key '%s' has no "
+                  "known GLFW mapping\n",
+                  ks.key.c_str());
+          return 1;
+        }
+        host.waitForJsIdle(5000);
+      }
+    }
+
 
     // ⛔ The frame-0 capture is what makes an animation gate possible at all.
     // A single timed screenshot proves only that SOMETHING was drawn; it
@@ -1098,6 +1191,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // event, which would dispatch an edit into freed memory.
   surface.setCharHandler(nullptr);
   surface.setKeyHandler(nullptr);
+  // desktop-input-gap P0 item 1. Same lifetime argument again.
+  surface.setFullKeyHandler(nullptr);
   // P12-01: drop the damage wake before teardown. It captures `surface` by
   // reference; clearing it here means no late off-thread bump can post an event
   // to a window mid-destruction. Safe even though the JS thread is already torn
@@ -1218,6 +1313,11 @@ int main(int argc, char** argv) {
   int hoverAfterFrames = 0;
   std::vector<std::pair<double, double>> hoverPoints;
   bool hoverLeaveAtEnd = false;
+  // desktop-input-gap P0 item 1. Windowed keyboard test hook state (KeySpec
+  // is file-scope, above RunWindowed). See the flag parser below for the
+  // "--key-after-frames N:KEY:PHASE[:MODS];..." syntax.
+  int keyAfterFrames = 0;
+  std::vector<KeySpec> keySequence;
   int width = 400, height = 300;
   // ⛔ WINDOWED DEFAULT IS THE DISPLAY, NOT THESE NUMBERS — SEE GlfwSurface::init.
   // 400x300 is the HEADLESS default and every headless gate depends on it byte
@@ -1487,6 +1587,102 @@ int main(int argc, char** argv) {
         return 2;
       }
     }
+    // desktop-input-gap P0 item 1. Windowed keyboard test hook:
+    // "--key-after-frames N:KEY1:PHASE1[:MODS1];KEY2:PHASE2[:MODS2];..."
+    // synthesises one key event per segment, one per frame starting at frame
+    // N, through GlfwSurface::synthesiseKey -- the SAME translation the real
+    // glfwSetKeyCallback uses (see dispatchKeyEvent's header comment), so
+    // this hook exercises the conversion + dispatch on hosts where XTest
+    // cannot reach every modifier (some window managers refuse to let XTest
+    // set the Super/Meta bit). KEY is a W3C key name (ArrowLeft, Tab, a, ...);
+    // PHASE is down/repeat/up; MODS is a comma list of shift,ctrl,alt,meta,
+    // capslock (omit for none). Named to match the other frame-anchored
+    // hooks (--click-after-frames, --hover-after-frames).
+    else if (a == "--key-after-frames") {
+      std::string spec = next("--key-after-frames");
+      auto colon = spec.find(':');
+      if (colon == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --key-after-frames wants N:KEY:PHASE[:MODS]... "
+                "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      keyAfterFrames = atoi(spec.substr(0, colon).c_str());
+      if (keyAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --key-after-frames needs N > 0 (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      std::string rest = spec.substr(colon + 1);
+      size_t pos = 0;
+      while (pos < rest.size()) {
+        size_t semi = rest.find(';', pos);
+        std::string seg = rest.substr(
+            pos, semi == std::string::npos ? std::string::npos : semi - pos);
+        if (!seg.empty()) {
+          KeySpec ks;
+          size_t c1 = seg.find(':');
+          size_t c2 = c1 == std::string::npos ? std::string::npos
+                                              : seg.find(':', c1 + 1);
+          if (c1 == std::string::npos) {
+            fprintf(stderr,
+                    "rn-impeller: --key-after-frames segment wants "
+                    "KEY:PHASE[:MODS] (got %s)\n",
+                    seg.c_str());
+            return 2;
+          }
+          ks.key = seg.substr(0, c1);
+          std::string phaseStr =
+              seg.substr(c1 + 1, c2 == std::string::npos ? std::string::npos
+                                                         : c2 - c1 - 1);
+          if (phaseStr == "down") ks.phase = 0;
+          else if (phaseStr == "repeat") ks.phase = 1;
+          else if (phaseStr == "up") ks.phase = 2;
+          else {
+            fprintf(stderr,
+                    "rn-impeller: --key-after-frames phase must be "
+                    "down/repeat/up (got %s)\n",
+                    phaseStr.c_str());
+            return 2;
+          }
+          if (c2 != std::string::npos) {
+            std::string mods = seg.substr(c2 + 1);
+            size_t mp = 0;
+            while (mp < mods.size()) {
+              size_t mc = mods.find(',', mp);
+              std::string m = mods.substr(
+                  mp, mc == std::string::npos ? std::string::npos : mc - mp);
+              if (m == "shift") ks.shift = true;
+              else if (m == "ctrl") ks.ctrl = true;
+              else if (m == "alt") ks.alt = true;
+              else if (m == "meta") ks.meta = true;
+              else if (m == "capslock") ks.capsLock = true;
+              else if (!m.empty()) {
+                fprintf(stderr,
+                        "rn-impeller: --key-after-frames unknown modifier "
+                        "'%s'\n",
+                        m.c_str());
+                return 2;
+              }
+              if (mc == std::string::npos) break;
+              mp = mc + 1;
+            }
+          }
+          keySequence.push_back(ks);
+        }
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+      }
+      if (keySequence.empty()) {
+        fprintf(stderr,
+                "rn-impeller: --key-after-frames needs at least one "
+                "KEY:PHASE segment (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
@@ -1624,6 +1820,7 @@ int main(int argc, char** argv) {
                        clickAfterFrames, clickX, clickY,
                        scrollAfterFrames, scrollX, scrollY, scrollDx, scrollDy,
                        hoverAfterFrames, hoverPoints, hoverLeaveAtEnd,
+                       keyAfterFrames, keySequence,
                        supersampleRnsvg,
                        idleSkip, idleRunSec, idleBudgetMs, idleLog, idleMutant,
                        idleOffthreadAfter);
