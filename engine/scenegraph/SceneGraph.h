@@ -145,6 +145,10 @@ struct SceneNode {
   std::string tiValue;
   std::string tiPlaceholder;
   float tiPlaceholderColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
+  // item 4a: selection highlight fill. Defaults to rgba(51,144,255,0.35) (a
+  // common desktop selection blue) when the field sets no `selectionColor`
+  // prop, overwritten at mutation time exactly like tiPlaceholderColor above.
+  float tiSelectionColor[4]{0.2f, 0.56470588f, 1.0f, 0.35f};
 
   // RNSVGPath (P9-B2). `d` is re-parsed into geometry only when it changes —
   // see SvgPath.h. fillOpacity is kept SEPARATE from node.opacity (which
@@ -458,6 +462,17 @@ class SceneGraph {
   void setTextInputFocus(facebook::react::Tag tag);
   void setTextInputEdit(facebook::react::Tag tag, const std::string& value,
                         size_t caret);
+  // item 4a: keyboard text selection. Sets the buffer, caret AND the
+  // selection anchor independently -- setTextInputEdit above always
+  // COLLAPSES the selection (anchor==caret), which is correct for the click
+  // path (item 3; mouse-drag selection is item 4b) and for any edit that
+  // leaves no selection behind. A caret move that EXTENDS a selection (Shift
+  // held) or a Select-All needs the anchor and caret to differ, which is
+  // what this entry point is for. `anchor` and `caret` are both clamped to
+  // value.size() defensively, exactly as setTextInputEdit's caret already is.
+  void setTextInputSelection(facebook::react::Tag tag,
+                             const std::string& value, size_t anchor,
+                             size_t caret);
   void clearTextInputFocus();
   facebook::react::Tag focusedTextInput();
   // The value a field should display: the live edit buffer if it is focused,
@@ -471,6 +486,13 @@ class SceneGraph {
   // that the buffer changed -- a buffer that grows while the caret stays at 0
   // is a real editing bug the value-only check cannot see.
   size_t textInputCaretFor(facebook::react::Tag tag);
+
+  // item 4a: the UTF-8 byte offset of the SELECTION ANCHOR (the end that does
+  // NOT move under a Shift+caret-move) for the focused field. Equal to
+  // textInputCaretFor's return when the selection is collapsed -- callers
+  // needing "is there a selection" compare the two. Returns 0 when `tag` is
+  // not the focused field, matching textInputCaretFor's own convention.
+  size_t textInputSelectionAnchorFor(facebook::react::Tag tag);
 
   // desktop-input-gap item 3. Click-to-caret: the UTF-8 BYTE OFFSET of the
   // codepoint boundary nearest (screenX, screenY) inside `tag`'s displayed
@@ -657,6 +679,11 @@ class SceneGraph {
   facebook::react::Tag tiFocused_{0};
   std::string tiEditValue_;
   size_t tiCaret_{0};
+  // item 4a: the UTF-8 byte offset of the selection's FIXED end (the end
+  // Shift+move does not touch). Equal to tiCaret_ when the selection is
+  // collapsed -- "is there a selection" is `tiSelAnchor_ != tiCaret_`, never
+  // a separate bool, so the two can never disagree about the collapsed case.
+  size_t tiSelAnchor_{0};
   // <TextInput>. ENG-01b item 5: caret blink. The steady_clock instant the
   // caret was last RESET to visible -- set on focus, on a click into the field,
   // and on EVERY keystroke. paintNode blinks the caret from the time elapsed

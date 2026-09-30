@@ -161,12 +161,27 @@ class FabricHost {
   // (only when the text actually changed) so the pixels and the JS state
   // agree.
   //
-  // ⛔ ONE EDITING PATH. MoveLeft/Right/Word*/Home/End/DeleteForward are
-  // reached ONLY from FabricHost::dispatchKeyEvent (the full key path) --
-  // see its header. Backspace/Submit/Newline stay reachable ONLY from the
-  // LEGACY GlfwSurface::keyHandler_ path (main.cpp's setKeyHandler), which
-  // dispatchKeyEvent's editing branch deliberately does NOT re-handle, so a
-  // single physical keystroke can never mutate the buffer twice.
+  // item 4a: `extendSelection` is Shift's effect on a caret-MOVE action
+  // (MoveLeft/Right/Word*/Home/End) -- true EXTENDS the selection from the
+  // current anchor (the caret moves, the anchor does not); false COLLAPSES
+  // any existing selection, landing a plain Left/Right at the selection's
+  // near boundary rather than one further step from the old caret (matching
+  // macOS/Windows: the first plain arrow after a selection lands ON its
+  // edge). Ignored by InsertChar/Backspace/DeleteForward/Submit/Newline/
+  // SelectAll -- InsertChar/Backspace/DeleteForward instead consult whether
+  // a selection is ALREADY active and replace/delete that range rather than
+  // acting at the caret alone (a selection always collapses after an edit,
+  // same as every desktop text field). Defaults to false so every existing
+  // call site (the legacy Backspace/Submit/Newline path, the char handler)
+  // keeps its old collapse-only behaviour with no source change.
+  //
+  // ⛔ ONE EDITING PATH. MoveLeft/Right/Word*/Home/End/DeleteForward/
+  // SelectAll are reached ONLY from FabricHost::dispatchKeyEvent (the full
+  // key path) -- see its header. Backspace/Submit/Newline stay reachable
+  // ONLY from the LEGACY GlfwSurface::keyHandler_ path (main.cpp's
+  // setKeyHandler), which dispatchKeyEvent's editing branch deliberately
+  // does NOT re-handle, so a single physical keystroke can never mutate the
+  // buffer twice.
   enum class KeyAction {
     InsertChar,
     Backspace,
@@ -179,8 +194,13 @@ class FabricHost {
     MoveHome,
     MoveEnd,
     DeleteForward,
+    // item 4a. Anchor -> 0, caret -> end, value unchanged. Cmd+A on
+    // __APPLE__, Ctrl+A elsewhere (platform dispatch is dispatchKeyEvent's
+    // job, same as the word-move modifier split).
+    SelectAll,
   };
-  int dispatchKey(KeyAction action, unsigned int codepoint);
+  int dispatchKey(KeyAction action, unsigned int codepoint,
+                  bool extendSelection = false);
 
   // True when a field is focused, so the windowed host knows whether to route a
   // character/key event here at all.

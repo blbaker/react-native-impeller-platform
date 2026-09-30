@@ -500,6 +500,13 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       if (tp->placeholderTextColor) {
         colorToFloats(tp->placeholderTextColor, node.tiPlaceholderColor);
       }
+      // item 4a: the field's own selectionColor prop, when the fork exposes
+      // one -- BaseTextInputProps carries it unconditionally (RN core, not
+      // an iOS/Android-only extension). Falls through to the struct's own
+      // default (rgba(51,144,255,0.35)) when the prop is unset.
+      if (tp->selectionColor) {
+        colorToFloats(tp->selectionColor, node.tiSelectionColor);
+      }
     }
   }
 
@@ -2431,6 +2438,10 @@ void SceneGraph::setTextInputFocus(facebook::react::Tag tag) {
   auto it = nodes_.find(tag);
   tiEditValue_ = (it != nodes_.end()) ? it->second.tiValue : std::string();
   tiCaret_ = tiEditValue_.size();
+  // item 4a: focusing always starts with a COLLAPSED selection at the caret
+  // (focus end == anchor end). Mouse-drag selection (item 4b) is not built
+  // yet, so every focus path collapses.
+  tiSelAnchor_ = tiCaret_;
   // item 5: focusing a field shows the caret immediately, then blinks from
   // here. Without this reset the caret's phase would be whatever the free clock
   // happened to be at, so a field could focus into an off phase and look dead.
@@ -2445,6 +2456,10 @@ void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
   if (tiFocused_ != tag) return;  // ignore edits for a field that lost focus
   tiEditValue_ = value;
   tiCaret_ = caret > value.size() ? value.size() : caret;
+  // item 4a: EVERY plain edit/caret-move through this entry point COLLAPSES
+  // the selection to the new caret. setTextInputSelection (below) is the ONLY
+  // entry point that can leave anchor != caret -- see its header.
+  tiSelAnchor_ = tiCaret_;
   // item 5: EVERY keystroke re-shows the caret. This is the half a free-running
   // `(now/500)%2` blink gets wrong -- typing during an off phase would land the
   // character next to an invisible caret. Resetting the phase here guarantees
@@ -2454,11 +2469,25 @@ void SceneGraph::setTextInputEdit(facebook::react::Tag tag,
   bumpVersion();
 }
 
+void SceneGraph::setTextInputSelection(facebook::react::Tag tag,
+                                       const std::string& value,
+                                       size_t anchor, size_t caret) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (tiFocused_ != tag) return;  // ignore edits for a field that lost focus
+  tiEditValue_ = value;
+  tiCaret_ = caret > value.size() ? value.size() : caret;
+  tiSelAnchor_ = anchor > value.size() ? value.size() : anchor;
+  tiCaretResetAt_ = std::chrono::steady_clock::now();
+  // P12-01: a selection change repaints the highlight rect — scene damage.
+  bumpVersion();
+}
+
 void SceneGraph::clearTextInputFocus() {
   std::lock_guard<std::mutex> lock(mutex_);
   tiFocused_ = 0;
   tiEditValue_.clear();
   tiCaret_ = 0;
+  tiSelAnchor_ = 0;
   // P12-01: blur erases the caret the cached frame still shows — scene damage.
   bumpVersion();
 }
@@ -2578,6 +2607,11 @@ std::string SceneGraph::textInputValueFor(facebook::react::Tag tag) {
 size_t SceneGraph::textInputCaretFor(facebook::react::Tag tag) {
   std::lock_guard<std::mutex> lock(mutex_);
   return (tiFocused_ == tag) ? tiCaret_ : 0;
+}
+
+size_t SceneGraph::textInputSelectionAnchorFor(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return (tiFocused_ == tag) ? tiSelAnchor_ : 0;
 }
 
 std::string SceneGraph::paragraphTextReport() {
