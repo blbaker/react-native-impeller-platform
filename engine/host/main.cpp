@@ -656,12 +656,15 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // fire pointerenter on whatever the cursor passes over. The cursor shape is
     // held at the drag's grabbing shape by the mac's NSCursor path (mac-patches
     // 2c0ed10); returning the last shape keeps this path from fighting it.
+    // item 4b: a drag that began in a TextInput extends its selection. Checked
+    // on its own, not only under isTouchCaptured(): a press on a field whose
+    // emitter took no touch capture must still drag-select.
+    const bool selectionDrag = fabric.dragTextSelection(x, y);
     if (fabric.isTouchCaptured()) {
       fabric.dispatchCapturedMove(x, y);
-      // item 4b: a drag that began in a TextInput also extends its selection.
-      fabric.dragTextSelection(x, y);
       return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
     }
+    if (selectionDrag) return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
     const auto r = fabric.dispatchHover(x, y);
     bool logged = false;
     if (r.left) {
@@ -1099,7 +1102,12 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                ms.op, ms.x, ms.y, ms.shift ? 1 : 0);
         fflush(stdout);
         surface.synthesiseMouse(ms.op, ms.x, ms.y, ms.shift);
-        host.waitForJsIdle(5000);
+        // Wait for JS only after the LAST event. Waiting after each one
+        // spaced presses ~450 ms apart, at the edge of the 500 ms
+        // double-click interval, which a real mouse never does (GLFW
+        // callbacks do not wait for JS). One event per frame (~16 ms) keeps
+        // a synthetic double click as tight as a human one.
+        if (idx + 1 == mouseSequence.size()) host.waitForJsIdle(5000);
       }
     }
 
