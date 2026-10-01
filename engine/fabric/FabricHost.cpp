@@ -1001,6 +1001,8 @@ int FabricHost::clearHover() {
 int FabricHost::focusTextInputAt(float x, float y, int clickCount,
                                  bool shift) {
   if (!sceneGraph_) return 0;
+  // item 11: a click moves keyboard focus away from a Tab-focused View.
+  blurFocusedView();
   react::Tag target = sceneGraph_->hitTest(x, y);
   bool isField = false;
   if (target != 0) {
@@ -1030,7 +1032,11 @@ int FabricHost::focusTextInputAt(float x, float y, int clickCount,
   // edit buffer from the controlled value (that would drop uncommitted typing
   // on an uncontrolled field) and must not re-fire onFocus. It only moves the
   // caret.
-  const bool alreadyFocused = (sceneGraph_->focusedTextInput() == target);
+  const react::Tag prevField = sceneGraph_->focusedTextInput();
+  const bool alreadyFocused = (prevField == target);
+  // item 11: clicking from one field into another blurs the old one (it used
+  // to switch silently, with no onBlur).
+  if (prevField != 0 && !alreadyFocused) emitTextInputFocusEvent(prevField, false);
   if (!alreadyFocused) sceneGraph_->setTextInputFocus(target);
   auto emitter = sceneGraph_->eventEmitterFor(target);
   auto te =
@@ -1421,11 +1427,20 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
   // always has SOMEWHERE to land rather than being silently swallowed the
   // instant nothing has focus -- the ask explicitly requires this fallback.
   react::Tag target = sceneGraph_->focusedTextInput();
+  // item 11: a focused (non-TextInput) View receives key events.
+  if (target == 0) target = sceneGraph_->focusedView();
   if (target == 0) target = sceneGraph_->rootTag();
   if (target == 0) return 0;
 
   auto emitter = sceneGraph_->eventEmitterFor(target);
   if (!emitter) return 0;
+
+  // item 11: plain Tab / Shift+Tab move keyboard focus AFTER this key's own
+  // events reach the element that had focus (react-native-windows order:
+  // keyDown to the focused element first, then navigation). Ctrl/Alt/Cmd+Tab
+  // are app/OS shortcuts and never navigate.
+  const bool tabNav = key == "Tab" && phase != KeyEventPhase::Up &&
+                      !mods.ctrl && !mods.alt && !mods.meta;
 
   // desktop-input-gap item 2a. Caret navigation + forward Delete, routed
   // through dispatchKey -- the ONE editing path for these keys (see its
@@ -1576,7 +1591,116 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
             });
       });
 
+  if (tabNav) moveFocus(!mods.shift);
   return (int)target;
+}
+
+// item 11. Focus traversal helpers.
+void FabricHost::emitTextInputFocusEvent(int tag, bool focus) {
+  auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
+      sceneGraph_->eventEmitterFor(tag));
+  if (!te) return;
+  react::TextInputEventEmitter::Metrics m{};
+  m.text = sceneGraph_->textInputValueFor(tag);
+  m.eventCount = ++tiEventCount_;
+  runtimeScheduler_->scheduleWork([te, m, focus](facebook::jsi::Runtime&) {
+    if (focus) {
+      te->onFocus(m);
+    } else {
+      te->onBlur(m);
+    }
+  });
+}
+
+// A plain View has no onFocus/onBlur method on its C++ emitter; dispatch the
+// generic event, which normalizes to topFocus/topBlur (both registered in
+// BaseViewConfig.ios.js's bubblingEventTypes).
+void FabricHost::emitViewFocusEvent(int tag, bool focus) {
+  auto emitter = sceneGraph_->eventEmitterFor(tag);
+  if (!emitter) return;
+  const int t = (int)tag;
+  runtimeScheduler_->scheduleWork([emitter, focus, t](facebook::jsi::Runtime&) {
+    emitter->dispatchEvent(
+        focus ? "focus" : "blur", [t](facebook::jsi::Runtime& runtime) {
+          auto payload = facebook::jsi::Object(runtime);
+          payload.setProperty(runtime, "target", t);
+          return facebook::jsi::Value(std::move(payload));
+        });
+  });
+}
+
+void FabricHost::blurFocusedView() {
+  if (!sceneGraph_) return;
+  const react::Tag v = sceneGraph_->focusedView();
+  if (v == 0) return;
+  sceneGraph_->setFocusedView(0);
+  if (runtimeScheduler_) emitViewFocusEvent(v, false);
+}
+
+int FabricHost::moveFocus(bool forward) {
+  if (!sceneGraph_ || !runtimeScheduler_) return 0;
+  const auto order = sceneGraph_->tabOrder();
+  react::Tag from = sceneGraph_->focusedTextInput();
+  if (from == 0) from = sceneGraph_->focusedView();
+  if (order.empty()) return 0;
+  // Next/previous in tree order, wrapping. With nothing focused (or focus on
+  // something no longer in the order), Tab starts at the first element and
+  // Shift+Tab at the last.
+  int idx = -1;
+  for (size_t i = 0; i < order.size(); ++i) {
+    if (order[i] == from) {
+      idx = (int)i;
+      break;
+    }
+  }
+  const int n = (int)order.size();
+  int next;
+  if (idx < 0) {
+    next = forward ? 0 : n - 1;
+  } else {
+    next = forward ? (idx + 1) % n : (idx - 1 + n) % n;
+  }
+  const react::Tag to = order[(size_t)next];
+  printf("rn-impeller: focus_move from=%d to=%d dir=%s\n", (int)from, (int)to,
+         forward ? "next" : "prev");
+  fflush(stdout);
+  if (to == from) return (int)to;
+
+  // Blur whatever had focus.
+  if (react::Tag prevField = sceneGraph_->focusedTextInput()) {
+    emitTextInputFocusEvent(prevField, false);
+    sceneGraph_->clearTextInputFocus();
+    dragTag_ = 0;
+  }
+  blurFocusedView();
+
+  if (sceneGraph_->isTextInputTag(to)) {
+    // Tabbing into a field selects all of its text (macOS and Windows).
+    sceneGraph_->setTextInputFocus(to);
+    emitTextInputFocusEvent(to, true);
+    const std::string value = sceneGraph_->textInputValueFor(to);
+    if (!value.empty()) {
+      sceneGraph_->setTextInputSelection(to, value, 0, value.size());
+    }
+    printf("rn-impeller: selection tag=%d anchor=0 caret=%zu tab=1\n",
+           (int)to, value.size());
+    fflush(stdout);
+    auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
+        sceneGraph_->eventEmitterFor(to));
+    if (te) {
+      react::TextInputEventEmitter::Metrics m{};
+      m.text = value;
+      m.eventCount = ++tiEventCount_;
+      m.selectionRange.location = 0;
+      m.selectionRange.length = (int)Utf8OffsetToUtf16Units(value, value.size());
+      runtimeScheduler_->scheduleWork(
+          [te, m](facebook::jsi::Runtime&) { te->onSelectionChange(m); });
+    }
+  } else {
+    sceneGraph_->setFocusedView(to);
+    emitViewFocusEvent(to, true);
+  }
+  return (int)to;
 }
 
 }  // namespace rni
