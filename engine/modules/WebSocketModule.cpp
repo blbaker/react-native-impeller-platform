@@ -137,46 +137,63 @@ struct WsConnection : std::enable_shared_from_this<WsConnection> {
     finish();
   }
 
+  // Fully ASYNC connect: resolve -> connect (15 s timeout) -> handshake.
+  // A synchronous connect ignores tcp_stream's expiry, and on some hosts
+  // (measured: WSL) a connect to a closed local port is never refused, it
+  // just hangs -- React DevTools' ws://localhost:8097 probe then pinned the
+  // socket thread forever and teardown could not join it.
   void start(WsUrl url, std::vector<std::string> protocols,
              std::map<std::string, std::string> headers) {
     auto self = shared_from_this();
-    thread = std::thread([self, url, protocols, headers]() {
+    std::string proto;
+    for (size_t i = 0; i < protocols.size(); ++i) {
+      proto += (i ? ", " : "") + protocols[i];
+    }
+    ws.set_option(websocket::stream_base::decorator(
+        [headers, proto](websocket::request_type& req) {
+          req.set(beast::http::field::user_agent, "react-native-impeller");
+          if (!proto.empty())
+            req.set(beast::http::field::sec_websocket_protocol, proto);
+          for (const auto& [k, v] : headers) req.set(k, v);
+        }));
+    const std::string hostHeader =
+        url.port == "80" ? url.host : url.host + ":" + url.port;
+    resolver.async_resolve(
+        url.host, url.port,
+        [self, hostHeader, target = url.target](
+            beast::error_code ec, tcp::resolver::results_type results) {
+          if (ec) return self->fail("resolve: " + ec.message());
+          beast::get_lowest_layer(self->ws).expires_after(std::chrono::seconds(15));
+          beast::get_lowest_layer(self->ws).async_connect(
+              results, [self, hostHeader, target](beast::error_code ec2,
+                                                  tcp::endpoint) {
+                if (ec2) return self->fail("connect: " + ec2.message());
+                beast::get_lowest_layer(self->ws).expires_never();
+                self->ws.set_option(websocket::stream_base::timeout::suggested(
+                    beast::role_type::client));
+                auto res = std::make_shared<websocket::response_type>();
+                self->ws.async_handshake(
+                    *res, hostHeader, target,
+                    [self, res](beast::error_code ec3) {
+                      if (ec3) return self->fail("handshake: " + ec3.message());
+                      std::string chosen;
+                      if (auto it = res->find(beast::http::field::sec_websocket_protocol);
+                          it != res->end()) {
+                        chosen = std::string(it->value());
+                      }
+                      self->open = true;
+                      if (self->live()) self->module->emitOpen(self->id, chosen);
+                      self->readNext();
+                      self->flush();
+                    });
+              });
+        });
+    thread = std::thread([self]() {
       try {
-        auto results = self->resolver.resolve(url.host, url.port);
-        beast::get_lowest_layer(self->ws).expires_after(std::chrono::seconds(15));
-        beast::get_lowest_layer(self->ws).connect(results);
-        beast::get_lowest_layer(self->ws).expires_never();
-        self->ws.set_option(websocket::stream_base::timeout::suggested(
-            beast::role_type::client));
-        std::string proto;
-        for (size_t i = 0; i < protocols.size(); ++i) {
-          proto += (i ? ", " : "") + protocols[i];
-        }
-        self->ws.set_option(websocket::stream_base::decorator(
-            [headers, proto](websocket::request_type& req) {
-              req.set(beast::http::field::user_agent, "react-native-impeller");
-              if (!proto.empty())
-                req.set(beast::http::field::sec_websocket_protocol, proto);
-              for (const auto& [k, v] : headers) req.set(k, v);
-            }));
-        websocket::response_type res;
-        const std::string hostHeader =
-            url.port == "80" ? url.host : url.host + ":" + url.port;
-        self->ws.handshake(res, hostHeader, url.target);
-        std::string chosen;
-        if (auto it = res.find(beast::http::field::sec_websocket_protocol);
-            it != res.end()) {
-          chosen = std::string(it->value());
-        }
-        self->open = true;
-        if (self->live()) self->module->emitOpen(self->id, chosen);
-        self->readNext();
-        self->flush();
         self->ioc.run();
       } catch (const std::exception& e) {
         self->fail(e.what());
       }
-      // Release the cycle: the module's map holds us, we hold the thread.
     });
   }
 
