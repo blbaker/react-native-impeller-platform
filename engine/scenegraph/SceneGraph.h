@@ -74,6 +74,9 @@ struct SceneNode {
   std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
 
   bool overflowHidden{false};
+  // parity item 9: RN `pointerEvents` (0 auto, 1 none, 2 box-none,
+  // 3 box-only), mirrored from PointerEventsMode. Hit testing honours it.
+  int pointerEvents{0};
 
   // ENG-09 hover/cursor. The RN `cursor` ViewProp, collapsed to the three
   // shapes this host has standard GLFW cursors for. NOT a bool "is hoverable":
