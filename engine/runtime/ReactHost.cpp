@@ -48,27 +48,56 @@ class TimerRegistry : public react::PlatformTimerRegistry {
   std::shared_ptr<JsThread> jsThread_;
 };
 
-// ReactInstance's builtins do not install a console for a plain bundle.
+// parity item 10. LOGGING: install RN's `nativeLoggingHook`, NOT a console.
+//
+// This used to replace `console` with a 4-method object (log/info/warn/error).
+// RN's own console polyfill (@react-native/js-polyfills/console.js, a Metro
+// polyfill that runs before any module) only builds the full console --
+// assert, table, group, trace, debug, count, time... -- when
+// global.nativeLoggingHook exists. Without the hook, console.assert stayed
+// undefined, and abort-controller (react-query, SWR, fetch-based code) calls
+// it: `new AbortController().abort()` threw "console.assert is not a
+// function" (Mac audit, measured).
+//
+// Now: the hook prints every RN log line as `[js] <text>` (the prefix every
+// gate already reads), and a FALLBACK console is installed for a bundle that
+// carries no polyfill. The fallback stays silent once the polyfill has
+// replaced global.console, so a __DEV__ bundle (whose polyfill also calls the
+// original console) does not print each line twice.
 void installConsole(jsi::Runtime& runtime) {
-  auto log = jsi::Function::createFromHostFunction(
-      runtime, jsi::PropNameID::forAscii(runtime, "log"), 1,
+  auto hook = jsi::Function::createFromHostFunction(
+      runtime, jsi::PropNameID::forAscii(runtime, "nativeLoggingHook"), 2,
       [](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* args,
          size_t count) -> jsi::Value {
-        std::string line;
-        for (size_t i = 0; i < count; ++i) {
-          if (i) line += " ";
-          line += args[i].toString(rt).utf8(rt);
-        }
+        const std::string line =
+            count > 0 ? args[0].toString(rt).utf8(rt) : std::string();
         std::printf("[js] %s\n", line.c_str());
         std::fflush(stdout);
         return jsi::Value::undefined();
       });
-  jsi::Object console(runtime);
-  console.setProperty(runtime, "log", log);
-  console.setProperty(runtime, "info", log);
-  console.setProperty(runtime, "warn", log);
-  console.setProperty(runtime, "error", log);
-  runtime.global().setProperty(runtime, "console", console);
+  runtime.global().setProperty(runtime, "nativeLoggingHook", hook);
+
+  static const char* kFallback = R"JS(
+(function (g) {
+  var hook = g.nativeLoggingHook;
+  var c = {};
+  function mk(level) {
+    return function () {
+      if (g.console !== c) return;  // RN's polyfill took over: stay silent
+      hook(Array.prototype.map.call(arguments, String).join(' '), level);
+    };
+  }
+  c.log = mk(1); c.info = mk(1); c.debug = mk(0); c.trace = mk(0);
+  c.warn = mk(2); c.error = mk(3);
+  c.assert = function (cond, label) {
+    if (g.console !== c) return;
+    if (!cond) hook('Assertion failed: ' + label, 3);
+  };
+  g.console = c;
+})(globalThis);
+)JS";
+  runtime.evaluateJavaScript(std::make_shared<jsi::StringBuffer>(kFallback),
+                             "rni-console-fallback.js");
 }
 
 // RN's NativeComponentRegistry asks this global whether a native component
