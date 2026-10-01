@@ -12,6 +12,9 @@
  *       (red then blue) at (20, 100) -> the overlap is HALF BLUE OVER WHITE
  *       (255*0.5 blend of blue), NOT blue-over-red: a group opacity, not a
  *       per-child alpha. Pixel (60,130) where both overlap.
+ *   B  opacity 0.5 parent with its OWN blue background + red child at
+ *       (180, 100): parent-only (185,105) -> (128,128,255); child (210,130)
+ *       -> (255,128,128).
  */
 import React from 'react';
 import {AppRegistry, View} from 'react-native';
@@ -37,6 +40,22 @@ function Fixture() {
           <View style={red} />
         </View>
       </Box>
+      {/* B: an opacity:0.5 parent WITH its own blue background and a red
+          child. Parent-only area -> half blue; child area -> half red. If
+          the opacity were applied twice (layer + own alpha), the parent area
+          would be quarter blue. */}
+      <View
+        style={{
+          position: 'absolute',
+          left: 180,
+          top: 100,
+          width: 60,
+          height: 60,
+          opacity: 0.5,
+          backgroundColor: '#0000ff',
+        }}>
+        <View style={red} />
+      </View>
       <Box x={20} y={100} opacity={0.5}>
         <View style={{...red, left: 0, top: 0}} />
         <View style={{...red, left: 30, top: 20, backgroundColor: '#0000ff'}} />

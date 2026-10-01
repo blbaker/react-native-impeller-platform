@@ -12,6 +12,9 @@
 #   O  0.5 group, blue child over red child: overlap (60,130) -> half BLUE
 #      over WHITE (128,128,255). Per-child alpha would give blue-over-red
 #      (~(64,64,191)+red) instead: only a group layer passes.
+#   B  0.5 parent with its own blue background: (185,105) -> (128,128,255),
+#      its red child (210,130) -> (255,128,128). Opacity applied twice would
+#      give a quarter-blue parent.
 # Run headless AND windowed (the windowed path is what HostApp uses).
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
@@ -84,7 +87,7 @@ probe() {  # $1 = ppm; prints "x,y=r,g,b" for every probe point
 import sys
 d = open(sys.argv[1], "rb").read(); parts = d.split(b"\n", 3)
 w = int(parts[1].split()[0]); b = parts[3]
-for (x, y) in [(50, 50), (130, 50), (210, 50), (290, 50), (60, 130), (35, 115)]:
+for (x, y) in [(50, 50), (130, 50), (210, 50), (290, 50), (60, 130), (35, 115), (185, 105), (210, 130)]:
     i = (y * w + x) * 3
     print("%d,%d=%d,%d,%d" % (x, y, b[i], b[i + 1], b[i + 2]))
 PY
@@ -109,6 +112,8 @@ check() {  # $1 = mode label, $2 = ppm
   expect "$P" "290,50" "255,191,191" "$1: nested 0.5 x 0.5 must give 25% red -- nested opacity does not multiply"
   expect "$P" "60,130" "128,128,255" "$1: where a blue child overlaps a red child inside one opacity:0.5 parent, the result must be half blue over white -- opacity is applied per child, not as one group"
   expect "$P" "35,115" "255,128,128" "$1: the red-only part of the group must be half red"
+  expect "$P" "185,105" "128,128,255" "$1: an opacity:0.5 parent's OWN background must be half blue -- opacity is applied twice"
+  expect "$P" "210,130" "255,128,128" "$1: the red child of the blue opacity:0.5 parent must be half red -- parent opacity does not apply to children"
 }
 
 echo "== a. headless =="
