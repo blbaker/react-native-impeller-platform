@@ -43,6 +43,12 @@ const SHIM_TARGETS = {
   // why): the ios-stub-disease fix is still exactly what runs underneath.
   'react-native/Libraries/NativeComponent/BaseViewConfig.js':
     'BaseViewConfig.impeller.js',
+  // desktop-input-gap item 6. RN core's ConditionallyIgnoredEventHandlers
+  // strips onClick/onPointerDown/onPointerUp/... from validAttributes unless
+  // Platform.OS === 'ios' -- see shims/ViewConfigIgnore.impeller.js for the
+  // full "native fires, JS never hears" story.
+  'react-native/Libraries/NativeComponent/ViewConfigIgnore.js':
+    'ViewConfigIgnore.impeller.js',
 };
 
 // ---------------------------------------------------------------------------
