@@ -136,7 +136,7 @@ P0 (blocks basic use on every OS):
 3. B/C: selection in TextInput (ENG-11) + highlight -- keyboard selection **LANDED** (gate `tools/ci-select-keys.sh`, mutants `tools/mutation-verify-select-keys.sh` M1-M4); mouse selection **LANDED** (gate `tools/ci-select-mouse.sh`, mutants `tools/mutation-verify-select-mouse.sh` M1-M4); `selection` prop moves to item 7
 4. E: Clipboard module + Cut/Copy/Paste keys, Cmd on macOS, Ctrl elsewhere -- **LANDED** (gate `tools/ci-clipboard.sh`, mutants `tools/mutation-verify-clipboard.sh` M1-M4)
 5. D: right/middle/back/forward buttons, click count, modifiers on clicks -- **LANDED** (gate `tools/ci-mouse-buttons.sh`, mutants `tools/mutation-verify-mouse-buttons.sh` M1-M4)
-6. F: Tab / Shift+Tab focus traversal
+6. F: Tab / Shift+Tab focus traversal -- **LANDED** (gate `tools/ci-tab-focus.sh`, mutants `tools/mutation-verify-tab-focus.sh` M1-M5)
 
 P1:
 

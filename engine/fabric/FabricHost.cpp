@@ -1682,8 +1682,13 @@ int FabricHost::moveFocus(bool forward) {
     if (!value.empty()) {
       sceneGraph_->setTextInputSelection(to, value, 0, value.size());
     }
-    printf("rn-impeller: selection tag=%d anchor=0 caret=%zu tab=1\n",
-           (int)to, value.size());
+    // Report what the scene graph ACTUALLY holds, not what was intended, so
+    // the stdout line and onSelectionChange can never claim a selection the
+    // editor does not have.
+    const size_t selA = sceneGraph_->textInputSelectionAnchorFor(to);
+    const size_t selC = sceneGraph_->textInputCaretFor(to);
+    printf("rn-impeller: selection tag=%d anchor=%zu caret=%zu tab=1\n",
+           (int)to, selA, selC);
     fflush(stdout);
     auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
         sceneGraph_->eventEmitterFor(to));
@@ -1691,8 +1696,10 @@ int FabricHost::moveFocus(bool forward) {
       react::TextInputEventEmitter::Metrics m{};
       m.text = value;
       m.eventCount = ++tiEventCount_;
-      m.selectionRange.location = 0;
-      m.selectionRange.length = (int)Utf8OffsetToUtf16Units(value, value.size());
+      const int lo = (int)Utf8OffsetToUtf16Units(value, std::min(selA, selC));
+      const int hi = (int)Utf8OffsetToUtf16Units(value, std::max(selA, selC));
+      m.selectionRange.location = lo;
+      m.selectionRange.length = hi - lo;
       runtimeScheduler_->scheduleWork(
           [te, m](facebook::jsi::Runtime&) { te->onSelectionChange(m); });
     }

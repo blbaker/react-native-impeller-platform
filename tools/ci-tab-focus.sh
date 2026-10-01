@@ -111,7 +111,8 @@ run_win "$WORK/a.log" 50 --click-after-frames "5:$A_XY" --key-after-frames "10:T
 [ "$(focus_seq "$WORK/a.log")" = "A B" ] && has "$WORK/a.log" 'BLUR A' \
   || { dump "$WORK/a.log"; fail "a: clicking A then Tab should focus A then B and blur A; got focus '$(focus_seq "$WORK/a.log")' -- Tab does not move focus forward"; }
 has "$WORK/a.log" 'SEL B start=0 end=3' \
-  || { dump "$WORK/a.log"; fail "a: tabbing into B should select all of 'bbb' {0,3} -- no select-all on Tab focus"; }
+  && grep -qE '^rn-impeller: selection tag=[0-9]+ anchor=0 caret=3 tab=1$' "$WORK/a.log" \
+  || { dump "$WORK/a.log"; fail "a: tabbing into B should select all of 'bbb' (engine anchor 0 caret 3, JS {0,3}) -- no select-all on Tab focus"; }
 echo "   OK: A -> B, BLUR A, B selected {0,3}"
 
 echo "== b. Tab to the focusable View; keys reach it =="
