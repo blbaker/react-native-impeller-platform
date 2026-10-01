@@ -36,7 +36,17 @@ def main():
 
     win.set_selection_owner(CLIPBOARD, X.CurrentTime)
     d.flush()
-    if d.get_selection_owner(CLIPBOARD) != win.id:
+    owner = d.get_selection_owner(CLIPBOARD)
+    # ⛔ COMPARE BY .id, NOT BY IDENTITY/EQUALITY WITH THE LOCAL Window OBJECT
+    # DIRECTLY AGAINST AN INT. get_selection_owner() returns a FRESH Window
+    # resource wrapper (XID 6291456 == 0x600000, say) that Xlib's Window.__eq__
+    # happily compares equal to the local `win` object -- but comparing it to
+    # the bare integer `win.id` is ALWAYS false (a Window never equals an int),
+    # so a naive `owner != win.id` reports failure on a perfectly successful
+    # ownership claim. Measured: this is exactly what made the gate's arm g
+    # report "could not become selection owner" while X11 had, in fact,
+    # already made this process the CLIPBOARD owner.
+    if owner is None or owner.id != win.id:
         print("XCLIPWRITE_FAIL could not become selection owner", file=sys.stderr)
         return 1
     print("XCLIPWRITE_OWNER")
