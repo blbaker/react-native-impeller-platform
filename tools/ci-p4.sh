@@ -220,6 +220,8 @@ const SPEC_FOR = {
 // declaration was supposed to come from RN or from us.
 const OWN_SPEC_FOR = {
   AppStorage: 'src/storage/index.js',
+  // ENG-09/10. Our own module: its JS half is package/src/worldraster.
+  WorldRaster: 'src/worldraster/index.js',
 };
 // Where OWN_SPEC_FOR paths resolve: our installed package, not react-native.
 const OWN_PKG = 'node_modules/@react-native-impeller/core';
