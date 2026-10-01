@@ -112,8 +112,10 @@ ELAPSED="$(python3 -c "print('%.1f' % ($T1 - $T0))")"
 dump() { grep -E '^\[js|websocket|scene_nodes|Invariant' "$1" | cut -c1-200 | sed 's/^/   /' >&2; }
 
 echo "== a. the dev bundle mounts =="
+# (The quoted detail is squeezed onto one line so the FAIL line, which the
+# mutation suite greps, keeps its tail on the same line.)
 ! grep -qE "getEnforcing|Invariant Violation|js-error" "$L" \
-  || { dump "$L"; fail "a: the dev bundle threw at boot ($(grep -m1 -oE "getEnforcing[^.]*|Invariant Violation[^.]*" "$L")) -- a module __DEV__ bundles require is missing"; }
+  || { dump "$L"; fail "a: the dev bundle threw at boot ($(grep -m1 -oE "getEnforcing\([^)]*\): '[A-Za-z]+'" "$L" | tr -d '\n')) -- a module __DEV__ bundles require is missing"; }
 grep -qE '^rn-impeller: scene_nodes=[1-9]' "$L" \
   || { dump "$L"; fail "a: the dev bundle mounted nothing -- dev bundles do not boot"; }
 grep -qF '[js] DEV_BOOT dev=true' "$L" || { dump "$L"; fail "a: __DEV__ is not true inside the bundle -- the gate did not run a dev bundle"; }
