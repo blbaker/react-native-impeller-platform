@@ -263,6 +263,12 @@ ReactHost::ReactHost() {
   modules_->add("Networking", [n = network_](auto inv) {
     return std::make_shared<NetworkingModule>(inv, n);
   });
+  // parity item 12. WebSocketModule: getEnforcing'd by every __DEV__ bundle
+  // (setUpReactDevTools / HMRClient), so its absence made dev bundles throw
+  // before the first render. Also Metro's HMR transport and app WebSockets.
+  modules_->add("WebSocketModule", [](auto inv) {
+    return std::make_shared<WebSocketModule>(inv);
+  });
   // ENG-04 shape B. ONE narrow file primitive; the AsyncStorage-shaped API is
   // a JS shim on top. See AppStorageModule.h for why the engine does not vend
   // a Storage API itself -- short version: persistence is not a renderer

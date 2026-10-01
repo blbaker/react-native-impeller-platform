@@ -202,6 +202,9 @@ const SPEC_FOR = {
   // desktop-input item 5. RN's own Clipboard spec; the engine module
   // subclasses NativeClipboardCxxSpec (getString/setString).
   Clipboard:          'src/private/specs_DEPRECATED/modules/NativeClipboard.js',
+  // parity item 12. RN's WebSocket spec; the engine module subclasses
+  // NativeWebSocketModuleCxxSpec.
+  WebSocketModule:    'src/private/specs_DEPRECATED/modules/NativeWebSocketModule.js',
 };
 
 // ⛔ SOME MODULES HAVE NO RN CORE SPEC, AND THAT IS NOT AN ESCAPE HATCH.
