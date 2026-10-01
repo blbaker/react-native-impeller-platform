@@ -172,7 +172,7 @@ run_win "$WORK/e.log" 50 --click-after-frames "5:$SETNEWLINE_XY" \
   --key-after-frames "10:Shift:down;Shift:down;v:down:ctrl"
 E_RESULT="$(onchange_last "$WORK/e.log" 2)"
 [ "$E_RESULT" = "a b c" ] \
-  || { dump "$WORK/e.log"; fail "e: pasting 'a\\nb\\r\\nc' into a single-line field should flatten every CR/LF run to one space, giving 'a b c'; got '$E_RESULT'"; }
+  || { dump "$WORK/e.log"; fail "e: pasting 'a\\nb\\r\\nc' into a single-line field should flatten every CR/LF run to one space, giving 'a b c'; got '$E_RESULT' -- newline flattening on paste is missing or wrong"; }
 echo "   OK: field2 = 'a b c'"
 
 echo "== f. copy with an empty selection does not touch the clipboard =="
