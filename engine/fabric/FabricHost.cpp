@@ -872,6 +872,71 @@ bool FabricHost::emitPointer(int tag, bool enter, float x, float y) {
   return true;
 }
 
+// desktop-input-gap item 6. W3C pointer events for ANY mouse button, on the
+// hit-tested tag (Fabric bubbles them to ancestors). down/up -> onPointerDown/
+// onPointerUp. A release over the SAME tag as its press is a click: onClick
+// for the left button (detail = click count), and an `auxClick` event for the
+// others (registered as topAuxClick by the BaseViewConfig shim, matching
+// react-native-macos/-windows). No touch is involved: Pressable's onPress and
+// TextInput focus stay on the left button's own touch path in main.cpp.
+int FabricHost::dispatchPointerButton(float x, float y, bool down, int button,
+                                      int buttons, int clickCount, bool shift,
+                                      bool ctrl, bool alt, bool meta) {
+  if (!sceneGraph_ || !runtimeScheduler_) return 0;
+  const react::Tag tag = sceneGraph_->hitTest(x, y);
+  if (button < 0 || button > 4) return 0;
+  const int pressTag = pointerPressTag_[button];
+  if (down) pointerPressTag_[button] = (int)tag;
+  if (!down) pointerPressTag_[button] = 0;
+  if (tag == 0) return 0;
+  auto touchEmitter = std::dynamic_pointer_cast<const react::TouchEventEmitter>(
+      sceneGraph_->eventEmitterFor(tag));
+  if (!touchEmitter) return 0;
+
+  react::PointerEvent event{};
+  event.pointerId = 1;
+  event.pointerType = "mouse";
+  event.isPrimary = true;
+  event.clientPoint = {x, y};
+  event.screenPoint = {x, y};
+  event.offsetPoint = {x, y};
+  event.pressure = buttons != 0 ? 0.5f : 0.0f;
+  event.width = 1.0f;
+  event.height = 1.0f;
+  event.button = button;
+  event.buttons = buttons;
+  event.detail = clickCount;
+  event.shiftKey = shift;
+  event.ctrlKey = ctrl;
+  event.altKey = alt;
+  event.metaKey = meta;
+
+  const bool isClick = !down && pressTag == (int)tag;
+  printf("rn-impeller: pointer %s tag=%d button=%d buttons=%d detail=%d "
+         "mods=shift:%d,ctrl:%d,alt:%d,meta:%d%s\n",
+         down ? "down" : "up", (int)tag, button, buttons, clickCount,
+         shift ? 1 : 0, ctrl ? 1 : 0, alt ? 1 : 0, meta ? 1 : 0,
+         isClick ? (button == 0 ? " click" : " auxclick") : "");
+  fflush(stdout);
+  runtimeScheduler_->scheduleWork(
+      [touchEmitter, event, down, isClick, button](facebook::jsi::Runtime&) {
+        if (down) {
+          touchEmitter->onPointerDown(event);
+          return;
+        }
+        touchEmitter->onPointerUp(event);
+        if (!isClick) return;
+        if (button == 0) {
+          touchEmitter->onClick(event);
+        } else {
+          touchEmitter->dispatchEvent(
+              "auxClick", std::make_shared<react::PointerEvent>(event),
+              react::RawEvent::Category::Discrete);
+        }
+      });
+  return (int)tag;
+}
+
 // ENG-09 hover/cursor. Move the retained hovered tag; emit leave/enter only on
 // a transition. The two effects that must both hold: (1) the OLD view gets a
 // pointerleave so its hover styling clears, (2) the NEW view gets a

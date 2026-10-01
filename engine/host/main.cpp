@@ -313,6 +313,10 @@ struct MouseSpec {
   int op = 0;
   double x = 0.0, y = 0.0;
   bool shift = false;
+  // item 6: W3C button (0 left .. 4 forward) and full modifiers. When
+  // `button` is set (>= 0), the event goes through synthesiseMouseButton.
+  int button = -1;
+  bool ctrl = false, alt = false, meta = false;
 };
 
 #if RNI_WITH_WINDOW
@@ -614,6 +618,14 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     const int hit = down ? fabric.beginTouchCapture(x, y)
                          : fabric.endTouchCapture(x, y);
     if (!down) fabric.endTextSelectionDrag();  // item 4b
+    // item 6: the left button ALSO gets W3C pointer events (button 0,
+    // detail = click count, live modifiers), alongside its RN touch.
+    {
+      const auto md = surface.lastMods();
+      fabric.dispatchPointerButton(x, y, down, 0, surface.heldButtonsMask(),
+                                   surface.lastClickCount(), md.shift, md.ctrl,
+                                   md.alt, md.meta);
+    }
     if (down) {
       // <TextInput>. ENG-01b. A press also (re)assigns keyboard focus: click a
       // field to edit it, click elsewhere to blur. This must run on the DOWN so
@@ -637,6 +649,16 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       fflush(stdout);
     }
   });
+
+  // item 6. Right/middle/back/forward: W3C pointer events ONLY. Deliberately
+  // no beginTouchCapture (no Pressable onPress) and no focusTextInputAt (a
+  // right click must not move the caret or steal focus).
+  surface.setExtraButtonHandler(
+      [&](const rni::GlfwSurface::ExtraButtonEvent& ev) {
+        fabric.dispatchPointerButton(ev.x, ev.y, ev.down, ev.button,
+                                     ev.buttons, ev.clickCount, ev.shift,
+                                     ev.ctrl, ev.alt, ev.meta);
+      });
 
   // <ScrollView>. ENG-02. Same shape and the same threading argument as the
   // touch handler above: dispatch and return, never block the event thread.
@@ -1125,7 +1147,12 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
         printf("rn-impeller: mouse_requested op=%d at=%.1f,%.1f shift=%d\n",
                ms.op, ms.x, ms.y, ms.shift ? 1 : 0);
         fflush(stdout);
-        surface.synthesiseMouse(ms.op, ms.x, ms.y, ms.shift);
+        if (ms.button >= 0 && ms.op != 2) {
+          surface.synthesiseMouseButton(ms.button, ms.op == 0, ms.x, ms.y,
+                                        ms.shift, ms.ctrl, ms.alt, ms.meta);
+        } else {
+          surface.synthesiseMouse(ms.op, ms.x, ms.y, ms.shift);
+        }
         // Wait for JS only after the LAST event. Waiting after each one
         // spaced presses ~450 ms apart, at the edge of the 500 ms
         // double-click interval, which a real mouse never does (GLFW
@@ -1227,6 +1254,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // glfwDestroyWindow can dispatch a queued button event, and a click landing
   // after ~FabricHost would dispatch a touch into freed memory.
   surface.setMouseButtonHandler(nullptr);
+  surface.setExtraButtonHandler(nullptr);  // item 6
   // <ScrollView>. ENG-02. Same lifetime argument again: the scroll handler
   // captures `fabric`, and a queued wheel event delivered by glfwDestroyWindow
   // would dispatch into freed memory.
@@ -1777,17 +1805,50 @@ int main(int argc, char** argv) {
           MouseSpec ms;
           auto at = seg.find('@');
           auto comma = seg.find(',', at == std::string::npos ? 0 : at);
-          const std::string op = seg.substr(0, at);
+          std::string op = seg.substr(0, at);
+          // item 6: optional "+mod,mod" suffix (shift, ctrl, alt, meta) and
+          // button-prefixed ops: r (right), m (middle), b4 (back), b5
+          // (forward), l (left, explicit) -- e.g. rdown+ctrl,shift@X,Y.
+          std::string modStr;
+          if (auto plus = op.find('+'); plus != std::string::npos) {
+            modStr = op.substr(plus + 1);
+            op = op.substr(0, plus);
+          }
+          int button = -1;
+          if (op.rfind("b4", 0) == 0) { button = 3; op = op.substr(2); }
+          else if (op.rfind("b5", 0) == 0) { button = 4; op = op.substr(2); }
+          else if (op == "rdown" || op == "rup") { button = 2; op = op.substr(1); }
+          else if (op == "mdown" || op == "mup") { button = 1; op = op.substr(1); }
+          else if (op == "ldown" || op == "lup") { button = 0; op = op.substr(1); }
+          bool badMod = false;
+          for (size_t mp = 0; mp < modStr.size();) {
+            size_t mc = modStr.find(',', mp);
+            const std::string md = modStr.substr(
+                mp, mc == std::string::npos ? std::string::npos : mc - mp);
+            if (md == "shift") ms.shift = true;
+            else if (md == "ctrl") ms.ctrl = true;
+            else if (md == "alt") ms.alt = true;
+            else if (md == "meta") ms.meta = true;
+            else if (!md.empty()) badMod = true;
+            if (mc == std::string::npos) break;
+            mp = mc + 1;
+          }
           if (at == std::string::npos || comma == std::string::npos ||
+              badMod ||
               (op != "down" && op != "up" && op != "move" && op != "sdown")) {
             fprintf(stderr,
                     "rn-impeller: --mouse-after-frames bad event '%s' (want "
-                    "down|up|move|sdown@X,Y)\n",
+                    "[r|m|l|b4|b5]down|up|move|sdown[+mods]@X,Y)\n",
                     seg.c_str());
             return 2;
           }
           ms.op = op == "up" ? 1 : op == "move" ? 2 : 0;
-          ms.shift = op == "sdown";
+          if (op == "sdown") ms.shift = true;
+          // A modifier on a plain down/up routes through the full-modifier
+          // path as an explicit left-button event.
+          if (button < 0 && (ms.ctrl || ms.alt || ms.meta) && ms.op != 2)
+            button = 0;
+          ms.button = button;
           ms.x = atof(seg.substr(at + 1, comma - at - 1).c_str());
           ms.y = atof(seg.substr(comma + 1).c_str());
           mouseSequence.push_back(ms);

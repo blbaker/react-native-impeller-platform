@@ -156,6 +156,14 @@ class FabricHost {
   // item 4b: extend the selection while the button is held after a press in a
   // TextInput. Returns true when the move was handled as a selection drag.
   bool dragTextSelection(float x, float y);
+
+  // item 6. W3C pointer events for ANY mouse button (0 left, 1 middle,
+  // 2 right, 3 back, 4 forward) on the hit-tested tag: onPointerDown/Up, plus
+  // onClick (left) or auxClick (others) when the release lands on the press's
+  // tag. Never starts a touch and never moves TextInput focus.
+  int dispatchPointerButton(float x, float y, bool down, int button,
+                            int buttons, int clickCount, bool shift, bool ctrl,
+                            bool alt, bool meta);
   void endTextSelectionDrag();
 
   // A single editing keystroke, applied to the focused field's buffer AT THE
@@ -295,6 +303,8 @@ class FabricHost {
   // Accessed only from the event thread (all callers are), same as hoveredTag_.
   int capturedTag_{0};
   // item 4b: mouse text-selection drag state (0 = no drag).
+  // item 6: tag each button was pressed on (0 = none), for click pairing.
+  int pointerPressTag_[5]{};
   int dragTag_{0};
   int dragUnit_{1};
   size_t dragAnchorLo_{0};

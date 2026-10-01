@@ -588,6 +588,9 @@ class GlfwSurface {
   // so `buttons` on a pointer event reflects what is ACTUALLY down, not just
   // the button the current event is about -- the item 6(h) bitmask arm.
   int heldButtons_{0};
+  // item 6 (__APPLE__): the current left press was a Ctrl+left secondary
+  // click, so its release also goes to the right-button path.
+  bool ctrlLeftIsRight_{false};
   // item 6. Modifiers as of the most recent press OR release, left included
   // -- unlike pressShift_ above (item 4b), which freezes at the left
   // button's PRESS for the click-count/selection logic that predates this
