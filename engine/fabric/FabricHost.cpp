@@ -83,8 +83,33 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
   void schedulerShouldMergeReactRevision(react::SurfaceId) override {}
   void schedulerDidRequestPreliminaryViewAllocation(
       const react::ShadowNode&) override {}
-  void schedulerDidDispatchCommand(const react::ShadowView&, const std::string&,
-                                   const folly::dynamic&) override {}
+  // item 7: view commands (ScrollView scrollTo/scrollToEnd, TextInput
+  // focus/blur/setTextAndSelection). This was an empty stub, so every
+  // ref.scrollTo(), ref.focus() and controlled `selection`/`value` update
+  // that RN routes through a command was silently dropped. Runs on the JS
+  // thread; the host applies it on the main thread.
+  std::function<void(FabricHost::ViewCommand)> commandHandler_;
+  void schedulerDidDispatchCommand(const react::ShadowView& shadowView,
+                                   const std::string& commandName,
+                                   const folly::dynamic& args) override {
+    if (!commandHandler_) return;
+    FabricHost::ViewCommand cmd;
+    cmd.tag = (int)shadowView.tag;
+    cmd.name = commandName;
+    if (args.isArray()) {
+      for (const auto& a : args) {
+        if (a.isNumber()) {
+          cmd.nums.push_back(a.asDouble());
+        } else if (a.isBool()) {
+          cmd.bools.push_back(a.asBool());
+        } else if (a.isString()) {
+          cmd.hasText = true;
+          cmd.text = a.asString();
+        }
+      }
+    }
+    commandHandler_(std::move(cmd));
+  }
   void schedulerDidSendAccessibilityEvent(const react::ShadowView&,
                                           const std::string&) override {}
   void schedulerDidSetIsJSResponder(const react::ShadowView&, bool,
@@ -374,6 +399,20 @@ size_t Utf8OffsetToUtf16Units(const std::string& s, size_t byteOffset) {
   return units;
 }
 
+// item 7: inverse of Utf8OffsetToUtf16Units. Clamps to the end; never lands
+// inside a UTF-8 sequence, and a unit count that would split a surrogate pair
+// rounds up past the codepoint.
+size_t Utf16UnitsToUtf8Offset(const std::string& s, size_t units) {
+  size_t i = 0, u = 0;
+  while (i < s.size() && u < units) {
+    size_t len;
+    const unsigned int cp = Utf8DecodeAt(s, i, &len);
+    u += cp >= 0x10000 ? 2 : 1;
+    i += len;
+  }
+  return i;
+}
+
 // Escapes control bytes for the `rn-impeller: caret ...` log line so a
 // newline/tab embedded in the buffer can never split the machine-readable
 // line a gate greps. Multi-byte UTF-8 sequences pass through RAW (not
@@ -556,7 +595,11 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
                                                *runtimeScheduler);
   };
 
-  delegate_ = std::make_unique<ImpellerSchedulerDelegate>(sceneGraph, logMutations);
+  {
+    auto d = std::make_unique<ImpellerSchedulerDelegate>(sceneGraph, logMutations);
+    d->commandHandler_ = [this](ViewCommand cmd) { postCommand(std::move(cmd)); };
+    delegate_ = std::move(d);
+  }
   scheduler_ = std::make_unique<react::Scheduler>(
       toolbox, /*animationDelegate*/ nullptr, delegate_.get());
   std::printf("[fabric] scheduler up (UIManagerBinding installed)\n");
@@ -817,15 +860,25 @@ int FabricHost::dispatchScroll(float x, float y, float dx, float dy) {
       std::dynamic_pointer_cast<const react::ScrollViewEventEmitter>(emitter);
   if (!scrollEmitter) return 0;
 
+  emitScroll((int)res.tag, res.offsetX, res.offsetY, res.contentWidth,
+             res.contentHeight, res.containerWidth, res.containerHeight);
+  return (int)res.tag;
+}
+
+// item 7: shared by wheel scrolling and the scrollTo/scrollToEnd commands.
+void FabricHost::emitScroll(int tag, float offsetX, float offsetY,
+                            float contentW, float contentH, float containerW,
+                            float containerH) {
+  auto scrollEmitter = std::dynamic_pointer_cast<const react::ScrollViewEventEmitter>(
+      sceneGraph_->eventEmitterFor((react::Tag)tag));
+  if (!scrollEmitter) return;
   react::ScrollEvent event{};
   // Both axes reported: a horizontal list drives contentOffset.x, and a JS
   // handler reading nativeEvent.contentOffset.x for a sticky column header or a
   // paged carousel index would otherwise always read zero while the pixels slid.
-  event.contentOffset = {(react::Float)res.offsetX, (react::Float)res.offsetY};
-  event.contentSize = {(react::Float)res.contentWidth,
-                       (react::Float)res.contentHeight};
-  event.containerSize = {(react::Float)res.containerWidth,
-                         (react::Float)res.containerHeight};
+  event.contentOffset = {(react::Float)offsetX, (react::Float)offsetY};
+  event.contentSize = {(react::Float)contentW, (react::Float)contentH};
+  event.containerSize = {(react::Float)containerW, (react::Float)containerH};
   event.zoomScale = 1.0f;
   event.timestamp =
       (react::Float)std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -839,7 +892,6 @@ int FabricHost::dispatchScroll(float x, float y, float dx, float dy) {
       [scrollEmitter, event](facebook::jsi::Runtime&) {
         scrollEmitter->onScroll(event);
       });
-  return (int)res.tag;
 }
 
 // ENG-09 hover/cursor.
@@ -1406,6 +1458,7 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
   react::TextInputEventEmitter::Metrics m{};
   m.text = value;
   m.eventCount = ++tiEventCount_;
+  if (textChanged) lastChangeEventCount_[(int)tag] = m.eventCount;  // item 7
   // UTF-16 code units, per RN's own selectionRange convention -- NOT the
   // UTF-8 byte offset the engine stores internally.
   // item 4a: ordered {start,end}; length 0 when collapsed.
@@ -1605,6 +1658,153 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
 
   if (tabNav) moveFocus(!mods.shift);
   return (int)target;
+}
+
+// item 7. View commands.
+void FabricHost::postCommand(ViewCommand cmd) {
+  bool queued = false;
+  std::function<void()> wake;
+  {
+    std::lock_guard<std::mutex> lock(mainMutex_);
+    if (mainQueueEnabled_) {
+      mainQueue_.push_back(std::move(cmd));
+      wake = mainWake_;
+      queued = true;
+    }
+  }
+  if (queued) {
+    if (wake) wake();
+    return;
+  }
+  runCommand(cmd);  // headless: there is no separate main thread to protect
+}
+
+void FabricHost::enableMainQueue(std::function<void()> wake) {
+  std::lock_guard<std::mutex> lock(mainMutex_);
+  mainQueueEnabled_ = true;
+  mainWake_ = std::move(wake);
+}
+
+void FabricHost::drainMain() {
+  std::vector<ViewCommand> batch;
+  {
+    std::lock_guard<std::mutex> lock(mainMutex_);
+    batch.swap(mainQueue_);
+  }
+  for (const auto& c : batch) runCommand(c);
+}
+
+void FabricHost::runCommand(const ViewCommand& cmd) {
+  if (!sceneGraph_ || !runtimeScheduler_) return;
+  const react::Tag tag = (react::Tag)cmd.tag;
+  printf("rn-impeller: command tag=%d name=%s nums=%zu text=%d\n", cmd.tag,
+         cmd.name.c_str(), cmd.nums.size(), cmd.hasText ? 1 : 0);
+  fflush(stdout);
+
+  if (cmd.name == "scrollTo" || cmd.name == "scrollToEnd") {
+    // scrollTo(x, y, animated) / scrollToEnd(animated). An animated scroll
+    // jumps straight to the target (there is no scroll animation driver yet),
+    // which is what RN does when animations are disabled.
+    const bool toEnd = cmd.name == "scrollToEnd";
+    const float x = cmd.nums.size() > 0 ? (float)cmd.nums[0] : 0.0f;
+    const float y = cmd.nums.size() > 1 ? (float)cmd.nums[1] : 0.0f;
+    const auto r = sceneGraph_->scrollTo(tag, x, y, toEnd);
+    if (r.tag == 0) return;
+    printf("rn-impeller: scroll_command tag=%d x=%.1f y=%.1f\n", cmd.tag,
+           r.offsetX, r.offsetY);
+    fflush(stdout);
+    emitScroll(cmd.tag, r.offsetX, r.offsetY, r.contentWidth, r.contentHeight,
+               r.containerWidth, r.containerHeight);
+    return;
+  }
+  if (cmd.name == "flashScrollIndicators" || cmd.name == "zoomToRect") {
+    return;  // no scroll indicators / zoom on this platform: honest no-op
+  }
+
+  if (cmd.name == "focus") {
+    if (!sceneGraph_->isTextInputTag(tag)) return;
+    const react::Tag prev = sceneGraph_->focusedTextInput();
+    if (prev == tag) return;
+    if (prev != 0) {
+      emitTextInputFocusEvent(prev, false);
+      sceneGraph_->clearTextInputFocus();
+      dragTag_ = 0;
+    }
+    blurFocusedView();
+    sceneGraph_->setTextInputFocus(tag);  // caret at the end, like iOS
+    emitTextInputFocusEvent(tag, true);
+    return;
+  }
+  if (cmd.name == "blur") {
+    if (sceneGraph_->focusedTextInput() != tag) return;
+    emitTextInputFocusEvent(tag, false);
+    sceneGraph_->clearTextInputFocus();
+    dragTag_ = 0;
+    return;
+  }
+
+  if (cmd.name == "setTextAndSelection") {
+    // (mostRecentEventCount, value | null, start, end); start/end -1 = keep.
+    // nums holds [eventCount, start, end] (the value is a string or null).
+    if (cmd.nums.size() < 3) return;
+    const int eventCount = (int)cmd.nums[0];
+    const int startU16 = (int)cmd.nums[1];
+    const int endU16 = (int)cmd.nums[2];
+    const bool focused = sceneGraph_->focusedTextInput() == tag;
+    std::string value = sceneGraph_->textInputValueFor(tag);
+    bool textChanged = false;
+    auto lastIt = lastChangeEventCount_.find(cmd.tag);
+    const bool stale =
+        lastIt != lastChangeEventCount_.end() && eventCount < lastIt->second;
+    if (cmd.hasText && !stale && cmd.text != value) {
+      value = cmd.text;
+      textChanged = true;
+    }
+    if (!focused) {
+      // Not being edited: only the displayed value changes; the selection
+      // applies the next time the field takes focus (iOS behaviour).
+      if (textChanged) sceneGraph_->setTextInputValue(tag, value);
+      printf("rn-impeller: settext_unfocused tag=%d text=%s\n", cmd.tag,
+             EscapeForLog(value).c_str());
+      fflush(stdout);
+      return;
+    }
+    size_t anchor = sceneGraph_->textInputSelectionAnchorFor(tag);
+    size_t caret = sceneGraph_->textInputCaretFor(tag);
+    if (textChanged) anchor = caret = value.size();
+    if (startU16 >= 0 && endU16 >= 0) {
+      anchor = Utf16UnitsToUtf8Offset(value, (size_t)startU16);
+      caret = Utf16UnitsToUtf8Offset(value, (size_t)endU16);
+    }
+    if (anchor > value.size()) anchor = value.size();
+    if (caret > value.size()) caret = value.size();
+    if (anchor == caret) {
+      sceneGraph_->setTextInputEdit(tag, value, caret);
+    } else {
+      sceneGraph_->setTextInputSelection(tag, value, anchor, caret);
+    }
+    printf("rn-impeller: caret tag=%d pos=%zu text=%s\n", cmd.tag, caret,
+           EscapeForLog(value).c_str());
+    printf("rn-impeller: selection tag=%d anchor=%zu caret=%zu command=1\n",
+           cmd.tag, anchor, caret);
+    fflush(stdout);
+    // A command does NOT fire onChange (JS already holds the text it set),
+    // but the selection change is reported, as on iOS.
+    auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
+        sceneGraph_->eventEmitterFor(tag));
+    if (te) {
+      react::TextInputEventEmitter::Metrics m{};
+      m.text = value;
+      m.eventCount = ++tiEventCount_;
+      const int lo = (int)Utf8OffsetToUtf16Units(value, std::min(anchor, caret));
+      const int hi = (int)Utf8OffsetToUtf16Units(value, std::max(anchor, caret));
+      m.selectionRange.location = lo;
+      m.selectionRange.length = hi - lo;
+      runtimeScheduler_->scheduleWork(
+          [te, m](facebook::jsi::Runtime&) { te->onSelectionChange(m); });
+    }
+    return;
+  }
 }
 
 // item 11. Focus traversal helpers.

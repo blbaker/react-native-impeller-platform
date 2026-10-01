@@ -3083,6 +3083,62 @@ facebook::react::Tag SceneGraph::scrollViewAt(float x, float y) {
 // viewport child AND a taller content container, and front() picked the wrong
 // one, clamping every scroll to zero. Read live, not from a paint cache, so a
 // headless run that never painted still scrolls.
+SceneGraph::ScrollResult SceneGraph::scrollTo(facebook::react::Tag tag,
+                                             float x, float y, bool toEnd) {
+  ScrollResult r{};
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end() || !it->second.isScrollView) return r;
+  SceneNode& sv = it->second;
+  // Same extent rule as scrollBy: union of the children's frames minus the
+  // viewport, per axis.
+  float contentW = 0.0f, contentH = 0.0f;
+  for (auto childTag : sv.children) {
+    auto content = nodes_.find(childTag);
+    if (content == nodes_.end()) continue;
+    const auto& cf = content->second.layoutMetrics.frame;
+    contentW = std::max(contentW, (float)(cf.origin.x + cf.size.width));
+    contentH = std::max(contentH, (float)(cf.origin.y + cf.size.height));
+  }
+  const float containerW = (float)sv.layoutMetrics.frame.size.width;
+  const float containerH = (float)sv.layoutMetrics.frame.size.height;
+  const float maxX = std::max(0.0f, contentW - containerW);
+  const float maxY = std::max(0.0f, contentH - containerH);
+  const float beforeX = sv.scrollX;
+  const float beforeY = sv.scrollY;
+  if (toEnd) {
+    // scrollToEnd: the end of whichever axis overflows (vertical wins a tie,
+    // matching RN iOS, which picks horizontal only for a horizontal list).
+    if (maxY > 0.0f || maxX <= 0.0f) {
+      sv.scrollY = maxY;
+    } else {
+      sv.scrollX = maxX;
+    }
+  } else {
+    sv.scrollX = std::min(std::max(0.0f, x), maxX);
+    sv.scrollY = std::min(std::max(0.0f, y), maxY);
+  }
+  r.tag = tag;
+  r.offsetX = sv.scrollX;
+  r.offsetY = sv.scrollY;
+  r.contentWidth = contentW;
+  r.contentHeight = contentH;
+  r.containerWidth = containerW;
+  r.containerHeight = containerH;
+  r.moved = (sv.scrollX != beforeX) || (sv.scrollY != beforeY);
+  if (r.moved) bumpVersion();
+  return r;
+}
+
+void SceneGraph::setTextInputValue(facebook::react::Tag tag,
+                                   const std::string& value) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end() || !it->second.isTextInput) return;
+  it->second.tiValue = value;
+  bumpVersion();
+}
+
 SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dx,
                                              float dy) {
   ScrollResult r{};

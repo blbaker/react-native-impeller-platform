@@ -426,6 +426,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       [&surface]() { return surface.getClipboardString(); },
       [&surface](const std::string& s) { surface.setClipboardString(s); });
   clipboard->setWake([&surface]() { surface.postEmptyEvent(); });
+  // item 7: windowed view commands run on this (main) thread.
+  fabric.enableMainQueue([&surface]() { surface.postEmptyEvent(); });
   // The TextInput Copy/Cut/Paste shortcuts run ON THE MAIN THREAD (the GLFW
   // key callback), so they read/write the clipboard DIRECTLY through the
   // bridge's synchronous accessors rather than through the queue -- see
@@ -914,6 +916,9 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // setString() call from the JS thread posts here and waits for this
     // drain (or the bridge's wake, under --idle-skip) to run it.
     clipboard->drainMain();
+    // item 7: view commands (scrollTo, focus, setTextAndSelection) queued by
+    // the JS thread; applied here, on the thread that owns input + paint.
+    fabric.drainMain();
 
     // Test hook: drive a resize from inside the process at a known frame.
     // There is no headless way to make a window manager resize a window, and

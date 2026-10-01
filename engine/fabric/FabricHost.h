@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -161,6 +163,24 @@ class FabricHost {
   // in SceneGraph::tabOrder(), wrapping. Blurs the old element; a TextInput
   // gets focus with ALL its text selected, a View gets focus + a focus ring.
   // Returns the newly focused tag.
+  // item 7. One view command (UIManager dispatchCommand / RN refs:
+  // ScrollView scrollTo/scrollToEnd, TextInput focus/blur/
+  // setTextAndSelection). Args are pre-split by JSON type, in order.
+  struct ViewCommand {
+    int tag{0};
+    std::string name;
+    std::vector<double> nums;
+    std::vector<bool> bools;
+    bool hasText{false};
+    std::string text;
+  };
+  // Called on the JS thread by the scheduler delegate. Windowed: queued for
+  // the main thread (drainMain); headless: run inline.
+  void postCommand(ViewCommand cmd);
+  // Windowed host: enable the main-thread queue and its wake.
+  void enableMainQueue(std::function<void()> wake);
+  void drainMain();
+
   int moveFocus(bool forward);
   void blurFocusedView();
 
@@ -323,6 +343,18 @@ class FabricHost {
   // increase across every event this field emits, so it lives on the host, not
   // per-dispatch.
   int tiEventCount_{0};
+  void runCommand(const ViewCommand& cmd);
+  void emitScroll(int tag, float offsetX, float offsetY, float contentW,
+                  float contentH, float containerW, float containerH);
+  // item 7: main-thread command queue (see postCommand).
+  std::mutex mainMutex_;
+  std::vector<ViewCommand> mainQueue_;
+  bool mainQueueEnabled_{false};
+  std::function<void()> mainWake_;
+  // item 7: eventCount of the last onChange per field. A setTextAndSelection
+  // carrying an OLDER count is stale (the user typed since JS rendered) and
+  // its text is dropped, the same rule RN Android applies.
+  std::map<int, int> lastChangeEventCount_;
   void emitTextInputFocusEvent(int tag, bool focus);
   void emitViewFocusEvent(int tag, bool focus);
 

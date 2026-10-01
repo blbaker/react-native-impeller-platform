@@ -49,6 +49,11 @@ const SHIM_TARGETS = {
   // full "native fires, JS never hears" story.
   'react-native/Libraries/NativeComponent/ViewConfigIgnore.js':
     'ViewConfigIgnore.impeller.js',
+  // parity item 7. TextInputState.js sends focus/blur commands only on ios/
+  // android, behind a Platform.OS check Metro inlines to 'impeller' at build
+  // time, so ref.focus()/ref.blur() never reached native. See the shim.
+  'react-native/Libraries/Components/TextInput/TextInputState.js':
+    'TextInputState.impeller.js',
 };
 
 // ---------------------------------------------------------------------------
