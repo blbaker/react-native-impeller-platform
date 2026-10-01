@@ -955,6 +955,23 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
   return true;
 }
 
+namespace {
+// parity item 8. RN (like CSS) applies `opacity` to a view AND its subtree,
+// composited as ONE group: a child under an opacity:0 parent is invisible,
+// and two overlapping opaque children under opacity:0.5 show the top child
+// at 50% over the background, not over the bottom child. A node with
+// children and opacity < 1 therefore paints into a save-layer composited at
+// its opacity; inside it, its own draws use alpha 1 (the layer applies the
+// opacity once). A LEAF keeps the cheaper per-draw alpha, which is exact for
+// a single draw.
+bool UsesOpacityLayer(const SceneNode& n) {
+  return n.opacity < 0.999f && !n.children.empty();
+}
+float OwnAlpha(const SceneNode& n) {
+  return UsesOpacityLayer(n) ? 1.0f : n.opacity;
+}
+}  // namespace
+
 void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                            const SceneNode& node, float originX,
                            float originY) {
@@ -1022,6 +1039,25 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerDisplayListBuilderTransform(builder, &pre);
     ImpellerDisplayListBuilderTransform(builder, &m);
     ImpellerDisplayListBuilderTransform(builder, &post);
+  }
+
+  // parity item 8: group opacity (see UsesOpacityLayer). Opened AFTER the
+  // transform so the layer is in the node's transformed space, and closed
+  // just before the transform restore at the end of paintNode. The bounds are
+  // a hint only (children may overflow the frame, so it is not the frame);
+  // Impeller sizes the offscreen from the content's actual coverage.
+  const bool opacityLayer = UsesOpacityLayer(node);
+  if (opacityLayer) {
+    ImpellerPaint layerPaint = ImpellerPaintNew();
+    const ImpellerColor lc = {1.0f, 1.0f, 1.0f,
+                              std::clamp(node.opacity, 0.0f, 1.0f),
+                              kImpellerColorSpaceSRGB};
+    ImpellerPaintSetColor(layerPaint, &lc);
+    const ImpellerRect layerBounds = {-100000.0f, -100000.0f, 200000.0f,
+                                      200000.0f};
+    ImpellerDisplayListBuilderSaveLayer(builder, &layerBounds, layerPaint,
+                                        nullptr);
+    ImpellerPaintRelease(layerPaint);
   }
 
   // ⛔ THE SVG MATRIX MUST WRAP THIS NODE *AND ITS CHILDREN*.
@@ -1165,7 +1201,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     std::vector<ImpellerColor> colors;
     colors.reserve(node.gradColors.size());
     for (const auto& c : node.gradColors) {
-      colors.push_back(impellerColor(c.data(), node.opacity));
+      colors.push_back(impellerColor(c.data(), OwnAlpha(node)));
     }
     // Gradient endpoints are stored node-local; the display list is in surface
     // coordinates, so they translate by the node's painted origin.
@@ -1191,7 +1227,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerColorSourceRelease(src);
     }
   } else if (node.hasBackgroundColor && node.bg[3] > 0.0f) {
-    ImpellerColor c = impellerColor(node.bg, node.opacity);
+    ImpellerColor c = impellerColor(node.bg, OwnAlpha(node));
     ImpellerPaintSetColor(paint, &c);
     fillBox();
   }
@@ -1245,7 +1281,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                                                : kImpellerFillTypeNonZero;
         ImpellerPath path = ImpellerPathBuilderTakePathNew(pb, fillType);
         if (path != nullptr) {
-          const float nodeAlpha = std::clamp(node.opacity, 0.0f, 1.0f);
+          const float nodeAlpha = std::clamp(OwnAlpha(node), 0.0f, 1.0f);
           const float fillAlpha =
               std::clamp(node.svgFillOpacity, 0.0f, 1.0f) * nodeAlpha;
           const float strokeAlpha =
@@ -1359,7 +1395,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       }
     }
     ImpellerPaint textPaint = ImpellerPaintNew();
-    ImpellerColor tc = impellerColor(node.textColor, node.opacity);
+    ImpellerColor tc = impellerColor(node.textColor, OwnAlpha(node));
     ImpellerPaintSetColor(textPaint, &tc);
     ImpellerParagraphStyleSetForeground(style, textPaint);
 
@@ -1401,7 +1437,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerParagraphStyleSetFontSize(style, node.fontSize);
       ImpellerPaint tPaint = ImpellerPaintNew();
       const float* col = showPlaceholder ? node.tiPlaceholderColor : node.textColor;
-      ImpellerColor tc = impellerColor(col, node.opacity);
+      ImpellerColor tc = impellerColor(col, OwnAlpha(node));
       ImpellerPaintSetColor(tPaint, &tc);
       ImpellerParagraphStyleSetForeground(style, tPaint);
       ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
@@ -1436,7 +1472,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           const float x0 = x + pad + prefixW(lo);
           const float x1 = x + pad + prefixW(hi);
           ImpellerPaint selPaint = ImpellerPaintNew();
-          ImpellerColor sc = impellerColor(node.tiSelectionColor, node.opacity);
+          ImpellerColor sc = impellerColor(node.tiSelectionColor, OwnAlpha(node));
           ImpellerPaintSetColor(selPaint, &sc);
           ImpellerRect selRect = {x0, ty, x1 - x0, lineH};
           ImpellerDisplayListBuilderDrawRect(builder, &selRect, selPaint);
@@ -1489,7 +1525,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
               .count();
       if (caretVisible(msSinceReset)) {
         ImpellerPaint caretPaint = ImpellerPaintNew();
-        ImpellerColor cc = impellerColor(node.textColor, node.opacity);
+        ImpellerColor cc = impellerColor(node.textColor, OwnAlpha(node));
         ImpellerPaintSetColor(caretPaint, &cc);
         ImpellerRect caretRect = {caretX, ty, 1.0f, lineH};
         ImpellerDisplayListBuilderDrawRect(builder, &caretRect, caretPaint);
@@ -1594,6 +1630,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // transform applies to its subtree.
   if (svgTransformed) {
     ImpellerDisplayListBuilderRestore(builder);
+  }
+  if (opacityLayer) {
+    ImpellerDisplayListBuilderRestore(builder);  // item 8: group opacity
   }
   if (transformed) {
     ImpellerDisplayListBuilderRestore(builder);
@@ -2156,7 +2195,7 @@ void SceneGraph::paintBorders(ImpellerDisplayListBuilder builder,
   if (rounded && uniformWidth && uniformColor) {
     if (!node.hasBorderColors[0] || node.borderColors[0][3] <= 0.0f) return;
     ImpellerPaint paint = ImpellerPaintNew();
-    ImpellerColor c = impellerColor(node.borderColors[0], node.opacity);
+    ImpellerColor c = impellerColor(node.borderColors[0], OwnAlpha(node));
     ImpellerPaintSetColor(paint, &c);
     ImpellerPaintSetDrawStyle(paint, kImpellerDrawStyleStroke);
     ImpellerPaintSetStrokeWidth(paint, t);
@@ -2207,7 +2246,7 @@ void SceneGraph::paintBorders(ImpellerDisplayListBuilder builder,
         ImpellerPathBuilderTakePathNew(pb, kImpellerFillTypeNonZero);
     if (path != nullptr) {
       ImpellerPaint paint = ImpellerPaintNew();
-      ImpellerColor c = impellerColor(node.borderColors[e], node.opacity);
+      ImpellerColor c = impellerColor(node.borderColors[e], OwnAlpha(node));
       ImpellerPaintSetColor(paint, &c);
       ImpellerDisplayListBuilderDrawPath(builder, path, paint);
       ImpellerPaintRelease(paint);
