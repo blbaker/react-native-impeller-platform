@@ -18,6 +18,7 @@
 // So: let the upstream resolver do its job, then inspect the file it landed on and
 // swap it. The `SHIM_TARGETS` suffixes below are matched against that resolved path.
 
+const fs = require('fs');
 const path = require('path');
 
 const SHIM_DIR = path.join(__dirname, 'shims');
@@ -198,6 +199,27 @@ function shimForResolvedPath(filePath) {
   return null;
 }
 
+// parity item 20. Self re-export files redirected to their .ios.js sibling
+// (see resolveRequest). Only files measured to break are listed; the others
+// under Libraries/ are either already shimmed or render fine.
+const SELF_REEXPORTS = [
+  'react-native/Libraries/StyleSheet/PlatformColorValueTypes.js',
+  'react-native/Libraries/Utilities/BackHandler.js',
+  'react-native/Libraries/Components/AccessibilityInfo/legacySendAccessibilityEvent.js',
+];
+
+function selfReexportSibling(filePath) {
+  const posix = toPosix(filePath);
+  if (!SELF_REEXPORTS.some((rel) => posix.endsWith(rel))) return null;
+  const ios = filePath.replace(/\.js$/, '.ios.js');
+  return fs.existsSync(ios) ? ios : null;
+}
+
+// parity item 20. See shims/ReactNativeFeatureFlags.impeller.js.
+const FEATURE_FLAGS_SUFFIX =
+  'react-native/src/private/featureflags/ReactNativeFeatureFlags.js';
+const FEATURE_FLAGS_SHIM = 'ReactNativeFeatureFlags.impeller.js';
+
 function withImpeller(config = {}) {
   const resolver = config.resolver || {};
   const existingPlatforms = resolver.platforms || ['ios', 'android', 'native'];
@@ -207,13 +229,48 @@ function withImpeller(config = {}) {
 
   const priorResolveRequest = resolver.resolveRequest;
 
-  function resolveRequest(context, moduleName, platform) {
-    const resolution = priorResolveRequest
+  function baseResolve(context, moduleName, platform) {
+    return priorResolveRequest
       ? priorResolveRequest(context, moduleName, platform)
       : context.resolveRequest(context, moduleName, platform);
+  }
+
+  function resolveRequest(context, moduleName, platform) {
+    let resolution;
+    try {
+      resolution = baseResolve(context, moduleName, platform);
+    } catch (error) {
+      // parity item 20. RN ships some modules ONLY as .ios.js + .android.js
+      // with no platform-neutral file, so resolving them for 'impeller'
+      // THROWS. ReactDevToolsSettingsManager (reached from setUpReactDevTools
+      // in every __DEV__ bundle) is one: no dev bundle could even be built.
+      // Retry as ios, and ONLY on a throw: a module that resolves to an ios
+      // stub exporting undefined is a different defect, and a blanket
+      // redirect would hide it. (Moved here from HostApp's metro.config.js.)
+      if (platform !== 'impeller') throw error;
+      resolution = baseResolve(context, moduleName, 'ios');
+    }
 
     if (platform !== 'impeller' || !resolution || resolution.type !== 'sourceFile') {
       return resolution;
+    }
+    // parity item 20. Self re-export files: RN ships a few `Foo.js` whose body
+    // is `import Foo from './Foo'; export default Foo;`, meant to resolve
+    // through a .ios.js/.android.js sibling. On impeller there is no sibling,
+    // the import resolves back to ITSELF, and the default export is
+    // undefined. Measured in HostApp (Gluestack Popover): BackHandler ("Cannot
+    // read property 'addEventListener' of undefined") and
+    // legacySendAccessibilityEvent ("0,s.default is not a function").
+    const selfReexport = selfReexportSibling(resolution.filePath);
+    if (selfReexport) return {type: 'sourceFile', filePath: selfReexport};
+    // parity item 20. Feature-flags redirect (see the shim), except for the
+    // shim's own require of the real module.
+    const origin = toPosix(context.originModulePath || '');
+    if (
+      toPosix(resolution.filePath).endsWith(FEATURE_FLAGS_SUFFIX) &&
+      !origin.endsWith('/' + FEATURE_FLAGS_SHIM)
+    ) {
+      return {type: 'sourceFile', filePath: path.join(SHIM_DIR, FEATURE_FLAGS_SHIM)};
     }
     // Origin-scoped first: it is the narrower rule, and the only one that can
     // return a DIFFERENT Platform than the global shim.
