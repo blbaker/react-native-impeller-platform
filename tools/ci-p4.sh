@@ -199,6 +199,9 @@ const SPEC_FOR = {
   // THIS spec. Mapping to the Turbo flavour would check the method map the
   // engine does not serve -- green or red for the wrong reason either way.
   NativeAnimatedModule: 'src/private/specs_DEPRECATED/modules/NativeAnimatedModule.js',
+  // desktop-input item 5. RN's own Clipboard spec; the engine module
+  // subclasses NativeClipboardCxxSpec (getString/setString).
+  Clipboard:          'src/private/specs_DEPRECATED/modules/NativeClipboard.js',
 };
 
 // ⛔ SOME MODULES HAVE NO RN CORE SPEC, AND THAT IS NOT AN ESCAPE HATCH.
