@@ -60,6 +60,7 @@
 #include "scenegraph/CaretBlink.h"
 #include "impeller.h"
 #include "runtime/FeatureFlags.h"
+#include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
 
@@ -334,7 +335,7 @@ struct MouseSpec {
 // as compatible with a future mutation-driven skip-if-unchanged optimisation
 // as it is with staying vsync-driven forever, so nothing about P9-C is
 // foreclosed. See docs/STATE.md "Open questions" if that changes.
-int RunWindowed(const std::string& bundlePath, const std::string& appName,
+int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                 std::string bundle, size_t nodeReportOnly, size_t bundleSize,
                 const std::string& colorScheme, const std::string& initialUrl,
                 int width, int height, float pointScale, bool logMutations,
@@ -431,7 +432,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       [clipboard]() { return clipboard->getSystemNow(); },
       [clipboard](const std::string& s) { clipboard->setSystemNow(s); });
 
-  host.runScript(std::move(bundle), "file://" + bundlePath);
+  host.runScript(std::move(bundle), sourceUrl);
   host.waitForJsIdle(10000);
   // startSurface takes DEVICE PIXELS and divides by pointScale itself
   // (FabricHost.cpp:279) — so it gets the framebuffer size, not the request.
@@ -2004,19 +2005,50 @@ int main(int argc, char** argv) {
     Usage();
     return 2;
   }
-  if (!IsAbsolute(bundlePath)) {
-    fprintf(stderr,
-            "rn-impeller: FATAL: --bundle must be an ABSOLUTE path "
-            "(no CWD fallback exists)\n");
-    return 1;
-  }
-
+  // parity item 13. --bundle may be a Metro URL
+  // (http://host:8081/index.bundle?platform=impeller&dev=true). The bundle is
+  // fetched over the same transport as fetch() (NetworkingModule's
+  // performRequest), and the URL itself becomes the script's source URL, so
+  // SourceCode.scriptURL / getDevServer() report it: bundleLoadedFromServer
+  // is true and HMR + symbolication know which server to talk to.
+  const bool bundleIsUrl = bundlePath.rfind("http://", 0) == 0 ||
+                           bundlePath.rfind("https://", 0) == 0;
   std::string bundle;
-  if (!ReadFile(bundlePath, &bundle)) {
-    fprintf(stderr, "rn-impeller: FATAL: cannot read bundle at %s\n",
-            bundlePath.c_str());
-    return 1;
+  if (bundleIsUrl) {
+    const rni::ParsedUrl purl = rni::parseUrl(bundlePath);
+    if (!purl.valid) {
+      fprintf(stderr, "rn-impeller: FATAL: bad --bundle URL: %s\n",
+              purl.error.c_str());
+      return 1;
+    }
+    printf("rn-impeller: bundle_fetch url=%s\n", bundlePath.c_str());
+    fflush(stdout);
+    // Metro builds the bundle on first request: allow it time.
+    const rni::HttpResponse res =
+        rni::performRequest("GET", purl, {{"Accept", "*/*"}}, "", 120000.0);
+    if (!res.ok || res.status != 200) {
+      fprintf(stderr,
+              "rn-impeller: FATAL: cannot fetch bundle from %s (status %d%s%s)\n",
+              bundlePath.c_str(), res.status, res.error.empty() ? "" : ": ",
+              res.error.c_str());
+      return 1;
+    }
+    bundle = res.body;
+  } else {
+    if (!IsAbsolute(bundlePath)) {
+      fprintf(stderr,
+              "rn-impeller: FATAL: --bundle must be an ABSOLUTE path or an "
+              "http:// URL (no CWD fallback exists)\n");
+      return 1;
+    }
+    if (!ReadFile(bundlePath, &bundle)) {
+      fprintf(stderr, "rn-impeller: FATAL: cannot read bundle at %s\n",
+              bundlePath.c_str());
+      return 1;
+    }
   }
+  const std::string sourceUrl =
+      bundleIsUrl ? bundlePath : "file://" + bundlePath;
   const bool shimOk = bundle.find(kShimMarker) != std::string::npos;
   const size_t bundleSize = bundle.size();  // captured before the move below
   printf("rn-impeller: app=%s\n", appName.c_str());
@@ -2034,7 +2066,7 @@ int main(int argc, char** argv) {
     // handsPending guard keeps every frame-anchored windowed gate (resize/click/
     // scroll/hover/stall/screenshot/--frames) painting on schedule regardless.
     if (!idleSkipSet && frames == 0) idleSkip = true;
-    return RunWindowed(bundlePath, appName, std::move(bundle), 0, bundleSize,
+    return RunWindowed(sourceUrl, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl,
                        widthGiven ? width : 0, heightGiven ? height : 0,
                        pointScale,
@@ -2111,7 +2143,7 @@ int main(int argc, char** argv) {
     rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                            logMutations, host.displayMetrics());
 
-    host.runScript(std::move(bundle), "file://" + bundlePath);
+    host.runScript(std::move(bundle), sourceUrl);
     // Let the bundle finish evaluating (AppRegistry.registerComponent) before
     // asking for the surface, otherwise runApplication names a module that is
     // not registered yet.
