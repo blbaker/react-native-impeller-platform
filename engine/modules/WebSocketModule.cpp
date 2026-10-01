@@ -36,6 +36,11 @@ WsUrl parseWsUrl(const std::string& url) {
   }
   std::string scheme = url.substr(0, se);
   for (auto& c : scheme) c = (char)tolower((unsigned char)c);
+  // parity item 14. RN's HMRClient opens Metro's /hot socket with an
+  // http:// URL (`${origin}/hot`); iOS's RCTWebSocketModule (SocketRocket)
+  // treats http as ws and https as wss. Do the same.
+  if (scheme == "http") scheme = "ws";
+  if (scheme == "https") scheme = "wss";
   if (scheme == "wss") {
     u.error = "wss:// is not supported by this engine yet (no TLS): " + url;
     return u;

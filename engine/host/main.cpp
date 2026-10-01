@@ -60,6 +60,11 @@
 #include "scenegraph/CaretBlink.h"
 #include "impeller.h"
 #include "runtime/FeatureFlags.h"
+#if !defined(_WIN32)
+#include <unistd.h>
+#else
+#include <process.h>
+#endif
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
@@ -337,6 +342,9 @@ struct MouseSpec {
 // as compatible with a future mutation-driven skip-if-unchanged optimisation
 // as it is with staying vsync-driven forever, so nothing about P9-C is
 // foreclosed. See docs/STATE.md "Open questions" if that changes.
+// parity item 14: defined below main()'s argv capture.
+[[noreturn]] static void ReexecForReload(const std::string& reason);
+
 int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                 std::string bundle, size_t nodeReportOnly, size_t bundleSize,
                 const std::string& colorScheme, const std::string& initialUrl,
@@ -437,8 +445,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       [clipboard]() { return clipboard->getSystemNow(); },
       [clipboard](const std::string& s) { clipboard->setSystemNow(s); });
 
+  // parity item 14: DevSettings.reload() re-execs (see ReexecForReload).
+  // Called on the JS thread; the re-exec replaces the whole process.
+  host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
   host.runScript(std::move(bundle), sourceUrl);
   host.waitForJsIdle(10000);
+  // parity item 14: a bundle from Metro starts HMR (Fast Refresh).
+  host.devServerSetup(sourceUrl);
   // startSurface takes DEVICE PIXELS and divides by pointScale itself
   // (FabricHost.cpp:279) — so it gets the framebuffer size, not the request.
   fabric.startSurface(appName, 1, (float)pxWidth, (float)pxHeight, pointScale);
@@ -1367,7 +1380,30 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 }
 #endif  // RNI_WITH_WINDOW
 
+// parity item 14: the original argv, for DevSettings.reload's re-exec.
+static std::vector<std::string> gArgv;
+
+// parity item 14. Replace this process with a fresh copy of itself, same
+// argv. Never returns on success.
+[[noreturn]] static void ReexecForReload(const std::string& reason) {
+  printf("rn-impeller: reload_reexec reason=%s\n", reason.c_str());
+  fflush(stdout);
+  fflush(stderr);
+  std::vector<char*> args;
+  for (auto& a : gArgv) args.push_back(const_cast<char*>(a.c_str()));
+  args.push_back(nullptr);
+#if defined(_WIN32)
+  _execv(args[0], args.data());
+#else
+  execv("/proc/self/exe", args.data());  // linux: robust to a relative argv[0]
+  execv(args[0], args.data());            // darwin / fallback
+#endif
+  fprintf(stderr, "rn-impeller: FATAL: reload re-exec failed\n");
+  _exit(1);
+}
+
 int main(int argc, char** argv) {
+  for (int i = 0; i < argc; ++i) gArgv.emplace_back(argv[i]);
   // MUST be first: ReactNativeFeatureFlags::override() throws once any flag has
   // been read, and plenty of construction paths read one.
   rni::installFeatureFlags();
@@ -2198,7 +2234,9 @@ int main(int argc, char** argv) {
     rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                            logMutations, host.displayMetrics());
 
+    host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
     host.runScript(std::move(bundle), sourceUrl);
+    host.devServerSetup(sourceUrl);  // parity item 14 (no-op for file://)
     // Let the bundle finish evaluating (AppRegistry.registerComponent) before
     // asking for the surface, otherwise runApplication names a module that is
     // not registered yet.

@@ -9,6 +9,7 @@
 #include <react/renderer/runtimescheduler/RuntimeScheduler.h>
 #include <react/runtime/ReactInstance.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -37,6 +38,13 @@ class ReactHost {
   // Evaluates `source` as the app bundle. sourceURL is what SourceCode reports.
   void runScript(std::string source, const std::string& sourceURL);
   bool loadBundleFromFile(const std::string& bundlePath);
+  // parity item 14. After runScript with an http:// source URL: start Metro
+  // HMR (HMRClient.setup), as RCTDevSettings does on iOS. No-op for file://.
+  void devServerSetup(const std::string& sourceUrl);
+  // parity item 14. Host hook DevSettings.reload calls (thread: JS).
+  void setReloadHook(std::function<void(const std::string&)> hook) {
+    *reloadHook_ = std::move(hook);
+  }
 
   facebook::react::ReactInstance& instance() { return *instance_; }
   std::shared_ptr<facebook::react::RuntimeScheduler> runtimeScheduler() {
@@ -120,6 +128,9 @@ class ReactHost {
   std::shared_ptr<JsThread> jsThread_;
   std::unique_ptr<facebook::react::ReactInstance> instance_;
   std::shared_ptr<std::string> scriptURL_;
+  // parity item 14: DevSettings.reload calls this (set by the host).
+  std::shared_ptr<std::function<void(const std::string&)>> reloadHook_ =
+      std::make_shared<std::function<void(const std::string&)>>();
   std::shared_ptr<DisplayMetrics> displayMetrics_;
   // Constructed in the ctor, wired to the runtime executor once the instance
   // exists, and INVALIDATED in the dtor before teardown -- see ReactHost.cpp.

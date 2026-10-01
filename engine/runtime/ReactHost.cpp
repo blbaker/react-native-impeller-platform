@@ -250,8 +250,8 @@ ReactHost::ReactHost() {
   modules_->add("StatusBarManager", [](auto inv) {
     return std::make_shared<StatusBarManagerModule>(inv);
   });
-  modules_->add("DevSettings", [](auto inv) {
-    return std::make_shared<DevSettingsModule>(inv);
+  modules_->add("DevSettings", [r = reloadHook_](auto inv) {
+    return std::make_shared<DevSettingsModule>(inv, r);
   });
   modules_->add("LinkingManager", [u = initialUrl_](auto inv) {
     return std::make_shared<LinkingManagerModule>(inv, u);
@@ -508,6 +508,38 @@ void ReactHost::runScript(std::string source, const std::string& sourceURL) {
   *scriptURL_ = sourceURL;
   instance_->loadScript(
       std::make_unique<react::JSBigStdString>(std::move(source)), sourceURL);
+}
+
+void ReactHost::devServerSetup(const std::string& sourceUrl) {
+  // http://host:port/path?query -> HMRClient.setup(platform, path, host,
+  // port, isEnabled, scheme). `path` is the bundle path WITHOUT the leading
+  // slash and WITH the query, exactly what RCTDevSettings passes (NSURL
+  // path is query-less there, but HMRClient prefers getDevServer()'s
+  // fullBundleUrl anyway, which is this whole URL).
+  const size_t se = sourceUrl.find("://");
+  if (se == std::string::npos) return;
+  const std::string scheme = sourceUrl.substr(0, se);
+  if (scheme != "http" && scheme != "https") return;
+  const std::string rest = sourceUrl.substr(se + 3);
+  const size_t slash = rest.find('/');
+  const std::string hostport = slash == std::string::npos ? rest : rest.substr(0, slash);
+  std::string path = slash == std::string::npos ? "" : rest.substr(slash + 1);
+  const size_t q = path.find('?');
+  if (q != std::string::npos) path = path.substr(0, q);
+  std::string host = hostport, port;
+  const size_t colon = hostport.rfind(':');
+  if (colon != std::string::npos) {
+    host = hostport.substr(0, colon);
+    port = hostport.substr(colon + 1);
+  }
+  folly::dynamic args = folly::dynamic::array(
+      "impeller", path, host,
+      port.empty() ? folly::dynamic(nullptr) : folly::dynamic(port), true,
+      scheme);
+  std::printf("rn-impeller: hmr_setup host=%s port=%s path=%s\n", host.c_str(),
+              port.c_str(), path.c_str());
+  std::fflush(stdout);
+  instance_->callFunctionOnModule("HMRClient", "setup", std::move(args));
 }
 
 bool ReactHost::loadBundleFromFile(const std::string& bundlePath) {
