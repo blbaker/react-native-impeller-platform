@@ -106,8 +106,25 @@ list(APPEND reactcommon_SRC ${RC}/react/runtime/hermes/HermesInstance.cpp)
 # that never attaches a debugger.
 list(APPEND reactcommon_SRC
   ${RC}/hermes/inspector-modern/chrome/HermesRuntimeTargetDelegate.cpp
+  ${RC}/hermes/inspector-modern/chrome/HermesRuntimeAgentDelegate.cpp
   ${RC}/hermes/inspector-modern/chrome/HermesRuntimeSamplingProfileSerializer.cpp
 )
+
+# parity item 24. ⛔ WITHOUT THIS THE DEBUGGER IS A STUB THAT SAYS "OK".
+# HermesRuntimeTargetDelegate.cpp compiles RN's FallbackRuntimeTargetDelegate
+# unless HERMES_ENABLE_DEBUGGER is defined: DevTools then connects, every
+# Runtime.enable/Debugger.enable succeeds, and Runtime.evaluate answers
+# -32601 "method not found" -- measured, against a real Metro. Our
+# libhermesvm IS built with the debugger (HERMES_ENABLE_DEBUGGER=ON in
+# hermes-build, hermes::cdp::* exported), so the C++ side must match.
+# Scoped to these two files ON PURPOSE: RN pimpls HermesRuntimeTargetDelegate
+# so its layout does not depend on the define, but Hermes' own VM headers
+# (Runtime.h, CodeBlock.h) DO change layout under it; nothing else in this
+# engine includes those, and nothing else must start to.
+set_source_files_properties(
+  ${RC}/hermes/inspector-modern/chrome/HermesRuntimeTargetDelegate.cpp
+  ${RC}/hermes/inspector-modern/chrome/HermesRuntimeAgentDelegate.cpp
+  PROPERTIES COMPILE_DEFINITIONS HERMES_ENABLE_DEBUGGER=1)
 
 add_library(reactcommon_core STATIC ${reactcommon_SRC})
 

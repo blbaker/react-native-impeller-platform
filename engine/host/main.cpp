@@ -410,7 +410,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // layout uses, and re-set on every resize below, so a click can never be
   // converted with a scale the painter is no longer using.
   surface.setPointScale(pointScale);
-  rni::ReactHost host;
+  // parity item 24: a Metro-served bundle is debuggable (React Native DevTools).
+  rni::ReactHost host(/*withInspector*/ sourceUrl.rfind("http://", 0) == 0);
   host.setKnownComponents(rni::FabricHost::knownComponentNames());
   host.displayMetrics()->set((float)pxWidth / pointScale,
                              (float)pxHeight / pointScale, pointScale);
@@ -447,6 +448,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   host.waitForJsIdle(10000);
   // parity item 14: a bundle from Metro starts HMR (Fast Refresh).
   host.devServerSetup(sourceUrl);
+  host.connectInspector(sourceUrl, appName);  // parity item 24
   // startSurface takes DEVICE PIXELS and divides by pointScale itself
   // (FabricHost.cpp:279) — so it gets the framebuffer size, not the request.
   fabric.startSurface(appName, 1, (float)pxWidth, (float)pxHeight, pointScale);
@@ -2157,7 +2159,8 @@ int main(int argc, char** argv) {
     sceneGraph.setSupersample(supersampleRnsvg);
     // ENG item 2b — root supersample offscreen size, device pixels.
     sceneGraph.setSurfaceSize(width, height);
-    rni::ReactHost host;
+    // parity item 24: a Metro-served bundle is debuggable.
+    rni::ReactHost host(/*withInspector*/ sourceUrl.rfind("http://", 0) == 0);
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
     // Dimensions/PixelRatio read this. RN code branches on PixelRatio.get()
@@ -2182,6 +2185,7 @@ int main(int argc, char** argv) {
     host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
     host.runScript(std::move(bundle), sourceUrl);
     host.devServerSetup(sourceUrl);  // parity item 14 (no-op for file://)
+    host.connectInspector(sourceUrl, appName);  // parity item 24
     // Let the bundle finish evaluating (AppRegistry.registerComponent) before
     // asking for the surface, otherwise runApplication names a module that is
     // not registered yet.

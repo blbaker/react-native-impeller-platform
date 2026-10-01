@@ -220,6 +220,7 @@ add_executable(rn-impeller
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwCocoaView.mm>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
+  runtime/InspectorHost.cpp
   modules/PlatformModules.cpp
   modules/NetworkingModule.cpp
   modules/WebSocketModule.cpp
