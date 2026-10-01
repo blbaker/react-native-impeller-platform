@@ -7,7 +7,9 @@
 const http = require('http');
 const WebSocket = require('ws');
 
-const [origin, appName] = process.argv.slice(2);
+const [origin, appName, mode] = process.argv.slice(2);
+// mode 'hold': attach (Runtime + Debugger enabled), then stay attached until
+// the APP quits -- the "closed the app with DevTools open" case.
 
 function getJson(url) {
   return new Promise((resolve, reject) => {
@@ -84,6 +86,20 @@ async function main() {
     return null;
   };
 
+  if (mode === 'hold') {
+    const h1 = await call('Runtime.enable');
+    const h2 = await call('Debugger.enable');
+    const h3 = await call('Runtime.evaluate', {expression: '1 + 2', returnByValue: true});
+    const v3 = h3 && h3.result && h3.result.result ? h3.result.result.value : null;
+    console.log('CDP hold_attached ' + JSON.stringify({runtime: !h1.error && !h1.timeout, debugger: !h2.error && !h2.timeout, eval: v3}));
+    const closed = await new Promise(resolve => {
+      const t = setTimeout(() => resolve('still-open'), 40000);
+      ws.on('close', code => { clearTimeout(t); resolve('closed:' + code); });
+    });
+    const detached = events.some(e => e.method === 'Inspector.detached');
+    console.log('CDP hold_end ' + JSON.stringify({socket: closed, detached}));
+    process.exit(0);
+  }
   const r1 = await call('Runtime.enable');
   console.log('CDP runtime_enable ' + JSON.stringify(r1.timeout ? r1 : {ok: !r1.error, error: r1.error}));
   const r2 = await call('Runtime.evaluate', {expression: '1 + 2', returnByValue: true});

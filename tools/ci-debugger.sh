@@ -15,6 +15,8 @@
 #   c  Debugger.pause stops the app (Debugger.paused arrives, JS is blocked)
 #      and Debugger.resume restarts it (a 100 ms tick counter advances)
 #   d  the app quits cleanly (exit 0) after a debugger session
+#   f  the app quits cleanly with DevTools STILL ATTACHED (session open,
+#      Runtime + Debugger enabled), and DevTools sees the socket close
 #   e  a release bundle from a FILE starts no inspector (pays nothing)
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
@@ -142,6 +144,27 @@ echo "== d. clean quit after a debugger session =="
 grep -q '^rn-impeller: inspector session connected' "$L" || fail "d: no inspector session was ever connected"
 echo "   OK: exit 0"
 
+echo "== f. quit with DevTools still attached =="
+L2="$WORK/app-hold.log"; P2="$WORK/cdp-hold.log"
+set +e
+"$RESOLVED" --window --probe-banner off --bundle "$URL" --app-name "$APP_NAME" \
+    --width 400 --height 300 --idle-skip --idle-run-sec 8 > "$L2" 2>&1 &
+APP_PID=$!
+set -e
+for _ in $(seq 1 80); do grep -q 'DEBUG_FIXTURE_BOOT' "$L2" && break; sleep 0.25; done
+set +e
+NODE_PATH="$APP/node_modules" timeout 60 node "$CI_TOOLS/cdp-probe.js" "http://127.0.0.1:$PORT" "$APP_NAME" hold > "$P2" 2>&1
+wait $APP_PID; HOLDRC=$?
+set -e
+sed 's/^/   /' "$P2" | grep -E "hold_" | cut -c1-220
+grep -q '^CDP hold_attached {"runtime":true,"debugger":true,"eval":3}' "$P2" \
+  || { tail -20 "$L2" | sed 's/^/   app: /' >&2; fail "f: DevTools did not attach for the quit-while-attached run -- the arm would be blind"; }
+[ "$HOLDRC" -eq 0 ] \
+  || { tail -25 "$L2" | sed 's/^/   app: /' >&2; fail "f: the app exited $HOLDRC when quit with DevTools attached (inspector teardown)"; }
+grep -qE '^CDP hold_end \{"socket":"closed:' "$P2" \
+  || fail "f: DevTools' socket stayed open after the app quit -- the session was not ended"
+echo "   OK: quit with DevTools attached -> exit 0, DevTools socket closed"
+
 echo "== e. release bundle from a file: no inspector =="
 R="$WORK/release.log"
 set +e
@@ -154,4 +177,4 @@ grep -q 'DEBUG_FIXTURE_BOOT' "$R" || fail "e: the release bundle never booted"
 ! grep -q 'inspector host up' "$R" || fail "e: a file:// release bundle started the inspector -- it must cost nothing"
 echo "   OK: no inspector for a release file bundle"
 
-echo "DEBUGGER_GATE_PASS (React Native DevTools over Metro: page listed, Runtime.evaluate in the app, pause/resume, clean quit, none for release)"
+echo "DEBUGGER_GATE_PASS (React Native DevTools over Metro: page listed, Runtime.evaluate in the app, pause/resume, clean quit, quit while attached, none for release)"
