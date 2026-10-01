@@ -3,10 +3,10 @@
  *
  *   A  y 10..60:  Pressable PA (onPress -> 'PRESS A') under a full-width
  *      overlay View pointerEvents="none" (drawn on top). A click must reach PA.
- *   B  y 70..120: Pressable PB under an overlay pointerEvents="box-none" that
- *      holds its own child Pressable PBC at the right (x 300..380). A click on
- *      PB's area reaches PB (the overlay itself is transparent to clicks); a
- *      click on PBC reaches PBC.
+ *   B  y 70..120: Pressable PB under an overlay Pressable BOX with
+ *      pointerEvents="box-none" that holds its own child Pressable PBC at the
+ *      right (x 300..380). A click on PB's area reaches PB, never BOX (the
+ *      overlay itself is transparent to clicks); a click on PBC reaches PBC.
  *   C  y 130..180: View pointerEvents="box-only" (onPress on a Pressable
  *      wrapper is not allowed inside, so it is a Pressable PC_OUTER with
  *      pointerEvents box-only holding an inner Pressable PC_INNER). A click on
@@ -42,9 +42,11 @@ function Fixture() {
       <View pointerEvents="none" style={abs(0, 0, 400, 65, {backgroundColor: 'rgba(255,255,255,0.1)'})} />
 
       <P name="B" style={abs(20, 70, 200, 50, {backgroundColor: '#335577'})} />
-      <View pointerEvents="box-none" style={abs(0, 65, 400, 60)}>
+      {/* The box-none overlay is itself a Pressable (BOX), so a click that
+          the overlay wrongly swallows shows up as PRESS BOX instead of B. */}
+      <P name="BOX" pointerEvents="box-none" style={abs(0, 65, 400, 60)}>
         <P name="BC" style={abs(300, 5, 80, 50, {backgroundColor: '#775533'})} />
-      </View>
+      </P>
 
       <P
         name="C_OUTER"
