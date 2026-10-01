@@ -54,23 +54,23 @@ class ClipboardModule
           // body executes on the MAIN thread (windowed) or on whatever
           // thread called getString (headless, where there is no distinct
           // main thread to protect against).
-          bridge->postToMain([bridge, jsInvoker, promise]() {
+          bridge->postToMain([bridge, jsInvoker,
+                              promise = std::move(promise)]() mutable {
             std::string value = bridge->getSystemNow();
-            // ⛔ HOP BACK TO THE JS THREAD TO RESOLVE, AND KEEP `promise`
-            // ALIVE UNTIL THAT HOP RUNS. `promise` holds jsi::Function
-            // members; those are JSI objects whose destruction touches the
-            // jsi::Runtime, so they may only be dropped on the JS thread.
-            // Capturing `promise` into THIS lambda (which runs on the main
-            // thread) and NOT reading/writing any jsi::Value from it here is
-            // what keeps that safe: the shared_ptr's refcount still touches
-            // only ordinary memory. The lambda handed to invokeAsync below
-            // is the one that actually calls into the runtime, and because
-            // invokeAsync runs it on the JS thread, `promise`'s LAST
-            // reference -- captured only by that inner lambda once this
-            // outer one returns -- is dropped there, never here.
-            jsInvoker->invokeAsync([promise, value](jsi::Runtime& rt2) {
-              promise->resolve(jsi::String::createFromUtf8(rt2, value));
-            });
+            // ⛔ HOP BACK TO THE JS THREAD TO RESOLVE, AND MOVE `promise`
+            // INTO THAT HOP. `promise` holds jsi::Function members, whose
+            // destruction touches the jsi::Runtime, so the LAST reference
+            // may only be dropped on the JS thread. A COPY here would leave
+            // this main-thread lambda holding a reference until drainMain
+            // destroys the task, AFTER invokeAsync -- and if the JS thread
+            // resolves first, the main thread drops the last reference and
+            // destroys JSI objects off-thread. Moving leaves this lambda
+            // empty, so the inner lambda (destroyed on the JS thread) owns
+            // the only reference.
+            jsInvoker->invokeAsync(
+                [promise = std::move(promise), value](jsi::Runtime& rt2) {
+                  promise->resolve(jsi::String::createFromUtf8(rt2, value));
+                });
           });
         });
   }
