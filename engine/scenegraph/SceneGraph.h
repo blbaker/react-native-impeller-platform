@@ -334,6 +334,16 @@ class SceneGraph {
   facebook::react::Tag scrollViewAt(float x, float y);
   ScrollResult scrollBy(float x, float y, float dx, float dy);
 
+  // item 7. View commands. Absolute scroll of ScrollView `tag` to (x, y),
+  // clamped to its content extent; end=true scrolls to the far end of the
+  // overflowing axis (scrollToEnd). Returns tag=0 if `tag` is not a
+  // ScrollView.
+  ScrollResult scrollTo(facebook::react::Tag tag, float x, float y,
+                        bool toEnd);
+  // item 7. Sets an UNFOCUSED field's displayed value (setTextAndSelection
+  // on a field that is not being edited).
+  void setTextInputValue(facebook::react::Tag tag, const std::string& value);
+
   void applyMutations(const facebook::react::ShadowViewMutation::List& mutations,
                       bool log = false);
 
