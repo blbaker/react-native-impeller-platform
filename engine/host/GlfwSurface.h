@@ -121,9 +121,69 @@ class GlfwSurface {
   // the boundary, where a second caller would get it wrong independently.
   //
   // `down` distinguishes press from release: the host maps that to
-  // TouchPhase::Down/Up. Buttons other than the left one are not forwarded;
-  // there is no RN touch concept for them.
+  // TouchPhase::Down/Up.
+  //
+  // ⛔ ITEM 6: ONLY THE LEFT BUTTON EVER REACHES THIS HANDLER, STILL.
+  // Right/middle/back/forward now reach JS too, but through
+  // setExtraButtonHandler below, NEVER through here — there is no RN touch
+  // concept for them (no onPress, no focus/caret change), and routing them
+  // through this handler would be the exact regression M3 of
+  // tools/mutation-verify-mouse-buttons.sh exists to catch (a non-left press
+  // starting a touch). Left's behaviour is BYTE-IDENTICAL to before item 6.
   void setMouseButtonHandler(std::function<void(float x, float y, bool down)> handler);
+
+  // desktop-input-gap item 6. Event for a right/middle/back/forward press or
+  // release, delivered in LAYOUT POINTS through the SAME one-place
+  // conversion dispatchCursorPoint uses. No RN touch concept applies to
+  // these buttons: main.cpp routes every one straight to
+  // FabricHost::dispatchPointerButton and NEVER to
+  // beginTouchCapture/endTouchCapture/focusTextInputAt — see
+  // setMouseButtonHandler above for why that separation is load-bearing.
+  struct ExtraButtonEvent {
+    float x{0.0f};
+    float y{0.0f};
+    bool down{false};
+    // W3C `button`: 1 middle, 2 right, 3 back, 4 forward. 0 (left) never
+    // appears here.
+    int button{0};
+    // W3C `buttons` bitmask AFTER this event is applied: 1 left, 2 right,
+    // 4 middle, 8 back, 16 forward. Shared with the left button's bitmask —
+    // see lastMods()/heldButtonsMask() below — so a left press while a right
+    // press is held reports buttons=3, not 1.
+    int buttons{0};
+    // W3C `detail`: consecutive click count for THIS button, same 500ms /
+    // 4px rule as item 4b's left-button clickCount_, but tracked
+    // independently per button so a right double-click cannot complete a
+    // left double-click or vice versa.
+    int clickCount{1};
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};
+  };
+  // Fires for GLFW_MOUSE_BUTTON_RIGHT/MIDDLE/4/5 press and release (and for
+  // a Ctrl+left press on __APPLE__, remapped to RIGHT before this fires —
+  // see the callback in the .cpp). Never fires for a plain left press.
+  void setExtraButtonHandler(std::function<void(const ExtraButtonEvent&)> handler);
+
+  // The held-button bitmask (1 left, 2 right, 4 middle, 8 back, 16 forward),
+  // valid inside EITHER mouse handler. Read by main.cpp to fill in `buttons`
+  // on the LEFT button's own new W3C pointer events (see dispatchCursorPoint
+  // in the .cpp); the extra-button path already gets it via ExtraButtonEvent.
+  int heldButtonsMask() const { return heldButtons_; }
+
+  // item 6. Full modifier state as of the most recent press OR release of
+  // ANY button, left included — unlike lastPressShift() above (item 4b),
+  // which freezes at PRESS time for the selection/click-count logic that
+  // predates this item, this updates on every call so a RELEASE event (e.g.
+  // onPointerUp, onClick) reports the modifiers live at that moment.
+  struct Mods {
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};
+  };
+  Mods lastMods() const { return lastMods_; }
 
   // <ScrollView>. ENG-02. Wheel/trackpad scroll, delivered as LAYOUT POINTS at
   // the cursor's LAYOUT POINT position -- the same conversion, in the same one
@@ -301,6 +361,16 @@ class GlfwSurface {
   // (dispatchHoverPoint, so a move while pressed is a drag).
   void synthesiseMouse(int op, double screenX, double screenY, bool shift);
 
+  // desktop-input-gap item 6. Synthesises ANY button (left included) with
+  // FULL modifiers, through dispatchCursorPoint (button 0) or
+  // dispatchExtraButton (1/2/3/4) — the SAME entry points the real GLFW
+  // callback uses after the __APPLE__ Ctrl+left remap, so a synthetic gate
+  // exercises identical dispatch, click counting and the buttons bitmask.
+  // `w3cButton`: 0 left, 1 middle, 2 right, 3 back, 4 forward.
+  void synthesiseMouseButton(int w3cButton, bool down, double screenX,
+                             double screenY, bool shift, bool ctrl, bool alt,
+                             bool meta);
+
   // item 4b. State of the most recent left PRESS, valid inside the
   // mouse-button handler. clickCount: 1 single, 2 double, 3 triple (keeps
   // counting on further quick clicks). A press counts as the next click when
@@ -438,6 +508,17 @@ class GlfwSurface {
   // exercises the identical table a real keypress does.
   void dispatchKeyEvent(int key, int scancode, int action, int mods);
 
+  // desktop-input-gap item 6. The ONE place a right/middle/back/forward GLFW
+  // button tuple becomes an ExtraButtonEvent, shared by the real
+  // glfwSetMouseButtonCallback (after its __APPLE__ Ctrl+left remap) and
+  // synthesiseMouseButton(). Tracks a PER-BUTTON click count (same 500ms/4px
+  // rule as the left button's clickCount_ in dispatchCursorPoint, but kept
+  // in its own small table so a right double-click cannot complete a left
+  // double-click) and updates heldButtons_/lastMods_ before firing the
+  // handler.
+  void dispatchExtraButton(double screenX, double screenY, bool down,
+                           int w3cButton, int glfwMods);
+
   int width_{0};
   int height_{0};
   int pointWidth_{0};
@@ -502,6 +583,34 @@ class GlfwSurface {
   double lastPressY_{0.0};
   int clickCount_{0};
   bool pressShift_{false};
+  // desktop-input-gap item 6. Held-button bitmask (1 left, 2 right, 4 middle,
+  // 8 back, 16 forward), kept current on every press/release of ANY button
+  // so `buttons` on a pointer event reflects what is ACTUALLY down, not just
+  // the button the current event is about -- the item 6(h) bitmask arm.
+  int heldButtons_{0};
+  // item 6. Modifiers as of the most recent press OR release, left included
+  // -- unlike pressShift_ above (item 4b), which freezes at the left
+  // button's PRESS for the click-count/selection logic that predates this
+  // item, this updates on every event so a release reports live modifiers.
+  Mods lastMods_{};
+  // item 6. Per-button click-count state (right, middle, back, forward --
+  // never left, which keeps its own clickCount_/lastPressX_/Y_/Ms_ above
+  // unchanged). Indexed by W3C button number 1..4; button 0 (left) is never
+  // stored here. A SEPARATE table, not a shared one, so a right click
+  // immediately after a left click is never miscounted as the left button's
+  // second click or vice versa.
+  struct ExtraClickState {
+    double lastPressMs{-1e9};
+    double lastPressX{0.0};
+    double lastPressY{0.0};
+    int clickCount{0};
+  };
+  ExtraClickState extraClick_[5]{};
+  // desktop-input-gap item 6. Invoked from the GLFW mouse-button callback for
+  // a right/middle/back/forward press or release, and from the __APPLE__
+  // Ctrl+left remap. NEVER for a plain left button -- see the header on
+  // setExtraButtonHandler for why that separation matters.
+  std::function<void(const ExtraButtonEvent&)> extraButtonHandler_;
   // ⛔ REENTRANCY GUARD, AND IT IS NOT THEORETICAL.
   // Set by PaintScope around EVERY paint (see PaintScope above), not merely
   // while inside the refresh handler. The handler paints and presents; on
