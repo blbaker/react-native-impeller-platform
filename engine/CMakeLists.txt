@@ -222,6 +222,7 @@ add_executable(rn-impeller
   runtime/ReactHost.cpp
   modules/PlatformModules.cpp
   modules/NetworkingModule.cpp
+  modules/WebSocketModule.cpp
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
   text/ImpellerTextLayoutManager.cpp

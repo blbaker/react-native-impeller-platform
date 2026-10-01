@@ -15,6 +15,7 @@
 #include "modules/CoreModules.h"
 #include "modules/ModuleRegistry.h"
 #include "modules/NetworkingModule.h"
+#include "modules/WebSocketModule.h"
 #include "modules/PlatformModules.h"
 #include "modules/AppStorageModule.h"
 #include "modules/ClipboardBridge.h"
