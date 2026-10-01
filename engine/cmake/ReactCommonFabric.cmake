@@ -105,6 +105,8 @@ set(reactcommon_fabric_SRC
   ${rr_legacyinterop_SRC}
   ${rr_animated_SRC} ${rr_animated_nodes_SRC} ${rr_animated_drivers_SRC}
   ${rr_animated_evdrv_SRC} ${rr_animated_internal_SRC}
+  # item 11: the tvos HostPlatformViewProps has a .cpp (cxx is header-only).
+  ${RR}/components/view/platform/tvos/react/renderer/components/view/HostPlatformViewProps.cpp
 )
 # Same targeted Perfetto rule as ReactCommonCore.cmake — see the long comment
 # there for why a blanket "Perfetto" filter breaks the non-Perfetto build.
@@ -117,7 +119,16 @@ target_include_directories(reactcommon_fabric SYSTEM PUBLIC
   ${RC}/yoga
   # platform/cxx selector roots must precede the generic ${RC} root (PUBLIC on
   # reactcommon_core) so <react/renderer/...> resolves to the cxx variant.
-  ${RR}/components/view/platform/cxx
+  #
+  # desktop-input-gap item 11: View props use upstream's TVOS variant, NOT
+  # cxx. The cxx HostPlatformViewProps is a bare alias of BaseViewProps, so
+  # the `focusable` prop View.js sends (and that tabIndex is converted into)
+  # was parsed by nobody and dropped. tvos/HostPlatformViewProps adds exactly
+  # `bool focusable`; its touch/event-emitter headers are identical to cxx and
+  # its traits differ only in unused parameter names. TextInputProps derive
+  # from ViewProps, so fields get it too (TextInput.js always sends it, false
+  # for tabIndex -1).
+  ${RR}/components/view/platform/tvos
   ${RR}/graphics/platform/cxx
   ${RR}/textlayoutmanager/platform/cxx
   ${RR}/imagemanager/platform/cxx

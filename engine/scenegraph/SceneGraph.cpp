@@ -274,6 +274,9 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     } else {
       node.hasBackgroundColor = false;
     }
+    // item 11: parsed by the tvos HostPlatformViewProps (see
+    // cmake/ReactCommonFabric.cmake for why tvos, not cxx).
+    node.focusable = props->focusable;
 
     // BORDERS. RN carries widths/colours/radii as a CASCADE (all / horizontal /
     // vertical / per-edge / logical start-end), never as plain numbers.
@@ -501,6 +504,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
             dynamic_cast<const react::BaseTextInputProps*>(view.props.get())) {
       node.tiValue = tp->text;
       node.tiPlaceholder = tp->placeholder;
+      node.tiEditable = tp->editable;  // item 11
       const auto attrs = tp->getEffectiveTextAttributes(1.0f);
       if (attrs.fontSize > 0) node.fontSize = (float)attrs.fontSize;
       if (attrs.foregroundColor) {
@@ -1237,6 +1241,20 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     paintWorldSprites(builder, node, x, y, w, h);
   }
 #endif
+
+  // item 11: keyboard focus ring on the focused (non-TextInput) View: a 2pt
+  // outline just outside the frame, macOS/Windows focus blue.
+  if (focusedView_ != 0 && focusedView_ == node.tag) {
+    ImpellerPaint ring = ImpellerPaintNew();
+    const ImpellerColor rc = {0.0f, 0.4039f, 0.9569f, 1.0f, kImpellerColorSpaceSRGB};
+    ImpellerPaintSetColor(ring, &rc);
+    ImpellerPaintSetDrawStyle(ring, kImpellerDrawStyleStroke);
+    ImpellerPaintSetStrokeWidth(ring, 2.0f);
+    const ImpellerRect rr = {x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f};
+    ImpellerDisplayListBuilderDrawRect(builder, &rr, ring);
+    ImpellerPaintRelease(ring);
+  }
+
 #if RNI_WITH_RNSVG
   // RNSVGPath: parse `d` fresh into an ImpellerPathBuilder every paint (no
   // cross-frame geometry cache exists in this SceneGraph, unlike gradients/
@@ -2628,6 +2646,54 @@ size_t SceneGraph::nodeCount() {
 facebook::react::Tag SceneGraph::rootTag() {
   std::lock_guard<std::mutex> lock(mutex_);
   return roots_.empty() ? 0 : roots_.front();
+}
+
+// item 11. Tab order.
+void SceneGraph::tabOrderWalk(const SceneNode& node,
+                              std::vector<facebook::react::Tag>* out) {
+  const auto& lm = node.layoutMetrics;
+  if (lm.displayType == facebook::react::DisplayType::None) return;
+  const bool hasSize = lm.frame.size.width > 0 && lm.frame.size.height > 0;
+  if (hasSize) {
+    if (node.isTextInput) {
+      if (node.tiEditable && node.focusable) out->push_back(node.tag);
+    } else if (node.focusable) {
+      out->push_back(node.tag);
+    }
+  }
+  if (node.isTextInput) return;  // a field has no focusable children
+  for (auto c : node.children) {
+    auto it = nodes_.find(c);
+    if (it != nodes_.end()) tabOrderWalk(it->second, out);
+  }
+}
+
+std::vector<facebook::react::Tag> SceneGraph::tabOrder() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<facebook::react::Tag> out;
+  for (auto r : roots_) {
+    auto it = nodes_.find(r);
+    if (it != nodes_.end()) tabOrderWalk(it->second, &out);
+  }
+  return out;
+}
+
+bool SceneGraph::isTextInputTag(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  return it != nodes_.end() && it->second.isTextInput;
+}
+
+void SceneGraph::setFocusedView(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (focusedView_ == tag) return;
+  focusedView_ = tag;
+  bumpVersion();  // the focus ring appears / disappears
+}
+
+facebook::react::Tag SceneGraph::focusedView() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return focusedView_;
 }
 
 std::string SceneGraph::frameReport() {

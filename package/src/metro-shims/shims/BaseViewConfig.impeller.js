@@ -65,6 +65,15 @@ const BaseViewConfigImpeller = {
     onKeyUpCapture: true,
     onAuxClick: true,
     onAuxClickCapture: true,
+    // desktop-input-gap item 11. A Tab-focused <View focusable> receives
+    // onFocus/onBlur (FabricHost dispatches 'focus'/'blur', normalized to the
+    // topFocus/topBlur bubbling types BaseViewConfig.ios.js already declares).
+    // iOS declares the event types but not these props for View, so without
+    // them React would never keep a View's handler.
+    onFocus: true,
+    onFocusCapture: true,
+    onBlur: true,
+    onBlurCapture: true,
   },
 };
 

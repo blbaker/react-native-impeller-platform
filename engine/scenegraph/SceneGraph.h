@@ -139,6 +139,11 @@ struct SceneNode {
   // paint path (which reads ParagraphState, a state a TextInput does not carry)
   // is never entered for it.
   bool isTextInput{false};
+  // item 11: keyboard focus. `focusable` is the View prop (View.js turns
+  // tabIndex into it: tabIndex 0 -> true, -1 -> false); TextInput.js always
+  // sends it too. `tiEditable` is TextInput's `editable` prop.
+  bool focusable{false};
+  bool tiEditable{true};
   // The controlled `value`/`defaultValue` prop, captured at mutation time. The
   // LIVE edited string during focus is held by FabricHost and pushed in through
   // setTextInputEdit; this is the fallback the paint uses when the field is not
@@ -433,6 +438,17 @@ class SceneGraph {
   // where there is no focus target at all.
   facebook::react::Tag rootTag();
 
+  // item 11. Tab order: every keyboard-focusable node in depth-first tree
+  // order (children in paint order), skipping zero-size / display:none
+  // subtrees. A TextInput is focusable when editable and its `focusable` prop
+  // is true; any other View when its `focusable` prop is true.
+  std::vector<facebook::react::Tag> tabOrder();
+  bool isTextInputTag(facebook::react::Tag tag);
+  // item 11. The View (not TextInput) that has keyboard focus: painted with a
+  // focus ring. 0 = none.
+  void setFocusedView(facebook::react::Tag tag);
+  facebook::react::Tag focusedView();
+
   // One `node_frame=<Component>,<tag>,<x>,<y>,<w>,<h>` line per node.
   //
   // This exists because PAINTED INK DOES NOT PROVE MEASUREMENT. A <Text> whose
@@ -563,6 +579,8 @@ class SceneGraph {
   // Returns the hit tag, or 0. `originX/originY` accumulate exactly as in
   // paintNode: frames are PARENT-RELATIVE, so absolute position is the running
   // sum down the tree, never the node's own frame alone.
+  void tabOrderWalk(const SceneNode& node,
+                    std::vector<facebook::react::Tag>* out);
   facebook::react::Tag hitTestNode(const SceneNode& node,
                                    float originX,
                                    float originY,
@@ -750,6 +768,8 @@ class SceneGraph {
   // collapsed -- "is there a selection" is `tiSelAnchor_ != tiCaret_`, never
   // a separate bool, so the two can never disagree about the collapsed case.
   size_t tiSelAnchor_{0};
+  // item 11: focused non-TextInput View (focus ring). 0 = none.
+  facebook::react::Tag focusedView_{0};
   // <TextInput>. ENG-01b item 5: caret blink. The steady_clock instant the
   // caret was last RESET to visible -- set on focus, on a click into the field,
   // and on EVERY keystroke. paintNode blinks the caret from the time elapsed

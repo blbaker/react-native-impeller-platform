@@ -157,6 +157,13 @@ class FabricHost {
   // TextInput. Returns true when the move was handled as a selection drag.
   bool dragTextSelection(float x, float y);
 
+  // item 11. Moves keyboard focus to the next (forward) or previous element
+  // in SceneGraph::tabOrder(), wrapping. Blurs the old element; a TextInput
+  // gets focus with ALL its text selected, a View gets focus + a focus ring.
+  // Returns the newly focused tag.
+  int moveFocus(bool forward);
+  void blurFocusedView();
+
   // item 6. W3C pointer events for ANY mouse button (0 left, 1 middle,
   // 2 right, 3 back, 4 forward) on the hit-tested tag: onPointerDown/Up, plus
   // onClick (left) or auxClick (others) when the release lands on the press's
@@ -316,6 +323,8 @@ class FabricHost {
   // increase across every event this field emits, so it lives on the host, not
   // per-dispatch.
   int tiEventCount_{0};
+  void emitTextInputFocusEvent(int tag, bool focus);
+  void emitViewFocusEvent(int tag, bool focus);
 
   // item 5. Wired by main.cpp's setClipboardAccess; see that method's header
   // comment for why these are called DIRECTLY (not through
