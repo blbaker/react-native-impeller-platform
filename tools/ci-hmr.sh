@@ -113,20 +113,24 @@ set +e
     --screenshot "$WORK/before.ppm" --screenshot-after 6000 > "$L" 2>&1 &
 APP_PID=$!
 set -e
-# wait for HMR to be set up and the first render
+# wait for HMR to be set up and the first FRAME. scene_nodes= is printed by
+# the host after its post-startSurface waitForJsIdle, i.e. right before the
+# frame loop: JS's own SWATCH_RENDER log lands BEFORE any idle stall.
 T_START=$(date +%s.%N)
-for _ in $(seq 1 120); do grep -q 'SWATCH_RENDER #ff0000' "$L" && break; sleep 0.25; done
+for _ in $(seq 1 120); do grep -q '^rn-impeller: scene_nodes=' "$L" && break; sleep 0.25; done
 T_FIRST=$(date +%s.%N)
 FIRST_S="$(python3 -c "print('%.1f' % ($T_FIRST - $T_START))")"
 grep -q 'SWATCH_RENDER #ff0000' "$L" || { dump "$L"; kill $APP_PID 2>/dev/null; fail "b: the app never rendered from Metro"; }
 grep -qE '^rn-impeller: hmr_setup host=127.0.0.1 port='"$PORT" "$L" \
   || { dump "$L"; kill $APP_PID 2>/dev/null; fail "a: the engine never called HMRClient.setup -- HMR is not wired"; }
-# The first render must not wait out the JS-idle timeout: HMR installs a 20 s
+# The first frame must not wait out the JS-idle timeout: HMR installs a 20 s
 # repeating ping, and a repeating timer counted as pending work stalled every
-# waitForJsIdle (the first frame landed ~10 s late).
+# waitForJsIdle (the first frame landed ~10 s late). Budget: bundle eval +
+# mount is well under 2 s here.
 python3 -c "import sys; sys.exit(0 if float('$FIRST_S') < 5 else 1)" \
-  || { dump "$L"; kill $APP_PID 2>/dev/null; fail "a: the first render took ${FIRST_S}s after launch -- startup stalled on HMR's repeating timer"; }
-sleep 7  # past the 6 s 'before' screenshot
+  || { dump "$L"; kill $APP_PID 2>/dev/null; fail "a: the first frame took ${FIRST_S}s after launch -- startup stalled on HMR's repeating timer"; }
+for _ in $(seq 1 40); do [ -s "$WORK/before.ppm" ] && break; sleep 0.25; done
+[ -s "$WORK/before.ppm" ] || { dump "$L"; kill $APP_PID 2>/dev/null; fail "b: no 'before' screenshot was written (6 s after the first frame)"; }
 BEFORE="$(pixel "$WORK/before.ppm")"
 sed -i "s/#ff0000/#00ff00/" "$APP/Swatch.js"
 for _ in $(seq 1 40); do grep -q 'SWATCH_RENDER #00ff00' "$L" && break; sleep 0.25; done

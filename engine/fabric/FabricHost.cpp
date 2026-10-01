@@ -41,6 +41,10 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
+#include <future>
+#include <thread>
+#include <unordered_set>
 
 #include "modules/CoreModules.h"
 #include "scenegraph/SceneGraph.h"
@@ -51,6 +55,56 @@ namespace rni {
 namespace react = facebook::react;
 
 namespace {
+
+// ⛔ EXIT RACE (found by ci-click-caret: SIGSEGV after RN_IMPELLER_WINDOW_OK).
+// The Scheduler registers its EventPerformanceLogger as the RuntimeScheduler's
+// event-timing delegate; every JS tick ends in RuntimeScheduler_Modern::
+// updateRendering(), which LOADS that raw pointer and then calls
+// dispatchPendingEventTimingEntries() on it (a mutex + a walk of in-flight
+// events -- longer after clicks/keys). ~Scheduler nulls the pointer but does
+// not wait for a tick that already loaded it, so destroying the Scheduler from
+// the main thread while the JS thread is inside that call frees the logger
+// under it. ~FabricHost therefore nulls the delegate itself and then DRAINS
+// the JS thread (a barrier task) before the Scheduler goes away.
+//
+// Test probe (RNI_TEST_EXIT_RACE_MS=N, gates only): replaces the delegate with
+// one that, once armed at teardown, parks the JS thread for N ms inside the
+// exact window above, then checks whether the Scheduler was destroyed while
+// it was parked. Deliberately leaked so the probe itself is never freed: the
+// detection is the torn-down flag, not a read of freed memory.
+std::atomic<bool> gSchedulerTornDown{false};
+
+class ExitRaceProbe : public react::RuntimeSchedulerEventTimingDelegate {
+ public:
+  explicit ExitRaceProbe(int ms) : ms_(ms) {}
+  void dispatchPendingEventTimingEntries(
+      react::HighResTimeStamp,
+      const std::unordered_set<react::SurfaceId>&) override {
+    if (!armed.load()) return;
+    if (!entered.exchange(true)) {
+      std::printf("rn-impeller: exit_race_probe entered (parking the JS tick %d ms)\n", ms_);
+      std::fflush(stdout);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms_));
+    if (gSchedulerTornDown.load()) {
+      std::printf("rn-impeller: exit_race_probe USE-AFTER-FREE: the Scheduler was "
+                  "destroyed while a JS tick was inside its event-timing delegate\n");
+      std::fflush(stdout);
+      std::_Exit(139);
+    }
+    if (!reportedClean.exchange(true)) {
+      std::printf("rn-impeller: exit_race_probe tick finished before teardown\n");
+      std::fflush(stdout);
+    }
+  }
+  std::atomic<bool> armed{false};
+  std::atomic<bool> entered{false};
+  std::atomic<bool> reportedClean{false};
+
+ private:
+  int ms_;
+};
+ExitRaceProbe* gExitRaceProbe = nullptr;  // leaked on purpose (see above)
 
 class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
  public:
@@ -592,9 +646,23 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
       toolbox, /*animationDelegate*/ nullptr, delegate_.get());
   std::printf("[fabric] scheduler up (UIManagerBinding installed)\n");
   std::fflush(stdout);
+  if (const char* ms = std::getenv("RNI_TEST_EXIT_RACE_MS")) {
+    gExitRaceProbe = new ExitRaceProbe(std::atoi(ms) > 0 ? std::atoi(ms) : 300);
+    runtimeScheduler_->setEventTimingDelegate(gExitRaceProbe);
+    std::printf("rn-impeller: exit_race_probe installed\n");
+    std::fflush(stdout);
+  }
 }
 
 FabricHost::~FabricHost() {
+  if (gExitRaceProbe && runtimeScheduler_) {
+    // Test only: park a JS tick inside the event-timing delegate right now.
+    gExitRaceProbe->armed = true;
+    runtimeScheduler_->scheduleWork([](facebook::jsi::Runtime&) {});
+    for (int i = 0; i < 400 && !gExitRaceProbe->entered.load(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
   stopSurface();
   // In-flight rendering-update lambdas captured a raw delegate pointer, and
   // the Scheduler only invalidates them behind a feature flag — drop the
@@ -602,7 +670,24 @@ FabricHost::~FabricHost() {
   if (scheduler_) {
     scheduler_->setDelegate(nullptr);
   }
+  // EXIT RACE (see ExitRaceProbe above): stop NEW ticks from reaching the
+  // event-timing delegate, then wait out the tick that may already hold it.
+  // The barrier runs on the JS thread after the current tick, so when it
+  // fires nothing can still be inside the delegate. Bounded: a wedged JS
+  // thread must not hang quit.
+  if (runtimeScheduler_) {
+    runtimeScheduler_->setEventTimingDelegate(nullptr);
+    auto drained = std::make_shared<std::promise<void>>();
+    auto done = drained->get_future();
+    runtimeScheduler_->scheduleWork(
+        [drained](facebook::jsi::Runtime&) { drained->set_value(); });
+    if (done.wait_for(std::chrono::seconds(3)) != std::future_status::ready) {
+      std::fprintf(stderr, "rn-impeller: WARN: JS thread did not drain before "
+                           "Scheduler teardown (3 s)\n");
+    }
+  }
   scheduler_.reset();
+  gSchedulerTornDown = true;
   delegate_.reset();
 }
 
