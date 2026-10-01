@@ -314,6 +314,18 @@ class GlfwSurface {
   // the same cursor-leave handler the real GLFW cursor-enter callback does.
   void synthesiseCursorLeave();
 
+  // item 5. System clipboard, wrapping glfwGetClipboardString/
+  // glfwSetClipboardString. ⛔ MAIN-THREAD ONLY, same restriction every other
+  // GLFW call in this class has -- see ClipboardBridge.h for why the caller
+  // (main.cpp) must only ever invoke these from the main thread, through the
+  // bridge's queue or its direct getSystemNow()/setSystemNow() (both of
+  // which assume they are already running on the right thread). Returns ""
+  // when GLFW has nothing to report (empty clipboard, or a backend that
+  // refuses UTF-8) rather than a null-deref -- glfwGetClipboardString can
+  // return nullptr.
+  std::string getClipboardString() const;
+  void setClipboardString(const std::string& s);
+
   // Drives a resize from inside the process, for gates. Produces the SAME
   // framebuffer-size callback a user drag produces; it is the identical code
   // path entered from a different caller. There is no headless way to make a

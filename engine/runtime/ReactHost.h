@@ -17,6 +17,7 @@
 #include "modules/NetworkingModule.h"
 #include "modules/PlatformModules.h"
 #include "modules/AppStorageModule.h"
+#include "modules/ClipboardBridge.h"
 #include "runtime/DeviceEventSink.h"
 #include "runtime/JsThread.h"
 #include "runtime/NativeAnimatedPump.h"
@@ -66,6 +67,10 @@ class ReactHost {
   // Network activity, so a headless run can wait for in-flight REQUESTS and
   // not only for an idle JS thread. See NetworkActivity in NetworkingModule.h.
   std::shared_ptr<NetworkActivity> network() { return network_; }
+  // item 5. The thread-safe clipboard bridge: the "Clipboard" TurboModule
+  // posts through it, and main.cpp wires its system backend to the real
+  // GLFW clipboard once a window exists. See ClipboardBridge.h.
+  std::shared_ptr<ClipboardBridge> clipboard() { return clipboard_; }
 
   std::string jsThreadStats() const {
     return jsThread_ ? jsThread_->debugStats() : std::string();
@@ -117,6 +122,8 @@ class ReactHost {
   std::shared_ptr<AlertRecord> alerts_;
   std::shared_ptr<NetworkActivity> network_;
   std::shared_ptr<std::string> initialUrl_;
+  std::shared_ptr<ClipboardBridge> clipboard_ =
+      std::make_shared<ClipboardBridge>();
   std::shared_ptr<AppStorageConfig> storage_;
   // ENG-06. The provider owns the NativeAnimatedNodesManager; the pump is the
   // clock the manager does not have. Both outlive the module, which is created

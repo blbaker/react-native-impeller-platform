@@ -1073,6 +1073,21 @@ void GlfwSurface::waitEvents(double timeoutSeconds) {
 // next unrelated input.
 void GlfwSurface::postEmptyEvent() { glfwPostEmptyEvent(); }
 
+// item 5. See the header: MAIN-THREAD ONLY. glfwGetClipboardString returns a
+// pointer owned by GLFW (valid until the next clipboard call or window
+// destruction), so it is copied into a std::string before returning rather
+// than handed back raw.
+std::string GlfwSurface::getClipboardString() const {
+  if (!window_) return std::string();
+  const char* s = glfwGetClipboardString(window_);
+  return s ? std::string(s) : std::string();
+}
+
+void GlfwSurface::setClipboardString(const std::string& s) {
+  if (!window_) return;
+  glfwSetClipboardString(window_, s.c_str());
+}
+
 bool GlfwSurface::shouldClose() const {
   return window_ ? glfwWindowShouldClose(window_) : true;
 }

@@ -255,6 +255,33 @@ unsigned int Utf8DecodeAt(const std::string& s, size_t i, size_t* outLen) {
 
 bool IsWordBreakSpace(unsigned int cp) { return cp == ' ' || cp == '\t'; }
 
+// item 5 (paste newline flattening). Single-line field: every CR, LF or
+// CRLF RUN (one or more, in any mix) becomes exactly ONE space -- not one
+// space per character, or "a\nb\r\nc" would paste as "a  b  c" instead of
+// the single-space-per-break "a b c" the gate asserts. Every OTHER control
+// byte < 0x20 is DROPPED, not replaced. Pure byte-level scan: CR/LF/other
+// control bytes are all single-byte ASCII (< 0x80), so this never needs to
+// decode a UTF-8 sequence and can never split one -- a continuation byte
+// (0x80-0xBF) is always >= 0x20 and passes through untouched either way.
+std::string FlattenNewlinesForSingleLine(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  bool inBreakRun = false;
+  for (unsigned char c : s) {
+    if (c == '\r' || c == '\n') {
+      if (!inBreakRun) {
+        out.push_back(' ');
+        inBreakRun = true;
+      }
+      continue;
+    }
+    inBreakRun = false;
+    if (c < 0x20) continue;  // drop other control bytes, do not replace them
+    out.push_back((char)c);
+  }
+  return out;
+}
+
 // Word-left: skip whitespace immediately before the caret, then skip the
 // word itself, landing at its start. Word-right: skip the word under/after
 // the caret, then skip trailing whitespace, landing at the start of the
@@ -1172,6 +1199,47 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
     caret = value.size();
     consumed = true;
   }
+  // item 5. Copy/Cut/Paste are each fully handled here, before the main
+  // switch, because none of them fit its action-at-caret shape: Copy reads
+  // without touching the buffer at all, Cut's erase mirrors the
+  // InsertChar/Backspace/DeleteForward selection-erase above but writes the
+  // clipboard FIRST, and Paste's inserted text is multiple bytes decided at
+  // dispatch time (the clipboard content), not a single decoded codepoint.
+  if (action == KeyAction::Copy || action == KeyAction::Cut) {
+    // Empty selection: no clipboard write, no buffer change, full stop. A
+    // Cmd/Ctrl+C with the caret merely sitting somewhere (no selection) must
+    // leave whatever was already on the clipboard untouched -- the Copy
+    // keeps the PREVIOUS content exactly as if the shortcut were never
+    // pressed, which is what arm (f) in the gate asserts.
+    if (!hasSel) {
+      consumed = true;
+    } else {
+      const std::string selected = value.substr(selLo, selHi - selLo);
+      if (clipboardSet_) clipboardSet_(selected);
+      printf("rn-impeller: clipboard op=%s bytes=%zu\n",
+             action == KeyAction::Copy ? "copy" : "cut", selected.size());
+      fflush(stdout);
+      if (action == KeyAction::Cut) {
+        value.erase(selLo, selHi - selLo);
+        caret = selLo;
+        textChanged = true;
+      }
+      consumed = true;
+    }
+  } else if (action == KeyAction::Paste) {
+    const std::string raw = clipboardGet_ ? clipboardGet_() : std::string();
+    const std::string flattened = FlattenNewlinesForSingleLine(raw);
+    if (hasSel) {
+      value.erase(selLo, selHi - selLo);
+      caret = selLo;
+    }
+    value.insert(caret, flattened);
+    caret += flattened.size();
+    textChanged = true;
+    printf("rn-impeller: clipboard op=paste bytes=%zu\n", flattened.size());
+    fflush(stdout);
+    consumed = true;
+  }
   if (!consumed) switch (action) {
     case KeyAction::InsertChar: {
       // Any Unicode scalar value >= 0x20 except 0x7F (DEL) and surrogate
@@ -1226,6 +1294,9 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
     case KeyAction::Submit:
     case KeyAction::Newline:
     case KeyAction::SelectAll:
+    case KeyAction::Copy:
+    case KeyAction::Cut:
+    case KeyAction::Paste:
       break;  // handled above; unreachable here
   }
 
@@ -1336,6 +1407,28 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
       caretAction = KeyAction::MoveHome;
     } else if (key == "End") {
       caretAction = KeyAction::MoveEnd;
+    } else if ((key == "c" || key == "C") && selectAllMod && !mods.alt) {
+      // item 5. Copy = selectAllMod+c (Cmd on darwin, Ctrl elsewhere).
+      caretAction = KeyAction::Copy;
+    } else if ((key == "x" || key == "X") && selectAllMod && !mods.alt) {
+      // item 5. Cut = selectAllMod+x.
+      caretAction = KeyAction::Cut;
+    } else if ((key == "v" || key == "V") && selectAllMod && !mods.alt) {
+      // item 5. Paste = selectAllMod+v.
+      caretAction = KeyAction::Paste;
+#if !defined(__APPLE__)
+    } else if (key == "Insert" && mods.ctrl && !mods.alt) {
+      // item 5. Non-apple extra: Ctrl+Insert copies.
+      caretAction = KeyAction::Copy;
+    } else if (key == "Insert" && mods.shift && !mods.alt) {
+      // item 5. Non-apple extra: Shift+Insert pastes.
+      caretAction = KeyAction::Paste;
+    } else if (key == "Delete" && mods.shift && !mods.alt) {
+      // item 5. Non-apple extra: Shift+Delete cuts. Checked BEFORE the plain
+      // Delete->DeleteForward case below so a Shift+Delete does not fall
+      // through to forward-delete instead.
+      caretAction = KeyAction::Cut;
+#endif
     } else if (key == "Delete") {
       caretAction = KeyAction::DeleteForward;
     } else if ((key == "a" || key == "A") && selectAllMod && !mods.alt) {

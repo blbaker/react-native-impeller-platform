@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -205,6 +206,14 @@ class FabricHost {
     // __APPLE__, Ctrl+A elsewhere (platform dispatch is dispatchKeyEvent's
     // job, same as the word-move modifier split).
     SelectAll,
+    // item 5. Copy/Cut read or erase the current selection and write the
+    // system clipboard; Paste inserts the clipboard content (replacing a
+    // selection, or at the caret). All three are no-ops with nothing
+    // focused (dispatchKey already returns 0 then); Copy/Cut with an EMPTY
+    // selection do nothing at all -- no clipboard write, no buffer change.
+    Copy,
+    Cut,
+    Paste,
   };
   int dispatchKey(KeyAction action, unsigned int codepoint,
                   bool extendSelection = false);
@@ -241,6 +250,21 @@ class FabricHost {
   enum class KeyEventPhase { Down, Repeat, Up };
   int dispatchKeyEvent(const std::string& key, const std::string& code,
                        KeyEventPhase phase, const KeyModifiers& mods);
+
+  // item 5. Wired by main.cpp to the ClipboardBridge's synchronous
+  // getSystemNow()/setSystemNow() -- NOT to the bridge's queueing
+  // postToMain(), because dispatchKeyEvent itself already runs ON THE MAIN
+  // thread (the GLFW key callback / main.cpp's --key-after-frames hook), so
+  // there is no thread-safety reason to queue and every reason not to: a
+  // Ctrl+C immediately followed by Ctrl+V in the same key sequence must see
+  // the write synchronously, not after a drain that has not happened yet.
+  // FabricHost.cpp must never include GLFW directly (hence `std::function`
+  // rather than naming ClipboardBridge/GLFW here).
+  void setClipboardAccess(std::function<std::string()> get,
+                          std::function<void(const std::string&)> set) {
+    clipboardGet_ = std::move(get);
+    clipboardSet_ = std::move(set);
+  }
 
   // The component names this host can actually mount. Handed to ReactHost so
   // RN's NativeComponentRegistry and this registry cannot drift apart.
@@ -282,6 +306,15 @@ class FabricHost {
   // increase across every event this field emits, so it lives on the host, not
   // per-dispatch.
   int tiEventCount_{0};
+
+  // item 5. Wired by main.cpp's setClipboardAccess; see that method's header
+  // comment for why these are called DIRECTLY (not through
+  // ClipboardBridge::postToMain) from dispatchKeyEvent's Copy/Cut/Paste
+  // handling. Null until main.cpp wires them (headless runs with no window
+  // never call the Copy/Cut/Paste branch's clipboard access because no key
+  // events reach dispatchKeyEvent in a headless run at all).
+  std::function<std::string()> clipboardGet_;
+  std::function<void(const std::string&)> clipboardSet_;
 
   // ENG-09. Emits a pointerenter or pointerleave to `tag` through its
   // TouchEventEmitter, hopping to the JS thread exactly as dispatchTouch does.
