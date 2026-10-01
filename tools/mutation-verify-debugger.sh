@@ -7,9 +7,14 @@
 #   M2  no HostTarget passed to the ReactInstance: the page is listed but has
 #       no runtime under it, so nothing can be evaluated
 #   M3  the device socket is never opened: Metro never lists the app
-#   M4  the instance is not unregistered from the inspector before teardown
-#       (RN asserts on it; in release builds a dangling target -> exit crash
-#       or a stuck quit)
+#   M4  the inspector is torn down AFTER the runtime (no explicit detach in
+#       ~ReactHost; ~InspectorHost runs last): quitting with DevTools still
+#       attached crashes (exit 139, measured).
+#
+# NOT a mutant: skipping ONLY ReactInstance::unregisterFromInspector() while
+# keeping the ordered shutdown. Measured harmless in this build (RN asserts
+# on it in debug builds only; the HostTarget owns and frees the instance
+# target either way), so no gate can see it -- it is not claimed as covered.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 RH="engine/runtime/ReactHost.cpp"
@@ -66,11 +71,17 @@ gate "$BAK/m3.log" || true
 expect_killed M3 "$BAK/m3.log" "not listed in Metro"
 restore
 
-echo "== M4: instance not unregistered before teardown =="
-mutate "$RH" '      inspector_->queue().runSync([this] { instance_->unregisterFromInspector(); });' \
-             '      (void)0;  // MUTANT M4'
+echo "== M4: inspector torn down after the runtime =="
+mutate "$RH" '  if (inspector_) {
+    if (instance_) {
+      inspector_->queue().runSync([this] { instance_->unregisterFromInspector(); });
+    }
+    inspector_->shutdown();
+  }
+' '  // MUTANT M4: inspector torn down by ~InspectorHost, AFTER the runtime
+'
 gate "$BAK/m4.log" || true
-expect_killed M4 "$BAK/m4.log" "after a debugger session|exited"
+expect_killed M4 "$BAK/m4.log" "quit with DevTools attached"
 restore
 
 echo "MUTATION_VERIFY_DEBUGGER_PASS: control PASS, M1-M4 each FAIL the gate"
