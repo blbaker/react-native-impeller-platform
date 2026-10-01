@@ -30,10 +30,18 @@
 
 namespace rni {
 
+class InspectorHost;
+
 class ReactHost {
  public:
-  ReactHost();
+  // parity item 24. withInspector: register a debuggable page (HostTarget)
+  // so React Native DevTools can attach through Metro. Only for bundles
+  // served by Metro; release / file:// runs pay nothing.
+  explicit ReactHost(bool withInspector = false);
   ~ReactHost();
+  // parity item 24. Opens the inspector device socket to the Metro that
+  // served sourceUrl. No-op without an inspector or for non-http URLs.
+  void connectInspector(const std::string& sourceUrl, const std::string& appName);
 
   // Evaluates `source` as the app bundle. sourceURL is what SourceCode reports.
   void runScript(std::string source, const std::string& sourceURL);
@@ -126,6 +134,9 @@ class ReactHost {
 
  private:
   std::shared_ptr<JsThread> jsThread_;
+  // parity item 24. Declared BEFORE instance_ so it is destroyed AFTER it:
+  // the ReactInstance's inspector targets live under its HostTarget.
+  std::unique_ptr<InspectorHost> inspector_;
   std::unique_ptr<facebook::react::ReactInstance> instance_;
   std::shared_ptr<std::string> scriptURL_;
   // parity item 14: DevSettings.reload calls this (set by the host).

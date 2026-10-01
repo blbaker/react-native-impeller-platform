@@ -1,4 +1,5 @@
 #include "runtime/ReactHost.h"
+#include "runtime/InspectorHost.h"
 
 #include <ReactCommon/TurboModuleBinding.h>
 #include <cxxreact/JSBigString.h>
@@ -128,7 +129,7 @@ void installHasComponent(jsi::Runtime& runtime,
 
 }  // namespace
 
-ReactHost::ReactHost() {
+ReactHost::ReactHost(bool withInspector) {
   installFeatureFlags();
 
   jsThread_ = std::make_shared<JsThread>();
@@ -190,9 +191,15 @@ ReactHost::ReactHost() {
         std::fflush(stderr);
       };
 
+  // parity item 24. The HostTarget must exist before the instance: the
+  // instance registers its InstanceTarget + Hermes RuntimeTarget under it
+  // (on the inspector queue) and buffers runtime work until that is done.
+  if (withInspector) {
+    inspector_ = std::make_unique<InspectorHost>(reloadHook_);
+  }
   instance_ = std::make_unique<react::ReactInstance>(
       std::move(jsRuntime), jsThread_, timerManager, std::move(onJsError),
-      /*parentInspectorTarget*/ nullptr);
+      /*parentInspectorTarget*/ inspector_ ? inspector_->hostTarget() : nullptr);
 
   timerManager->setRuntimeExecutor(instance_->getBufferedRuntimeExecutor());
 
@@ -386,6 +393,17 @@ ReactHost::~ReactHost() {
     waitForJsIdle(5000);
   }
 
+  // parity item 24. Detach the debugger BEFORE the runtime goes: unregister
+  // the instance/runtime targets on the inspector queue (their owning
+  // thread, as RCTInstance invalidate / ReactHostImpl do on theirs), then
+  // close the device socket, drop the page and the HostTarget.
+  if (inspector_) {
+    if (instance_) {
+      inspector_->queue().runSync([this] { instance_->unregisterFromInspector(); });
+    }
+    inspector_->shutdown();
+  }
+
   // ⛔ TEARDOWN ORDER IS LOAD-BEARING, AND THE RUNTIME MUST OUTLIVE THE MODULES.
   //
   // A TurboModule holds jsi::WeakObject members, and ~WeakObject calls into the
@@ -508,6 +526,11 @@ void ReactHost::runScript(std::string source, const std::string& sourceURL) {
   *scriptURL_ = sourceURL;
   instance_->loadScript(
       std::make_unique<react::JSBigStdString>(std::move(source)), sourceURL);
+}
+
+void ReactHost::connectInspector(const std::string& sourceUrl,
+                                 const std::string& appName) {
+  if (inspector_) inspector_->connectToMetro(sourceUrl, appName);
 }
 
 void ReactHost::devServerSetup(const std::string& sourceUrl) {
