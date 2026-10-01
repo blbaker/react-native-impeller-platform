@@ -584,23 +584,7 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
       case GLFW_MOUSE_BUTTON_5: w3c = 4; break;
       default: return;
     }
-#if defined(__APPLE__)
-    // macOS: Ctrl+left is the secondary (right) click. The release must
-    // follow its press to the right-button path even if Ctrl was let go.
-    if (w3c == 0) {
-      if (down) self->ctrlLeftIsRight_ = (mods & GLFW_MOD_CONTROL) != 0;
-      if (self->ctrlLeftIsRight_) {
-        w3c = 2;
-        if (!down) self->ctrlLeftIsRight_ = false;
-      }
-    }
-#endif
-    if (w3c == 0) {
-      // item 4b: mods carry Shift for Shift+click selection extension.
-      self->dispatchCursorPoint(cx, cy, down, mods);
-    } else {
-      self->dispatchExtraButton(cx, cy, down, w3c, mods);
-    }
+    self->routeButton(cx, cy, down, w3c, mods);
   });
 
   // <ScrollView>. ENG-02. THE SECOND REGISTRATION THAT WAS ABSENT.
@@ -881,6 +865,30 @@ void GlfwSurface::dispatchExtraButton(double screenX, double screenY,
   extraButtonHandler_(ev);
 }
 
+// item 6. The ONE routing point for a W3C button, shared by the real GLFW
+// callback and synthesiseMouseButton, so the darwin Ctrl+left remap is
+// exercised by the synthetic hook too.
+void GlfwSurface::routeButton(double screenX, double screenY, bool down,
+                              int w3cButton, int glfwMods) {
+#if defined(__APPLE__)
+  // macOS: Ctrl+left is the secondary (right) click. The release must
+  // follow its press to the right-button path even if Ctrl was let go.
+  if (w3cButton == 0) {
+    if (down) ctrlLeftIsRight_ = (glfwMods & GLFW_MOD_CONTROL) != 0;
+    if (ctrlLeftIsRight_) {
+      w3cButton = 2;
+      if (!down) ctrlLeftIsRight_ = false;
+    }
+  }
+#endif
+  if (w3cButton == 0) {
+    // item 4b: mods carry Shift for Shift+click selection extension.
+    dispatchCursorPoint(screenX, screenY, down, glfwMods);
+  } else {
+    dispatchExtraButton(screenX, screenY, down, w3cButton, glfwMods);
+  }
+}
+
 void GlfwSurface::synthesiseMouseButton(int w3cButton, bool down,
                                         double screenX, double screenY,
                                         bool shift, bool ctrl, bool alt,
@@ -888,11 +896,7 @@ void GlfwSurface::synthesiseMouseButton(int w3cButton, bool down,
   const int mods = (shift ? GLFW_MOD_SHIFT : 0) |
                    (ctrl ? GLFW_MOD_CONTROL : 0) | (alt ? GLFW_MOD_ALT : 0) |
                    (meta ? GLFW_MOD_SUPER : 0);
-  if (w3cButton == 0) {
-    dispatchCursorPoint(screenX, screenY, down, mods);
-  } else {
-    dispatchExtraButton(screenX, screenY, down, w3cButton, mods);
-  }
+  routeButton(screenX, screenY, down, w3cButton, mods);
 }
 
 void GlfwSurface::dispatchCursorPoint(double screenX, double screenY,

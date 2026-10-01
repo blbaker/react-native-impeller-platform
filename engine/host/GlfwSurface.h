@@ -518,6 +518,12 @@ class GlfwSurface {
   // handler.
   void dispatchExtraButton(double screenX, double screenY, bool down,
                            int w3cButton, int glfwMods);
+  // item 6. Routes one W3C button event (after GLFW -> W3C mapping) to the
+  // left touch path or the extra-button path, applying the darwin Ctrl+left
+  // -> secondary-click remap. Shared by the real callback and
+  // synthesiseMouseButton.
+  void routeButton(double screenX, double screenY, bool down, int w3cButton,
+                   int glfwMods);
 
   int width_{0};
   int height_{0};
