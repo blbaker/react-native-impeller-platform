@@ -362,6 +362,13 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     // operation list into a matrix; reading props->transform.matrix directly
     // skips the origin translation, so a rotation would pivot about the node's
     // top-left instead of its centre — a wrong-but-plausible frame.
+    // parity item 9: pointerEvents, read with the other view props.
+    switch (props->pointerEvents) {
+      case react::PointerEventsMode::None: node.pointerEvents = 1; break;
+      case react::PointerEventsMode::BoxNone: node.pointerEvents = 2; break;
+      case react::PointerEventsMode::BoxOnly: node.pointerEvents = 3; break;
+      default: node.pointerEvents = 0; break;
+    }
     node.hasTransform = false;
     if (!props->transform.operations.empty()) {
       const auto resolved = props->resolveTransform(view.layoutMetrics);
@@ -2472,6 +2479,24 @@ facebook::react::Tag SceneGraph::hitTestNode(const SceneNode& node,
   const float ny = originY + (float)frame.origin.y;
   const float w = (float)frame.size.width;
   const float h = (float)frame.size.height;
+
+  // parity item 9: pointerEvents='none' removes the node AND its subtree.
+  if (node.pointerEvents == 1) return 0;
+
+  // parity item 9: a transformed node is HIT where it is PAINTED. paintNode
+  // draws it as translate(c) * M * translate(-c) about its centre c; map the
+  // point back through the inverse so the rest of this walk (children
+  // included) runs in untransformed space, exactly as paint does.
+  if (node.hasTransform) {
+    const float cx = nx + w * 0.5f, cy = ny + h * 0.5f;
+    const auto& m = node.transform;  // column-major 4x4; 2D affine part
+    const float a = m[0], b = m[1], cc = m[4], d = m[5], tx = m[12], ty = m[13];
+    const float det = a * d - b * cc;
+    if (std::fabs(det) < 1e-6f) return 0;  // degenerate (scale 0): unhittable
+    const float px = x - cx - tx, py = y - cy - ty;
+    x = cx + (d * px - cc * py) / det;
+    y = cy + (-b * px + a * py) / det;
+  }
   const bool inside = x >= nx && x < nx + w && y >= ny && y < ny + h;
 
   // A clipping node crops its subtree to its own bounds, so a point outside it
@@ -2494,12 +2519,17 @@ facebook::react::Tag SceneGraph::hitTestNode(const SceneNode& node,
   const float childOriginY = node.isScrollView ? ny - node.scrollY : ny;
   const float childOriginX = node.isScrollView ? nx - node.scrollX : nx;
 
-  for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
-    auto child = nodes_.find(*it);
-    if (child == nodes_.end()) continue;
-    if (auto hit = hitTestNode(child->second, childOriginX, childOriginY, x, y))
-      return hit;
+  // parity item 9: box-only keeps the node hittable but not its children.
+  if (node.pointerEvents != 3) {
+    for (auto it = node.children.rbegin(); it != node.children.rend(); ++it) {
+      auto child = nodes_.find(*it);
+      if (child == nodes_.end()) continue;
+      if (auto hit = hitTestNode(child->second, childOriginX, childOriginY, x, y))
+        return hit;
+    }
   }
+  // parity item 9: box-none keeps the children hittable but not the node.
+  if (node.pointerEvents == 2) return 0;
 
   // Zero-sized nodes are never targets. This matters more than it looks: a
   // <Text> whose TextLayoutManager measured 0x0 still PAINTS its glyphs (see
