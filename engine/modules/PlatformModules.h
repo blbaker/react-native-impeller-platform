@@ -33,6 +33,7 @@
 // JNI-backed managers. But the flavour choice is about the METHOD MAP only:
 // every constant below describes THIS platform, not iOS.
 #pragma once
+#include <functional>
 
 #include <FBReactNativeSpecJSI.h>
 
@@ -178,11 +179,18 @@ class DevSettingsModule
     : public facebook::react::NativeDevSettingsCxxSpec<DevSettingsModule> {
  public:
   explicit DevSettingsModule(
-      std::shared_ptr<facebook::react::CallInvoker> jsInvoker)
-      : NativeDevSettingsCxxSpec(std::move(jsInvoker)) {}
+      std::shared_ptr<facebook::react::CallInvoker> jsInvoker,
+      std::shared_ptr<std::function<void(const std::string&)>> reload = nullptr)
+      : NativeDevSettingsCxxSpec(std::move(jsInvoker)),
+        reload_(std::move(reload)) {}
 
-  void reload(jsi::Runtime&) {}
-  void reloadWithReason(jsi::Runtime&, jsi::String) {}
+  // parity item 14. Reload = the host re-fetches the bundle (from Metro when
+  // it came from a URL) and runs it in a fresh React instance. Without a
+  // host hook (headless one-shot runs) it is a logged no-op, never silent.
+  void reload(jsi::Runtime&) { requestReload("reload"); }
+  void reloadWithReason(jsi::Runtime& rt, jsi::String reason) {
+    requestReload(reason.utf8(rt));
+  }
   void onFastRefresh(jsi::Runtime&) {}
   void setHotLoadingEnabled(jsi::Runtime&, bool) {}
   void setProfilingEnabled(jsi::Runtime&, bool) {}
@@ -192,6 +200,15 @@ class DevSettingsModule
   void addListener(jsi::Runtime&, jsi::String) {}
   void removeListeners(jsi::Runtime&, double) {}
   void setIsShakeToShowDevMenuEnabled(jsi::Runtime&, bool) {}
+
+ private:
+  void requestReload(const std::string& reason) {
+    std::printf("rn-impeller: devsettings_reload reason=%s hook=%d\n",
+                reason.c_str(), reload_ && *reload_ ? 1 : 0);
+    std::fflush(stdout);
+    if (reload_ && *reload_) (*reload_)(reason);
+  }
+  std::shared_ptr<std::function<void(const std::string&)>> reload_;
 };
 
 // ---------------------------------------------------------------------------
