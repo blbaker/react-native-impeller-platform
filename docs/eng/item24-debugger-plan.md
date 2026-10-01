@@ -1,4 +1,16 @@
-# Item 24 plan: React Native DevTools (Hermes debugger) over Metro
+# Item 24: React Native DevTools (Hermes debugger) over Metro
+
+STATUS: LANDED 8640d19 (feat/desktop-input). What changed vs the plan below:
+- Executor is a DEDICATED inspector thread, not the GLFW main thread
+  (main is blocked in waitForJsIdle while ReactInstance waits for
+  registerInstance on the executor: deadlock).
+- The blocker was HERMES_ENABLE_DEBUGGER, not wiring: without it RN builds
+  the Fallback delegate (every *.enable ok, Runtime.evaluate -32601).
+- Gate arm f (quit with DevTools attached) is what kills the teardown-order
+  mutant; "skip unregister only" is not observable in release builds.
+- Metro's proxy rejects a foreign Origin with 401 (cdp-probe sends Metro's).
+
+# Original plan
 
 Scope: `j` in Metro (or `/open-debugger`) opens React Native DevTools against
 a running impeller app, with breakpoints, console, and the Components tab.
