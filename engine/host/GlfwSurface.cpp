@@ -566,15 +566,41 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   glfwSetMouseButtonCallback(window_, [](GLFWwindow* w, int button, int action,
                                          int mods) {
     auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
-    if (!self || !self->mouseButtonHandler_) return;
-    // One mouse == one finger. RN has no touch phase for a right or middle
-    // button, and forwarding them would deliver a press RN cannot pair.
-    if (button != GLFW_MOUSE_BUTTON_LEFT) return;
+    if (!self) return;
     if (action != GLFW_PRESS && action != GLFW_RELEASE) return;
     double cx = 0.0, cy = 0.0;
     glfwGetCursorPos(w, &cx, &cy);
-    // item 4b: mods carry Shift for Shift+click selection extension.
-    self->dispatchCursorPoint(cx, cy, action == GLFW_PRESS, mods);
+    const bool down = action == GLFW_PRESS;
+    // item 6: only LEFT is an RN touch (onPress, focus, caret, selection).
+    // Right/middle/back/forward go to the extra-button path: W3C pointer
+    // events only. GLFW maps X11 buttons 8/9 and Win32 XBUTTON1/2 to
+    // BUTTON_4/BUTTON_5 (back/forward).
+    int w3c = -1;
+    switch (button) {
+      case GLFW_MOUSE_BUTTON_LEFT: w3c = 0; break;
+      case GLFW_MOUSE_BUTTON_MIDDLE: w3c = 1; break;
+      case GLFW_MOUSE_BUTTON_RIGHT: w3c = 2; break;
+      case GLFW_MOUSE_BUTTON_4: w3c = 3; break;
+      case GLFW_MOUSE_BUTTON_5: w3c = 4; break;
+      default: return;
+    }
+#if defined(__APPLE__)
+    // macOS: Ctrl+left is the secondary (right) click. The release must
+    // follow its press to the right-button path even if Ctrl was let go.
+    if (w3c == 0) {
+      if (down) self->ctrlLeftIsRight_ = (mods & GLFW_MOD_CONTROL) != 0;
+      if (self->ctrlLeftIsRight_) {
+        w3c = 2;
+        if (!down) self->ctrlLeftIsRight_ = false;
+      }
+    }
+#endif
+    if (w3c == 0) {
+      // item 4b: mods carry Shift for Shift+click selection extension.
+      self->dispatchCursorPoint(cx, cy, down, mods);
+    } else {
+      self->dispatchExtraButton(cx, cy, down, w3c, mods);
+    }
   });
 
   // <ScrollView>. ENG-02. THE SECOND REGISTRATION THAT WAS ABSENT.
@@ -788,8 +814,100 @@ void GlfwSurface::setMouseButtonHandler(
   mouseButtonHandler_ = std::move(handler);
 }
 
+void GlfwSurface::setExtraButtonHandler(
+    std::function<void(const ExtraButtonEvent&)> handler) {
+  extraButtonHandler_ = std::move(handler);
+}
+
+namespace {
+// W3C `buttons` bit for a W3C `button` value: 0 left->1, 1 middle->4,
+// 2 right->2, 3 back->8, 4 forward->16.
+int ButtonsBitFor(int w3cButton) {
+  switch (w3cButton) {
+    case 0: return 1;
+    case 1: return 4;
+    case 2: return 2;
+    case 3: return 8;
+    case 4: return 16;
+    default: return 0;
+  }
+}
+}  // namespace
+
+void GlfwSurface::dispatchExtraButton(double screenX, double screenY,
+                                      bool down, int w3cButton, int glfwMods) {
+  if (w3cButton < 1 || w3cButton > 4) return;
+  lastMods_.shift = (glfwMods & GLFW_MOD_SHIFT) != 0;
+  lastMods_.ctrl = (glfwMods & GLFW_MOD_CONTROL) != 0;
+  lastMods_.alt = (glfwMods & GLFW_MOD_ALT) != 0;
+  lastMods_.meta = (glfwMods & GLFW_MOD_SUPER) != 0;
+  const int bit = ButtonsBitFor(w3cButton);
+  ExtraClickState& st = extraClick_[w3cButton];
+  if (down) {
+    heldButtons_ |= bit;
+    const double nowMs =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    const bool near =
+        std::fabs(screenX - st.lastPressX) <= kMultiClickSlopPx &&
+        std::fabs(screenY - st.lastPressY) <= kMultiClickSlopPx;
+    st.clickCount =
+        (near && nowMs - st.lastPressMs <= kMultiClickMs) ? st.clickCount + 1
+                                                          : 1;
+    st.lastPressMs = nowMs;
+    st.lastPressX = screenX;
+    st.lastPressY = screenY;
+  } else {
+    heldButtons_ &= ~bit;
+  }
+  if (!extraButtonHandler_) return;
+  int fbW = 0, fbH = 0, winW = 0, winH = 0;
+  if (window_) {
+    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    glfwGetWindowSize(window_, &winW, &winH);
+  }
+  ExtraButtonEvent ev;
+  ev.x = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
+  ev.y = CursorPointsFromScreen(screenY, fbH, winH, pointScale_);
+  ev.down = down;
+  ev.button = w3cButton;
+  ev.buttons = heldButtons_;
+  ev.clickCount = st.clickCount < 1 ? 1 : st.clickCount;
+  ev.shift = lastMods_.shift;
+  ev.ctrl = lastMods_.ctrl;
+  ev.alt = lastMods_.alt;
+  ev.meta = lastMods_.meta;
+  extraButtonHandler_(ev);
+}
+
+void GlfwSurface::synthesiseMouseButton(int w3cButton, bool down,
+                                        double screenX, double screenY,
+                                        bool shift, bool ctrl, bool alt,
+                                        bool meta) {
+  const int mods = (shift ? GLFW_MOD_SHIFT : 0) |
+                   (ctrl ? GLFW_MOD_CONTROL : 0) | (alt ? GLFW_MOD_ALT : 0) |
+                   (meta ? GLFW_MOD_SUPER : 0);
+  if (w3cButton == 0) {
+    dispatchCursorPoint(screenX, screenY, down, mods);
+  } else {
+    dispatchExtraButton(screenX, screenY, down, w3cButton, mods);
+  }
+}
+
 void GlfwSurface::dispatchCursorPoint(double screenX, double screenY,
                                       bool down, int glfwMods) {
+  // item 6: the LEFT button's share of the shared held-button mask and the
+  // live modifier state, updated before any handler reads them.
+  lastMods_.shift = (glfwMods & GLFW_MOD_SHIFT) != 0;
+  lastMods_.ctrl = (glfwMods & GLFW_MOD_CONTROL) != 0;
+  lastMods_.alt = (glfwMods & GLFW_MOD_ALT) != 0;
+  lastMods_.meta = (glfwMods & GLFW_MOD_SUPER) != 0;
+  if (down) {
+    heldButtons_ |= 1;
+  } else {
+    heldButtons_ &= ~1;
+  }
   if (!mouseButtonHandler_) return;
   // item 4b: count multi-clicks on the PRESS, before the handler reads it.
   if (down) {

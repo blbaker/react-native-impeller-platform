@@ -47,6 +47,15 @@ const BaseViewConfigImpeller = {
         captured: 'onKeyUpCapture',
       },
     },
+    // desktop-input-gap item 6. Release of a non-left button over the view
+    // it was pressed on (react-native-macos/-windows `onAuxClick`; payload is
+    // a PointerEvent with button 1 middle, 2 right, 3 back, 4 forward).
+    topAuxClick: {
+      phasedRegistrationNames: {
+        bubbled: 'onAuxClick',
+        captured: 'onAuxClickCapture',
+      },
+    },
   },
   validAttributes: {
     ...BaseViewConfigIos.validAttributes,
@@ -54,6 +63,8 @@ const BaseViewConfigImpeller = {
     onKeyDownCapture: true,
     onKeyUp: true,
     onKeyUpCapture: true,
+    onAuxClick: true,
+    onAuxClickCapture: true,
   },
 };
 
