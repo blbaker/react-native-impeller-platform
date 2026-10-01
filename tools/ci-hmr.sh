@@ -114,10 +114,18 @@ set +e
 APP_PID=$!
 set -e
 # wait for HMR to be set up and the first render
-for _ in $(seq 1 60); do grep -q 'SWATCH_RENDER #ff0000' "$L" && break; sleep 0.5; done
+T_START=$(date +%s.%N)
+for _ in $(seq 1 120); do grep -q 'SWATCH_RENDER #ff0000' "$L" && break; sleep 0.25; done
+T_FIRST=$(date +%s.%N)
+FIRST_S="$(python3 -c "print('%.1f' % ($T_FIRST - $T_START))")"
 grep -q 'SWATCH_RENDER #ff0000' "$L" || { dump "$L"; kill $APP_PID 2>/dev/null; fail "b: the app never rendered from Metro"; }
 grep -qE '^rn-impeller: hmr_setup host=127.0.0.1 port='"$PORT" "$L" \
   || { dump "$L"; kill $APP_PID 2>/dev/null; fail "a: the engine never called HMRClient.setup -- HMR is not wired"; }
+# The first render must not wait out the JS-idle timeout: HMR installs a 20 s
+# repeating ping, and a repeating timer counted as pending work stalled every
+# waitForJsIdle (the first frame landed ~10 s late).
+python3 -c "import sys; sys.exit(0 if float('$FIRST_S') < 5 else 1)" \
+  || { dump "$L"; kill $APP_PID 2>/dev/null; fail "a: the first render took ${FIRST_S}s after launch -- startup stalled on HMR's repeating timer"; }
 sleep 7  # past the 6 s 'before' screenshot
 BEFORE="$(pixel "$WORK/before.ppm")"
 sed -i "s/#ff0000/#00ff00/" "$APP/Swatch.js"
