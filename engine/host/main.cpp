@@ -412,6 +412,24 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          logMutations, host.displayMetrics());
 
+  // item 5. A real GLFW window exists here, so wire the ClipboardBridge's
+  // "system backend" pair to the surface's glfwGetClipboardString/
+  // glfwSetClipboardString wrappers, and give it the wake callback so a
+  // request queued while the loop is parked in --idle-skip's
+  // glfwWaitEventsTimeout wakes it promptly. See ClipboardBridge.h.
+  auto clipboard = host.clipboard();
+  clipboard->setSystemBackend(
+      [&surface]() { return surface.getClipboardString(); },
+      [&surface](const std::string& s) { surface.setClipboardString(s); });
+  clipboard->setWake([&surface]() { surface.postEmptyEvent(); });
+  // The TextInput Copy/Cut/Paste shortcuts run ON THE MAIN THREAD (the GLFW
+  // key callback), so they read/write the clipboard DIRECTLY through the
+  // bridge's synchronous accessors rather than through the queue -- see
+  // FabricHost::setClipboardAccess's header comment.
+  fabric.setClipboardAccess(
+      [clipboard]() { return clipboard->getSystemNow(); },
+      [clipboard](const std::string& s) { clipboard->setSystemNow(s); });
+
   host.runScript(std::move(bundle), "file://" + bundlePath);
   host.waitForJsIdle(10000);
   // startSurface takes DEVICE PIXELS and divides by pointScale itself
@@ -868,6 +886,12 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // above is the path that runs when this loop is blocked inside
     // pollEvents(). Both go through applyResizeIfDirty, deliberately.
     applyResizeIfDirty();
+
+    // item 5. Drain the ClipboardBridge's queued main-thread tasks every
+    // iteration, same discipline as applyResizeIfDirty: a getString()/
+    // setString() call from the JS thread posts here and waits for this
+    // drain (or the bridge's wake, under --idle-skip) to run it.
+    clipboard->drainMain();
 
     // Test hook: drive a resize from inside the process at a known frame.
     // There is no headless way to make a window manager resize a window, and

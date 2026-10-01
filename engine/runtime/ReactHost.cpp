@@ -20,6 +20,7 @@
 #include <unordered_map>
 
 #include "runtime/FeatureFlags.h"
+#include "modules/ClipboardModule.h"
 
 namespace rni {
 
@@ -255,6 +256,16 @@ ReactHost::ReactHost() {
   // that the module resolves.
   modules_->add("WorldRaster", [s = worldRasterStore_](auto inv) {
     return std::make_shared<rni::WorldRasterModule>(inv, s);
+  });
+
+  // item 5. System clipboard. See ClipboardBridge.h for the thread-safety
+  // design (GLFW's clipboard functions are main-thread only; this module
+  // runs on the JS thread) and ClipboardModule.h for the Promise shape.
+  // NOT getEnforcing'd by anything in RN's own JS -- Clipboard.js reaches
+  // for it directly rather than through TurboModuleRegistry.getEnforcing --
+  // so its absence is SILENT the same way AppStorage's and Networking's are.
+  modules_->add("Clipboard", [c = clipboard_](auto inv) {
+    return std::make_shared<ClipboardModule>(inv, c);
   });
 
   // ENG-06. RN's own C++ NativeAnimated engine (ReactCommon/react/renderer/
