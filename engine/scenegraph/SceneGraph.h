@@ -122,6 +122,11 @@ struct SceneNode {
   bool isParagraph{false};
   std::string text;
   float fontSize{14};
+  // ENG-22: the run's TextAttributes::fontFamily, the SAME string
+  // ImpellerTextLayoutManager measures with. Empty = Impeller's default face.
+  // Painting without it measured the box in one face and drew the glyphs in
+  // the fallback, so a mono label overflowed or collided with its neighbour.
+  std::string fontFamily;
   float textColor[4]{0, 0, 0, 1};
   // numberOfLines. Must be applied at PAINT time as well as measure time, or a
   // clamped label measures one line and paints three.

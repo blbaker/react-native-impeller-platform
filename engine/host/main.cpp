@@ -68,6 +68,11 @@
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
+#include "text/FontRegistry.h"
+
+// ENG-22: --font-dir values, registered with each surface's typography context
+// right after init and BEFORE anything measures (see text/FontRegistry.h).
+static std::vector<std::string> gFontDirs;
 
 namespace {
 
@@ -374,6 +379,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
   }
+  // ENG-22: app fonts before the first measure (FabricHost is built below).
+  rni::RegisterFontDirs(surface.typography(), rni::FontDirsFrom(gFontDirs));
 
   // ⛔ THE WINDOW, NOT THE CLI, DECIDES THE PIXEL SIZE AND THE SCALE.
   // --width/--height went to glfwCreateWindow, which treats them as SCREEN
@@ -2004,6 +2011,9 @@ int main(int argc, char** argv) {
     else if (a == "--test-openurl") testOpenUrl = true;
     else if (a == "--test-pointscale") testPointScale = true;
     else if (a == "--test-caret-blink") testCaretBlink = true;
+    // ENG-22: a dir of .ttf/.otf/.ttc files to register (repeatable; also
+    // RNI_FONT_DIRS, colon-separated). Faces register under their own family.
+    else if (a == "--font-dir") gFontDirs.push_back(next("--font-dir"));
     else if (a == "--test-urlparse") testUrlParse = true;
     else if (a == "--test-http") testHttp = true;
     else if (a == "--color-scheme") colorScheme = next("--color-scheme");
@@ -2196,6 +2206,8 @@ int main(int argc, char** argv) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
   }
+  // ENG-22: app fonts before the first measure (FabricHost is built below).
+  rni::RegisterFontDirs(surface.typography(), rni::FontDirsFrom(gFontDirs));
   // A degraded surface (main FBO unavailable under GPU pressure, or
   // RNI_FORCE_FBO_FAIL) mounts and walks the tree for counts but has no
   // drawable. Every pixel-dependent step below is gated on this; the run still

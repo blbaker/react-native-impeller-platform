@@ -227,6 +227,7 @@ add_executable(rn-impeller
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
   text/ImpellerTextLayoutManager.cpp
+  text/FontRegistry.cpp
 )
 
 target_include_directories(rn-impeller PRIVATE

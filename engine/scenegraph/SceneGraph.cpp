@@ -40,6 +40,15 @@ namespace {
 // paintNode (glyphs + caret) AND glyphBoundariesLocked (click-to-caret, item
 // 3). One constant so the two cannot drift.
 constexpr float kTextInputPad = 4.0f;
+
+// ENG-22: one setter for every paragraph style the painter builds (Paragraph,
+// TextInput glyphs + selection + caret, click-to-caret boundaries), so the
+// family measure used cannot be dropped from one paint path and not another.
+void ApplyFontFamily(ImpellerParagraphStyle style, const std::string& family) {
+  if (!family.empty()) {
+    ImpellerParagraphStyleSetFontFamily(style, family.c_str());
+  }
+}
 }  // namespace
 
 namespace rni {
@@ -452,6 +461,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
   if (node.componentName == "Paragraph") {
     node.isParagraph = true;
     node.text.clear();
+    node.fontFamily.clear();
     node.maxLines = 0;
     node.ellipsizeMode = 0;
     node.textTransform = 0;
@@ -479,6 +489,12 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
         node.text += fragment.string;
         if (fragment.textAttributes.fontSize > 0) {
           node.fontSize = (float)fragment.textAttributes.fontSize;
+        }
+        // Same last-fragment-wins rule as fontSize: RN resolves a Text's
+        // family onto every fragment, so a uniform label is exact. Mixed
+        // families inside one paragraph are per-fragment spans (parity 16).
+        if (!fragment.textAttributes.fontFamily.empty()) {
+          node.fontFamily = fragment.textAttributes.fontFamily;
         }
         if (fragment.textAttributes.foregroundColor) {
           colorToFloats(fragment.textAttributes.foregroundColor, node.textColor);
@@ -514,6 +530,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.tiEditable = tp->editable;  // item 11
       const auto attrs = tp->getEffectiveTextAttributes(1.0f);
       if (attrs.fontSize > 0) node.fontSize = (float)attrs.fontSize;
+      node.fontFamily = attrs.fontFamily;  // ENG-22
       if (attrs.foregroundColor) {
         colorToFloats(attrs.foregroundColor, node.textColor);
       }
@@ -1427,6 +1444,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   if (node.isParagraph && !node.text.empty() && typography_ != nullptr) {
     ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
     ImpellerParagraphStyleSetFontSize(style, node.fontSize);
+    ApplyFontFamily(style, node.fontFamily);  // ENG-22
     if (node.maxLines > 0) {
       // Painting must honour the same clamp measurement did, or a
       // numberOfLines={1} label is measured at one line and painted at three,
@@ -1486,6 +1504,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     if (!drawStr.empty()) {
       ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
       ImpellerParagraphStyleSetFontSize(style, node.fontSize);
+      ApplyFontFamily(style, node.fontFamily);  // ENG-22
       ImpellerPaint tPaint = ImpellerPaintNew();
       const float* col = showPlaceholder ? node.tiPlaceholderColor : node.textColor;
       ImpellerColor tc = impellerColor(col, OwnAlpha(node));
@@ -2998,6 +3017,8 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   xs->push_back(textX);
   ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
   ImpellerParagraphStyleSetFontSize(style, node.fontSize);
+  // ENG-22: a click must map through the SAME face the glyphs painted in.
+  ApplyFontFamily(style, node.fontFamily);
   for (size_t i = 1; i <= shown.size(); ++i) {
     if (i < shown.size() && (((unsigned char)shown[i]) & 0xC0) == 0x80) continue;
     ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
