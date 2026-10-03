@@ -46,6 +46,11 @@ class JsThread : public facebook::react::MessageQueueThread {
   // JS work before teardown instead of guessing with a sleep.
   bool isIdle();
 
+  // Number of queued (not yet started) tasks. Timers are NOT counted. Used by
+  // ReactHost::waitForJsQueueDrained, the windowed boot wait that must not
+  // block on a running rAF/setTimeout animation clock.
+  size_t pendingTasks();
+
   // Snapshot of queue/timer/busy state + lifetime counters, safe from any
   // thread. `enq` climbing while `ran` is frozen means the JS thread is stuck
   // INSIDE a task; both frozen means nothing is enqueueing. These two look

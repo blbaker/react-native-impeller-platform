@@ -106,6 +106,20 @@ class ReactHost {
   // headless gate so a frame is captured after JS work, not during it.
   bool waitForJsIdle(int timeoutMs);
 
+  // ⛔ THE WINDOWED BOOT WAIT. TIMERS DO NOT COUNT.
+  // Blocks until every task queued on the JS thread has run (including tasks
+  // those tasks queue: render -> commit -> effects), but NOT until pending
+  // timers fire. waitForJsIdle counts a one-shot timer as work, and RN core's
+  // requestAnimationFrame IS a setTimeout(0) (TimerManager.cpp), so an app
+  // running a rAF launch animation is never idle until the animation stops.
+  // Using waitForJsIdle at windowed boot held the frame loop off for the
+  // whole launch animation: the first present was the Home screen ~1.5 s
+  // after JS started (Mac, HostApp v5, 2026-10-03; D-156). The barrier runs at
+  // RuntimeScheduler IdlePriority so it lands behind React's own render and
+  // effect tasks (see the .cpp; an Immediate barrier overtook them and the
+  // first frame was black). Returns false on timeout.
+  bool waitForJsQueueDrained(int timeoutMs);
+
   // Registers the names of components the engine can actually mount, so RN's
   // NativeComponentRegistry answers truthfully. Must agree with FabricHost's
   // provider registry: a component present in one and absent from the other

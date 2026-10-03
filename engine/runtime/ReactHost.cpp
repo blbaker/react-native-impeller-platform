@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <future>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -585,6 +586,50 @@ bool ReactHost::waitForJsIdle(int timeoutMs) {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   return jsThread_->isIdle();
+}
+
+bool ReactHost::waitForJsQueueDrained(int timeoutMs) {
+  if (!instance_ || !jsThread_) return true;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  // Through the BUFFERED executor, the same one loadScript and the timer
+  // manager use: a Metro boot buffers runtime work until the inspector has
+  // registered the instance, and a barrier posted straight onto JsThread
+  // would overtake the bundle it is supposed to wait for.
+  auto exec = instance_->getBufferedRuntimeExecutor();
+  auto scheduler = instance_->getRuntimeScheduler();
+  // ⛔ THE BARRIER RUNS AT IDLE PRIORITY, NOT THROUGH scheduleWork.
+  // scheduleWork is ImmediatePriority, and RuntimeScheduler orders its own
+  // queue by priority, not arrival: React's render/commit and passive-effect
+  // tasks are NormalPriority, so an Immediate barrier ran AHEAD of them,
+  // found JsThread's queue empty (the scheduler drains its tasks inside ONE
+  // JsThread task) and reported "drained" with nothing committed. Measured
+  // 2026-10-03: drained=1/1, scene_nodes=0, first presented frame 100% black.
+  // So the buffered executor only gets us past the bundle; from there the
+  // barrier is re-posted at IdlePriority, which runs after every pending
+  // higher-priority task, i.e. after React has committed. The empty-queue
+  // check then runs ON the JS thread so no timer fires between barrier and
+  // check. A timer firing between passes queues at most one render before
+  // the next barrier, so a live rAF loop converges in a few passes instead of
+  // never (which is what waitForJsIdle does with one).
+  while (std::chrono::steady_clock::now() < deadline) {
+    auto done = std::make_shared<std::promise<bool>>();
+    auto fut = done->get_future();
+    exec([done, scheduler, jt = jsThread_](jsi::Runtime&) {
+      if (!scheduler) {
+        done->set_value(jt->pendingTasks() == 0);
+        return;
+      }
+      scheduler->scheduleTask(
+          react::SchedulerPriority::IdlePriority,
+          react::RawCallback([done, jt](jsi::Runtime&) {
+            done->set_value(jt->pendingTasks() == 0);
+          }));
+    });
+    if (fut.wait_until(deadline) != std::future_status::ready) return false;
+    if (fut.get()) return true;
+  }
+  return false;
 }
 
 }  // namespace rni

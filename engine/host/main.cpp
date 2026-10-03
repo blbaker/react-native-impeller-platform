@@ -74,6 +74,15 @@
 // right after init and BEFORE anything measures (see text/FontRegistry.h).
 static std::vector<std::string> gFontDirs;
 
+// Process-start clock for the first_present_ms line. Static init runs before
+// main(), so this is as close to "launch" as the process can see.
+static const auto gProcessStart = std::chrono::steady_clock::now();
+static int SinceLaunchMs() {
+  return (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now() - gProcessStart)
+      .count();
+}
+
 namespace {
 
 #ifdef _WIN32
@@ -457,14 +466,28 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // Called on the JS thread; the re-exec replaces the whole process.
   host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
   host.runScript(std::move(bundle), sourceUrl);
-  host.waitForJsIdle(10000);
+  // ⛔ WINDOWED BOOT DRAINS THE JS QUEUE, IT DOES NOT WAIT FOR JS IDLE.
+  // waitForJsIdle counts every pending one-shot timer, and RN core's
+  // requestAnimationFrame is setTimeout(0). An app that starts a launch
+  // animation in its first effect is never "idle" until the animation ends,
+  // so the frame loop below did not start, and nothing was presented, until
+  // then: on the Mac the first frame was HostApp's Home screen ~1.5 s after JS
+  // started and the boot mark was never seen (D-156). The drain still waits
+  // for the bundle, runApplication and the first commit, so frame 0 is the
+  // app's first committed tree, not a blank window. The headless path keeps
+  // waitForJsIdle: its frames are deterministic snapshots, not a live clock.
+  const int bootWaitStart = SinceLaunchMs();
+  const bool bundleDrained = host.waitForJsQueueDrained(10000);
   // parity item 14: a bundle from Metro starts HMR (Fast Refresh).
   host.devServerSetup(sourceUrl);
   host.connectInspector(sourceUrl, appName);  // parity item 24
   // startSurface takes DEVICE PIXELS and divides by pointScale itself
   // (FabricHost.cpp:279) — so it gets the framebuffer size, not the request.
   fabric.startSurface(appName, 1, (float)pxWidth, (float)pxHeight, pointScale);
-  host.waitForJsIdle(10000);
+  const bool surfaceDrained = host.waitForJsQueueDrained(10000);
+  printf("rn-impeller: boot_wait_ms=%d drained=%d/%d\n",
+         SinceLaunchMs() - bootWaitStart, bundleDrained ? 1 : 0,
+         surfaceDrained ? 1 : 0);
 
   printf("rn-impeller: scene_nodes=%zu\n", sceneGraph.nodeCount());
   printf("rn-impeller: supersample_rnsvg=%d\n", sceneGraph.supersample());
@@ -519,6 +542,18 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // precisely the mark-only trap this fix exists to avoid, and exactly what
     // the M2 mutant in tools/mutation-verify-resize.sh does.
     ++paintsTotal;
+    // ⛔ firstFramePresented: THE APP'S "YOU ARE ON SCREEN NOW" SIGNAL.
+    // Emitted once, after the first present returns, so a launch animation
+    // can start its clock from the moment pixels reach the window instead of
+    // from JS start. DeviceEventEmitter.addListener('firstFramePresented').
+    // Payload sinceLaunchMs = process start -> this present (wall ms).
+    if (paintsTotal == 1) {
+      const int ms = SinceLaunchMs();
+      printf("rn-impeller: first_present_ms=%d\n", ms);
+      fflush(stdout);
+      folly::dynamic payload = folly::dynamic::object("sinceLaunchMs", ms);
+      host.deviceEvents()->emit("firstFramePresented", payload);
+    }
     return painted;
   };
 

@@ -178,6 +178,11 @@ bool JsThread::isIdle() {
   return true;
 }
 
+size_t JsThread::pendingTasks() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return queue_.size();
+}
+
 std::string JsThread::debugStats() {
   std::lock_guard<std::mutex> lock(mutex_);
   // Pending timers with their period and repeat flag (diagnostic only).
