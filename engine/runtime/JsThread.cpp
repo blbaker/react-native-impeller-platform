@@ -168,6 +168,11 @@ bool JsThread::isIdle() {
   return queue_.empty() && timers_.empty() && !busy_;
 }
 
+size_t JsThread::pendingTasks() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return queue_.size();
+}
+
 std::string JsThread::debugStats() {
   std::lock_guard<std::mutex> lock(mutex_);
   char buf[256];

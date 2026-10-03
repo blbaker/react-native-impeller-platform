@@ -177,8 +177,16 @@ if [ -n "${DISPLAY:-}" ]; then
   # with the fix deleted; see the header of ci-resize.sh.
   echo "### gate 16b: window repaints while the frame loop is BLOCKED (resize)"
   bash tools/ci-resize.sh | grep -E "RESIZE_GATE_PASS|OK:"
+
+  # ⛔ NOT covered by gate 15. ci-window captures a static fixture, so it
+  # passes whether the first present lands at 100 ms or after a 1.5 s launch
+  # animation has already finished. This one reads the FIRST presented frame
+  # of an app whose first effect starts a boot clock and asserts it shows the
+  # boot screen. Mutants: tools/mutation-verify-first-present.sh.
+  echo "### gate 16c: first present lands inside a launch animation"
+  bash tools/ci-first-present.sh | grep -E "FIRST_PRESENT_GATE_PASS|OK:"
 else
-  echo "### gates 15-16b: SKIPPED (no DISPLAY; windowed gates need an X server)"
+  echo "### gates 15-16c: SKIPPED (no DISPLAY; windowed gates need an X server)"
 fi
 
 # Headless, so it always runs. Matched TRIPLE: solid paints, fillOpacity=0
