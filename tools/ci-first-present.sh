@@ -8,11 +8,11 @@
 #      mark), not HOME (blue) and not a blank/black window. Read from the
 #      pixels captured before that present, not from a log line. Checked
 #      before the timing so a regression names what the user would SEE.
-#   3. The first frame reached the window inside the boot clock
-#      (first_present_ms < BOOT_MS). The old boot waited for every pending
-#      one-shot timer, so the first present landed AFTER the clock.
-#   4. The host's firstFramePresented event reached the JS listener exactly
+#   3. The host's firstFramePresented event reached the JS listener exactly
 #      once (FP_FIRST_FRAME, one DEVEVENT emit).
+#   4. The first frame reached the window inside the boot clock, measured on
+#      the JS clock (FP_FIRST_FRAME js_ms < BOOT_MS). The old boot waited for
+#      every pending one-shot timer, so the first present landed AFTER it.
 #
 # Node-free on purpose: the Mac has no JS toolchain, so the bundle is
 # committed and pixels are read with od. Engine binary: RNI_BIN wins (the
@@ -114,23 +114,32 @@ esac
 [ "$MARK" = 00ff00 ] || fail "BOOT background but no green mark on row 70: the first frame is not the app's first committed tree"
 echo "   OK: BOOT screen with the mark"
 
-echo "== 4. first present inside the boot clock =="
-FP_MS="$(sed -n 's/^rn-impeller: first_present_ms=\([0-9]*\)$/\1/p' "$LOG")"
-[ -n "$FP_MS" ] || fail "no first_present_ms line: nothing was presented"
-[ "$FP_MS" -lt "$BOOT_MS" ] \
-  || fail "first present at ${FP_MS} ms, not before the ${BOOT_MS} ms boot clock ends: a launch animation would be invisible"
-echo "   OK: first_present_ms=$FP_MS < $BOOT_MS"
-
-echo "== 5. firstFramePresented reached JS exactly once =="
+echo "== 4. firstFramePresented reached JS exactly once =="
 N_EMIT="$(grep -c 'DEVEVENT: firstFramePresented' "$LOG" || true)"
 N_JS="$(grep -c 'FP_FIRST_FRAME' "$LOG" || true)"
 [ "$N_EMIT" -eq 1 ] || fail "firstFramePresented emitted $N_EMIT times (expected 1)"
 [ "$N_JS" -eq 1 ] || fail "JS listener saw firstFramePresented $N_JS times (expected 1)"
 echo "   OK"
 
+echo "== 5. first present lands inside the boot clock (JS clock) =="
+# ⛔ MEASURED ON THE JS CLOCK, NOT FROM PROCESS START. The boot clock starts
+# at JS start, so "inside the animation" means first present - JS start <
+# BOOT_MS. first_present_ms counts from process start and also includes
+# window/GL/Hermes init BEFORE JS; on darwin that pre-JS part was ~3.4 s on
+# 2 of 4 launches (2026-10-03) while the frame itself was still BOOT at +7 pt.
+# Gating on it failed a correct engine for a cost this fix does not touch.
+# js_ms = when the listener ran, so it is an upper bound on the present.
+FP_MS="$(sed -n 's/^rn-impeller: first_present_ms=\([0-9]*\)$/\1/p' "$LOG")"
+[ -n "$FP_MS" ] || fail "no first_present_ms line: nothing was presented"
+JS_MS="$(sed -n 's/.*FP_FIRST_FRAME js_ms=\([0-9]*\).*/\1/p' "$LOG" | head -1)"
+[ -n "$JS_MS" ] || fail "no FP_FIRST_FRAME js_ms= line"
+[ "$JS_MS" -lt "$BOOT_MS" ] \
+  || fail "first present reached JS ${JS_MS} ms after JS start, not inside the ${BOOT_MS} ms boot clock: a launch animation would be invisible"
+echo "   OK: first frame heard ${JS_MS} ms after JS start (< $BOOT_MS); process start -> present ${FP_MS} ms"
+
 echo "== 6. no orphan window process =="
 sleep 1
 if rni_have_own; then rni_kill_own; fail "rn-impeller still running after the bounded run"; fi
 echo "   OK"
 
-echo "FIRST_PRESENT_GATE_PASS (first_present_ms=$FP_MS bg=$BG mark_x=$MARK_X)"
+echo "FIRST_PRESENT_GATE_PASS (js_ms=$JS_MS first_present_ms=$FP_MS bg=$BG mark_x=$MARK_X)"
