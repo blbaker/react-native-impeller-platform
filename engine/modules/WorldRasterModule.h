@@ -42,6 +42,8 @@ class WorldRasterModule : public react::TurboModule {
     // ONCE; drawSprites (per frame) only references entries by textureId.
     methodMap_["registerSprite"] = MethodMetadata{4, registerSpriteHost};
     methodMap_["drawSprites"] = MethodMetadata{2, drawSpritesHost};
+    // ENG-21. Per-<world> sampler: 'nearest' or 'linear'.
+    methodMap_["setSampling"] = MethodMetadata{2, setSamplingHost};
   }
 
  private:
@@ -214,6 +216,30 @@ class WorldRasterModule : public react::TurboModule {
       sprites.push_back(std::move(s));
     }
     me.store_->setSprites(id, std::move(sprites));
+    return jsi::Value::undefined();
+  }
+
+  // ENG-21. Args: (id: string, mode: 'nearest' | 'linear')
+  // Sets how the <world name=id> samples its setPixels terrain and every
+  // sprite drawn on it. Any other mode THROWS: a typo ('nearst') silently
+  // falling back to linear is the blurry-art bug this exists to fix.
+  static jsi::Value setSamplingHost(jsi::Runtime& rt, react::TurboModule& tm,
+                                    const jsi::Value* args, size_t count) {
+    if (count < 2 || !args[0].isString() || !args[1].isString()) {
+      throw jsi::JSError(
+          rt, "WorldRaster.setSampling: expected (string id, string mode)");
+    }
+    auto& me = self(tm);
+    const auto id = args[0].asString(rt).utf8(rt);
+    const auto mode = args[1].asString(rt).utf8(rt);
+    bool nearest = false;
+    if (mode == "nearest") {
+      nearest = true;
+    } else if (mode != "linear") {
+      throw jsi::JSError(rt, "WorldRaster.setSampling: mode must be "
+                             "'nearest' or 'linear', got '" + mode + "'");
+    }
+    me.store_->setSampling(id, nearest);
     return jsi::Value::undefined();
   }
 

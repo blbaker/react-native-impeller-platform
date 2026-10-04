@@ -669,6 +669,9 @@ class SceneGraph {
   bool paintWorldSprites(ImpellerDisplayListBuilder builder,
                          const SceneNode& node, float x, float y, float w,
                          float h);
+  // <world> ENG-21. Nearest when JS set WorldRaster.setSampling(name,
+  // 'nearest'), else linear. Shared by terrain and sprites.
+  ImpellerTextureSampling worldSampling(const SceneNode& node) const;
   // Content key for the per-icon texture cache: every input that changes the
   // rasterised pixels. Two icons with the same key reuse one ImpellerTexture.
   std::string svgSubtreeCacheKey(const SceneNode& node, int pxW, int pxH) const;

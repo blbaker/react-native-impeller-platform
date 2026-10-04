@@ -113,6 +113,24 @@ class WorldRasterStore {
     fireDamage();
   }
 
+  // ENG-21. Per-<world> texture sampling: true = nearest-neighbour for the
+  // setPixels terrain AND every sprite drawn on that world. Default (never
+  // set) is linear, the pre-ENG-21 behaviour. Pixel art at an integer scale
+  // needs nearest, or every art-pixel edge blends over ~1 screen px.
+  void setSampling(const std::string& id, bool nearest) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      nearest_[id] = nearest;
+    }
+    fireDamage();
+  }
+
+  bool isNearest(const std::string& id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = nearest_.find(id);
+    return it != nearest_.end() && it->second;
+  }
+
   std::shared_ptr<const WorldRasterEntry> getSprite(
       const std::string& textureId) const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -166,6 +184,7 @@ class WorldRasterStore {
       atlas_;
   std::unordered_map<std::string, std::shared_ptr<const WorldSpriteList>>
       spriteLists_;
+  std::unordered_map<std::string, bool> nearest_;  // ENG-21
   // P12-01/ENG-09 damage wake. Separate mutex from mutex_ so setPixels, which
   // fires the hook, and setDamageHook cannot deadlock or invert lock order.
   mutable std::mutex hookMutex_;

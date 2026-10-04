@@ -260,6 +260,12 @@ bash tools/ci-canvas.sh | grep -E "CANVAS_GATE_PASS|blit site differs|CANVAS_BEN
 echo "### gate 24b: <Text> lineHeight reaches measure AND paint (ENG-23)"
 bash tools/ci-line-height.sh | grep -E "LINE_HEIGHT_GATE_PASS|OK [A-D]:"
 
+# Headless, prebuilt bundle. A <world> set to setSampling 'nearest' must keep
+# terrain AND sprite texels hard (CPU nearest composite), and a world left at
+# the default must stay linear. Mutants: mutation-verify-world-nearest.sh.
+echo "### gate 24c: <world> nearest-neighbour sampling (ENG-21)"
+bash tools/ci-world-nearest.sh | grep -E "WORLD_NEAREST_GATE_PASS|OK [A-D]"
+
 # ⛔ THE NETWORKING GATE EXISTED FOR A DAY AND WAS NEVER IN THIS FILE.
 # tools/ci-p10.sh was written with the Networking TurboModule (c4e59e1) and TLS
 # (a932ded) and is only referenced by tools/mutation-verify-p10.sh — so the ONLY

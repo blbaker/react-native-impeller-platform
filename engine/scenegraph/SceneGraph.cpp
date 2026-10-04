@@ -1960,6 +1960,17 @@ ImpellerTexture SceneGraph::halveTexture(ImpellerTexture src, int srcW,
 // glTexImage2D/glTexSubImage2D copy it into GPU memory synchronously before
 // this function returns, so there is no lifetime hazard even though `entry`
 // drops out of scope right after.
+// ENG-21. The sampler a <world> draws its terrain and sprites with. Linear
+// unless JS called WorldRaster.setSampling(name, 'nearest'): pixel art at an
+// integer scale must not blend neighbouring texels (ROOM-1 measured 12.7% of
+// room pixels holding blend colours under linear).
+ImpellerTextureSampling SceneGraph::worldSampling(const SceneNode& node) const {
+  return worldRasterStore_ != nullptr &&
+                 worldRasterStore_->isNearest(node.worldRasterName)
+             ? kImpellerTextureSamplingNearestNeighbor
+             : kImpellerTextureSamplingLinear;
+}
+
 bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
                                 const SceneNode& node, float x, float y,
                                 float w, float h) {
@@ -2063,7 +2074,7 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
   ImpellerDisplayListBuilderTranslate(builder, x, y);
   ImpellerDisplayListBuilderDrawTextureRect(builder, cacheEntry.texture,
                                             &srcRect, &dstRect,
-                                            kImpellerTextureSamplingLinear,
+                                            worldSampling(node),  // ENG-21
                                             nullptr);
   ImpellerDisplayListBuilderRestore(builder);
   // ⛔ DO NOT RELEASE cacheEntry.texture HERE. It is cached across frames in
@@ -2155,6 +2166,8 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
     return out;
   };
 
+  // ENG-21: one sampler for every sprite on this world, resolved once.
+  const ImpellerTextureSampling sampling = worldSampling(node);
   ImpellerDisplayListBuilderSave(builder);
   ImpellerDisplayListBuilderTranslate(builder, x, y);
   // Sprites are positioned in the <world> node's own coordinate space; one
@@ -2177,9 +2190,7 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
       ImpellerPaintSetColor(alphaPaint, &c);
     }
     ImpellerDisplayListBuilderDrawTextureRect(builder, tex->texture, &srcRect,
-                                              &dstRect,
-                                              kImpellerTextureSamplingLinear,
-                                              alphaPaint);
+                                              &dstRect, sampling, alphaPaint);
     if (alphaPaint) ImpellerPaintRelease(alphaPaint);
     ++spritesDrawn_;
   }

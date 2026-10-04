@@ -52,9 +52,24 @@ function drawSprites(id, sprites) {
   mod().drawSprites(id, sprites);
 }
 
+// ENG-21 — setSampling(id, mode): how <world name=id> samples its setPixels
+// terrain and every sprite drawn on it. mode 'nearest' keeps pixel-art edges
+// hard at an integer scale; 'linear' (the default) blends neighbouring texels.
+// Throws on any other mode. Engines built before ENG-21 lack the method; call
+// isSamplingSupported() first if the app must run on them.
+function setSampling(id, mode) {
+  mod().setSampling(id, mode);
+}
+
+function isSamplingSupported() {
+  return Native != null && typeof Native.setSampling === 'function';
+}
+
 module.exports = {
   isSupported,
+  isSamplingSupported,
   setPixels,
   registerSprite,
   drawSprites,
+  setSampling,
 };
