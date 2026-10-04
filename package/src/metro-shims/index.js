@@ -224,6 +224,10 @@ const FEATURE_FLAGS_SUFFIX =
   'react-native/src/private/featureflags/ReactNativeFeatureFlags.js';
 const FEATURE_FLAGS_SHIM = 'ReactNativeFeatureFlags.impeller.js';
 
+// ENG-19. See resolveRequest and shims/reanimated.impeller.js.
+const REANIMATED = 'react-native-reanimated';
+const REANIMATED_SHIM = 'reanimated.impeller.js';
+
 function withImpeller(config = {}) {
   const resolver = config.resolver || {};
   const existingPlatforms = resolver.platforms || ['ios', 'android', 'native'];
@@ -240,6 +244,19 @@ function withImpeller(config = {}) {
   }
 
   function resolveRequest(context, moduleName, platform) {
+    // ENG-19. react-native-reanimated: the engine vends no Reanimated/Worklets
+    // native module, and an app that does not install the package cannot even
+    // bundle (react-native-css requires it from native/reanimated.js). When
+    // the app has NOT installed it, resolve to the package's inert stub
+    // (shims/reanimated.impeller.js). An app that installs the real package
+    // keeps it: that is a deliberate choice, and hiding it would be a lie.
+    if (platform === 'impeller' && moduleName === REANIMATED) {
+      try {
+        return baseResolve(context, moduleName, platform);
+      } catch (error) {
+        return {type: 'sourceFile', filePath: path.join(SHIM_DIR, REANIMATED_SHIM)};
+      }
+    }
     let resolution;
     try {
       resolution = baseResolve(context, moduleName, platform);
