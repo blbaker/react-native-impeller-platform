@@ -254,6 +254,12 @@ bash tools/ci-usesym.sh | grep -E "USESYM_GATE_PASS|control=|scaled_"
 echo "### gate 24: canvas draw path -- offscreen atlas, blit, rect volume"
 bash tools/ci-canvas.sh | grep -E "CANVAS_GATE_PASS|blit site differs|CANVAS_BENCH steady|CANVAS_BENCH burst"
 
+# Headless, prebuilt bundle (no npm). lineHeight must drive BOTH the measured
+# box (TextLayoutManager) and the painted line pitch (SceneGraph): fixing only
+# one half lets ink overflow its box. Mutants: mutation-verify-line-height.sh.
+echo "### gate 24b: <Text> lineHeight reaches measure AND paint (ENG-23)"
+bash tools/ci-line-height.sh | grep -E "LINE_HEIGHT_GATE_PASS|OK [A-D]:"
+
 # ⛔ THE NETWORKING GATE EXISTED FOR A DAY AND WAS NEVER IN THIS FILE.
 # tools/ci-p10.sh was written with the Networking TurboModule (c4e59e1) and TLS
 # (a932ded) and is only referenced by tools/mutation-verify-p10.sh — so the ONLY

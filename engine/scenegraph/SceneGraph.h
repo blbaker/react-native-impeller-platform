@@ -127,6 +127,10 @@ struct SceneNode {
   // Painting without it measured the box in one face and drew the glyphs in
   // the fallback, so a mono label overflowed or collided with its neighbour.
   std::string fontFamily;
+  // ENG-23: TextAttributes::lineHeight in points (0 = unset). Applied at paint
+  // with the SAME setter measure uses (text/LineHeight.h), so the box height
+  // and the painted line pitch agree.
+  float lineHeight{0.0f};
   float textColor[4]{0, 0, 0, 1};
   // numberOfLines. Must be applied at PAINT time as well as measure time, or a
   // clamped label measures one line and paints three.

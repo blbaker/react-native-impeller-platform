@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "text/LineHeight.h"
 #include "text/TextTransform.h"
 
 namespace rni {
@@ -56,6 +57,8 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
     if (!attrs.fontFamily.empty()) {
       ImpellerParagraphStyleSetFontFamily(style, attrs.fontFamily.c_str());
     }
+    // ENG-23: the same setter SceneGraph paints with (text/LineHeight.h).
+    ApplyLineHeight(style, (float)attrs.lineHeight, fontSize);
     if (paragraphAttributes.maximumNumberOfLines > 0) {
       ImpellerParagraphStyleSetMaxLines(
           style, (uint32_t)paragraphAttributes.maximumNumberOfLines);

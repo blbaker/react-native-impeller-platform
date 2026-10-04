@@ -14,6 +14,7 @@
 #include "svg/SvgPath.h"
 #endif
 
+#include "text/LineHeight.h"
 #include "text/TextTransform.h"
 
 // ENG item 2 — supersample offscreen render. Direct GL entry points link on
@@ -462,6 +463,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     node.isParagraph = true;
     node.text.clear();
     node.fontFamily.clear();
+    node.lineHeight = 0.0f;
     node.maxLines = 0;
     node.ellipsizeMode = 0;
     node.textTransform = 0;
@@ -495,6 +497,10 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
         // families inside one paragraph are per-fragment spans (parity 16).
         if (!fragment.textAttributes.fontFamily.empty()) {
           node.fontFamily = fragment.textAttributes.fontFamily;
+        }
+        // ENG-23: same last-fragment-wins rule; NaN (unset) is skipped.
+        if (fragment.textAttributes.lineHeight > 0) {
+          node.lineHeight = (float)fragment.textAttributes.lineHeight;
         }
         if (fragment.textAttributes.foregroundColor) {
           colorToFloats(fragment.textAttributes.foregroundColor, node.textColor);
@@ -1445,6 +1451,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
     ImpellerParagraphStyleSetFontSize(style, node.fontSize);
     ApplyFontFamily(style, node.fontFamily);  // ENG-22
+    ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23
     if (node.maxLines > 0) {
       // Painting must honour the same clamp measurement did, or a
       // numberOfLines={1} label is measured at one line and painted at three,
