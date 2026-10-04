@@ -170,6 +170,52 @@ def cast_shadow(c, f, d):
     return br > 2 * tl and outside_levels(f) > 5 and at(f, 60, 60) == (0, 0, 255)
 
 
+def blobs(px, dark=600):
+    """Connected dark-ink components: [(x0, y0, x1, y1, n)], left to right."""
+    pts = {k for k, v in px.items() if ink(v) and sum(v) < dark}
+    seen, out = set(), []
+    for p in sorted(pts):
+        if p in seen:
+            continue
+        stack, comp = [p], []
+        seen.add(p)
+        while stack:
+            q = stack.pop()
+            comp.append(q)
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    r = (q[0] + dx, q[1] + dy)
+                    if r in pts and r not in seen:
+                        seen.add(r)
+                        stack.append(r)
+        xs = [a for a, _ in comp]
+        ys = [b for _, b in comp]
+        out.append((min(xs), min(ys), max(xs), max(ys), len(comp)))
+    return sorted(out)
+
+
+def bullets(c, f, d):
+    """secureTextEntry 'abc': exactly three dots, alike in size, on one band,
+    each about as wide as tall, and none as tall as the control's 'b'.
+    A FOCUSED field also paints its caret: one thin full-height bar (at most
+    2 px wide, at least 8 px tall) is dropped before counting, and only when
+    it sits right of every other blob, i.e. after the last bullet."""
+    fb, cb = blobs(f), blobs(c)
+    if fb:
+        last = fb[-1]
+        bar = last[2] - last[0] + 1 <= 2 and last[3] - last[1] + 1 >= 8
+        if bar and all(b[2] < last[0] for b in fb[:-1]):
+            fb = fb[:-1]
+    if len(fb) != 3 or not cb:
+        return False
+    hs = [b[3] - b[1] + 1 for b in fb]
+    ws = [b[2] - b[0] + 1 for b in fb]
+    ctall = max(b[3] - b[1] + 1 for b in cb)
+    same_band = max(b[1] for b in fb) - min(b[1] for b in fb) <= 1
+    round_ = all(abs(w - h) <= 2 for w, h in zip(ws, hs))
+    return same_band and round_ and max(hs) < ctall * 0.6 and max(hs) - min(hs) <= 1
+
+
 # STRICT rules, ANDed with RULES. The Mac's RULES are kept verbatim so its
 # measure.py and this one agree on every PASS it reports; these only add the
 # properties a plausible-but-wrong implementation would miss (a shadow cast the
@@ -181,6 +227,12 @@ STRICT = {
     and at(f, 60, 60) == (0, 0, 255),
     "boxShadowInset": lambda c, f, d: outside(f) == 0 and cls(at(f, 60, 60)) == "blue"
     and cls(at(f, 31, 60)) == "red" and cls(at(f, 45, 60)) == "blue",
+    "textInputSecure": bullets,
+    # The rounded clip must cut the corner AND keep the child's full width
+    # through the middle (a clip that drops the child entirely also leaves the
+    # corner white).
+    "overflowRounded": lambda c, f, d: cls(at(f, 60, 60)) == "red"
+    and cls(at(f, 31, 60)) == "red" and 2700 < stats(f)["n"] < 3000,
 }
 
 

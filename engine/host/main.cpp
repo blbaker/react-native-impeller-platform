@@ -1485,7 +1485,8 @@ int main(int argc, char** argv) {
   // SAME FabricHost::focusTextInputAt / dispatchKey path the GLFW callbacks use,
   // so the whole editing loop (focus -> keystroke -> buffer -> onChange) is
   // gate-provable with no window. SEQ is literal ASCII plus the escapes <BS>
-  // (backspace) and <CR> (submit/Enter). Exists for exactly the reason --tap
+  // (backspace), <CR> (submit/Enter), and <SA>/<COPY>/<CUT> (select all,
+  // copy, cut; style audit item 11). Exists for exactly the reason --tap
   // does: the geometry and event wiring are platform-independent and gating them
   // on a working macOS window would leave the input tier unverified on Linux.
   std::string typeSpec;
@@ -2499,6 +2500,17 @@ int main(int argc, char** argv) {
         } else if (seq.compare(i, 4, "<CR>") == 0) {
           fabric.dispatchKey(rni::FabricHost::KeyAction::Submit, 0);
           i += 4;
+        } else if (seq.compare(i, 4, "<SA>") == 0) {
+          // Style audit item 11 gate: select all, then <COPY>/<CUT>, so a
+          // headless run can prove a secure field refuses the clipboard.
+          fabric.dispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
+          i += 4;
+        } else if (seq.compare(i, 6, "<COPY>") == 0) {
+          fabric.dispatchKey(rni::FabricHost::KeyAction::Copy, 0);
+          i += 6;
+        } else if (seq.compare(i, 5, "<CUT>") == 0) {
+          fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
+          i += 5;
         } else {
           fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar,
                              (unsigned char)seq[i]);

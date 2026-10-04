@@ -10,15 +10,22 @@
 #   M5  inset shadow not clipped to the padding box   -> boxShadowInset
 #   M6  inset entries skipped                         -> boxShadowInset
 #   M7  `elevation` not parsed by our ViewProps       -> elevation
+#   M8  secure value painted in clear                 -> textInputSecure
+#   M9  secureTextEntry never read from props         -> textInputSecure
+#   M10 secure Copy/Cut not refused                   -> clipboard (arm C)
+#   M11 rounded box clips its square frame            -> overflowRounded
 # Not covered (the fixture cannot see it, so it is not claimed): boxShadow's
-# clip-out of the border box, which only shows under a translucent background.
+# clip-out of the border box, which only shows under a translucent background;
+# the secure caret/selection offsets mapped through the mask (the caret stays
+# right of the bullets either way).
 # Sources are restored on exit, whatever happens.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SG=engine/scenegraph/SceneGraph.cpp
 SH=engine/scenegraph/Shadows.cpp
 HP=engine/fabric/platform/impeller/react/renderer/components/view/HostPlatformViewProps.cpp
-FILES=("$SG" "$SH" "$HP")
+FH=engine/fabric/FabricHost.cpp
+FILES=("$SG" "$SH" "$HP" "$FH")
 BAK="$(mktemp -d)"
 for f in "${FILES[@]}"; do mkdir -p "$BAK/$(dirname "$f")"; cp "$f" "$BAK/$f"; done
 put_back() { for f in "${FILES[@]}"; do cp "$BAK/$f" "$f"; done; }
@@ -97,4 +104,22 @@ echo "== M7: elevation not parsed =="
 mutate "$HP" '          "elevation",' '          "elevationX",'
 check M7 elevation
 
-echo "STYLE_MUTATION_PASS (7/7 shadow mutants killed for their own tile)"
+echo "== M8: secure field painted in clear (mask dropped from paint) =="
+mutate "$SG" "const std::string shown = node.tiSecure ? SecureMask(rawShown) : rawShown;" "const std::string shown = rawShown;"
+check M8 textInputSecure
+
+echo "== M9: secureTextEntry never read from props =="
+mutate "$SG" "        node.tiSecure = itp->traits.secureTextEntry;" "        (void)itp;"
+check M9 textInputSecure
+
+echo "== M10: secure field Copy/Cut not refused =="
+mutate "$FH" "      sceneGraph_->isSecureTextInput(tag)) {" "      false) {"
+check M10 clipboard
+
+echo "== M11: overflow hidden clips the SQUARE frame on a rounded box =="
+mutate "$SG" "    if (rounded) {
+      ImpellerDisplayListBuilderClipRoundedRect" "    if (false) {
+      ImpellerDisplayListBuilderClipRoundedRect"
+check M11 overflowRounded
+
+echo "STYLE_MUTATION_PASS (11/11 mutants killed for their own tile: shadows 1-4, secure 11, rounded clip 13)"

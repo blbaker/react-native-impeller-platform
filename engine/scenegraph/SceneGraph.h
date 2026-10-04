@@ -173,6 +173,9 @@ struct SceneNode {
   // 0 Auto, 1 Top, 2 Bottom, 3 Center). Auto = top for multiline (UITextView)
   // and centre for single-line (UITextField), measured from contentInsets.
   bool tiMultiline{false};
+  // Style audit item 11: TextInputTraits::secureTextEntry. Painted as bullets
+  // (text/SecureText.h); Copy/Cut refused by FabricHost.
+  bool tiSecure{false};
   int tiAlignVertical{0};
   float tiPlaceholderColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
   // item 4a: selection highlight fill. Defaults to rgba(51,144,255,0.35) (a
@@ -553,6 +556,8 @@ class SceneGraph {
   // else its controlled tiValue prop. Used by the paint and returned to
   // FabricHost so a click that focuses an already-populated field seeds its
   // edit buffer from the value already on screen.
+  // Style audit item 11: true for a secureTextEntry field (Copy/Cut refused).
+  bool isSecureTextInput(facebook::react::Tag tag);
   std::string textInputValueFor(facebook::react::Tag tag);
   // The caret index within the focused field's edit buffer. Returns 0 when the
   // tag is not the focused field (an unfocused field paints no caret). Exposed

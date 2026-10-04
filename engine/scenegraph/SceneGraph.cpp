@@ -4,6 +4,7 @@
 
 #include <react/renderer/core/ConcreteState.h>
 #include <react/renderer/components/textinput/BaseTextInputProps.h>
+#include <react/renderer/components/iostextinput/TextInputProps.h>
 #include <react/renderer/graphics/BackgroundImage.h>
 #include <react/renderer/graphics/Color.h>
 #include <react/renderer/graphics/LinearGradient.h>
@@ -15,6 +16,7 @@
 #endif
 
 #include "text/LineHeight.h"
+#include "text/SecureText.h"
 #include "text/TextTransform.h"
 
 // ENG item 2 — supersample offscreen render. Direct GL entry points link on
@@ -606,6 +608,12 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.tiValue = tp->text;
       node.tiPlaceholder = tp->placeholder;
       node.tiMultiline = tp->multiline;  // ENG-16
+      // Style audit item 11: secureTextEntry lives on the iOS TextInputProps'
+      // traits, not on BaseTextInputProps.
+      node.tiSecure = false;
+      if (const auto* itp = dynamic_cast<const react::TextInputProps*>(tp)) {
+        node.tiSecure = itp->traits.secureTextEntry;
+      }
       node.tiAlignVertical =
           tp->paragraphAttributes.textAlignVertical.has_value()
               ? (int)*tp->paragraphAttributes.textAlignVertical
@@ -1592,7 +1600,16 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // path as <Text> so metrics match; a single line, no wrapping constraint.
   if (node.isTextInput && typography_ != nullptr) {
     const bool focused = (tiFocused_ == node.tag);
-    const std::string shown = focused ? tiEditValue_ : node.tiValue;
+    const std::string rawShown = focused ? tiEditValue_ : node.tiValue;
+    // Style audit item 11: a secure field paints bullets, never the value.
+    // `shown` is what every measurement below uses, so selection and caret
+    // offsets are taken in the MASKED string (mapped by SecureMaskOffset).
+    const std::string shown = node.tiSecure ? SecureMask(rawShown) : rawShown;
+    const std::string editShown =
+        node.tiSecure ? SecureMask(tiEditValue_) : tiEditValue_;
+    auto toShown = [&](size_t n) -> size_t {
+      return node.tiSecure ? SecureMaskOffset(tiEditValue_, n) : n;
+    };
     const bool showPlaceholder = shown.empty() && !node.tiPlaceholder.empty();
     const std::string& drawStr = showPlaceholder ? node.tiPlaceholder : shown;
     // ENG-16: where the first line sits. Single-line fields centre it (the
@@ -1649,14 +1666,14 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
         // the same prefix-width measurement as the caret, so the highlight
         // edges and the caret positions agree.
         if (focused && !showPlaceholder && tiSelAnchor_ != tiCaret_) {
-          const size_t lo = std::min(tiSelAnchor_, tiCaret_);
-          const size_t hi = std::min(std::max(tiSelAnchor_, tiCaret_),
-                                     tiEditValue_.size());
+          const size_t lo = toShown(std::min(tiSelAnchor_, tiCaret_));
+          const size_t hi = toShown(std::min(std::max(tiSelAnchor_, tiCaret_),
+                                             tiEditValue_.size()));
           auto prefixW = [&](size_t n) -> float {
             if (n == 0) return 0.0f;
             ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(typography_);
             ImpellerParagraphBuilderPushStyle(sb, style);
-            ImpellerParagraphBuilderAddText(sb, (const uint8_t*)tiEditValue_.data(), n);
+            ImpellerParagraphBuilderAddText(sb, (const uint8_t*)editShown.data(), n);
             ImpellerParagraph sp = ImpellerParagraphBuilderBuildParagraphNew(sb, 1e6f);
             float wv = 0.0f;
             if (sp != nullptr) {
@@ -1685,7 +1702,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
         // Placeholder text is not editable, so no caret offset is taken from
         // it.
         if (focused && !showPlaceholder) {
-          const std::string upto = tiEditValue_.substr(0, tiCaret_);
+          const std::string upto = editShown.substr(0, toShown(tiCaret_));
           if (!upto.empty()) {
             ImpellerParagraphBuilder cb = ImpellerParagraphBuilderNew(typography_);
             ImpellerParagraphBuilderPushStyle(cb, style);
@@ -1737,8 +1754,15 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   const bool clip = node.overflowHidden;
   if (clip) {
     ImpellerDisplayListBuilderSave(builder);
-    ImpellerDisplayListBuilderClipRect(builder, &rect,
-                                       kImpellerClipOperationIntersect);
+    // Style audit item 13: a rounded box clips its children to the ROUNDED
+    // outline (iOS masksToBounds + cornerRadius), not to its square frame.
+    if (rounded) {
+      ImpellerDisplayListBuilderClipRoundedRect(builder, &rect, &radii,
+                                                kImpellerClipOperationIntersect);
+    } else {
+      ImpellerDisplayListBuilderClipRect(builder, &rect,
+                                         kImpellerClipOperationIntersect);
+    }
   }
   // <ScrollView>. ENG-02. The offset shifts the CHILD ORIGIN, it does not move
   // this node.
@@ -3149,7 +3173,11 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   const SceneNode& node = it->second;
   float ox = 0.0f, oy = 0.0f;
   if (!absoluteOriginLocked(tag, &ox, &oy)) return false;
-  const std::string shown = (tiFocused_ == tag) ? tiEditValue_ : node.tiValue;
+  const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : node.tiValue;
+  // Style audit item 11: a secure field's glyphs are bullets, so its click
+  // boundaries are measured over the mask. Boundaries are reported in SOURCE
+  // byte offsets (one bullet per source codepoint), which the caret uses.
+  const std::string shown = node.tiSecure ? SecureMask(raw) : raw;
   const float textX = ox + kTextInputPad;
   // Boundary 0 is the text start. Then one boundary after every codepoint
   // (a UTF-8 lead byte is any byte that is not 10xxxxxx).
@@ -3159,11 +3187,12 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   ImpellerParagraphStyleSetFontSize(style, node.fontSize);
   // ENG-22: a click must map through the SAME face the glyphs painted in.
   ApplyFontFamily(style, node.fontFamily);
-  for (size_t i = 1; i <= shown.size(); ++i) {
-    if (i < shown.size() && (((unsigned char)shown[i]) & 0xC0) == 0x80) continue;
+  for (size_t i = 1; i <= raw.size(); ++i) {
+    if (i < raw.size() && (((unsigned char)raw[i]) & 0xC0) == 0x80) continue;
+    const size_t mi = node.tiSecure ? SecureMaskOffset(raw, i) : i;
     ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
     ImpellerParagraphBuilderPushStyle(pb, style);
-    ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shown.data(), i);
+    ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shown.data(), mi);
     ImpellerParagraph par = ImpellerParagraphBuilderBuildParagraphNew(pb, 1e6f);
     float wpx = 0.0f;
     if (par != nullptr) {
@@ -3211,6 +3240,12 @@ std::string SceneGraph::glyphBoundaryReportFor(facebook::react::Tag tag) {
     out += buf;
   }
   return out;
+}
+
+bool SceneGraph::isSecureTextInput(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  return it != nodes_.end() && it->second.tiSecure;
 }
 
 std::string SceneGraph::textInputValueFor(facebook::react::Tag tag) {

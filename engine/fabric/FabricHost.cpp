@@ -1425,7 +1425,15 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
   // InsertChar/Backspace/DeleteForward selection-erase above but writes the
   // clipboard FIRST, and Paste's inserted text is multiple bytes decided at
   // dispatch time (the clipboard content), not a single decoded codepoint.
-  if (action == KeyAction::Copy || action == KeyAction::Cut) {
+  if ((action == KeyAction::Copy || action == KeyAction::Cut) &&
+      sceneGraph_->isSecureTextInput(tag)) {
+    // Style audit item 11: a secureTextEntry field never puts its value on
+    // the clipboard (UITextField and NSSecureTextField both refuse Copy and
+    // Cut). The shortcut is consumed so it does nothing else either.
+    printf("rn-impeller: clipboard op=refused-secure\n");
+    fflush(stdout);
+    consumed = true;
+  } else if (action == KeyAction::Copy || action == KeyAction::Cut) {
     // Empty selection: no clipboard write, no buffer change, full stop. A
     // Cmd/Ctrl+C with the caret merely sitting somewhere (no selection) must
     // leave whatever was already on the clipboard untouched -- the Copy

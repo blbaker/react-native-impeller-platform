@@ -8,6 +8,8 @@
 #   A. LANDED: every tile named in LANDED below must PASS. Each entry is one
 #      audit item; the list grows as items land. On the binary the audit
 #      measured (Mac f5fc6e1, sha 02cf8ea7) every one of them FAILS.
+#      lineHeight (12) and textInputMultiline (16) landed as ENG-23 / ENG-16
+#      on feat/eng-overnight and are judged here too.
 #   B. KEEP-GREEN: every tile in KEEP below (the features the audit found
 #      working: transforms, radii, per-side borders, rect clip, linear
 #      gradient, zIndex, layout, textTransform, numberOfLines,
@@ -28,6 +30,8 @@ SS="${RNI_SUPERSAMPLE:-0}"
 # Audit items landed so far, as "<tile-id>:<item>".
 LANDED=(
   shadowIOS:1 boxShadow:2 boxShadowInset:3 elevation:4
+  textInputSecure:11 overflowRounded:13
+  lineHeight:12 textInputMultiline:16
 )
 # Features the audit measured working on 02cf8ea7; must stay PASS.
 # (aspectRatio and nestedTextSize are font/bundle sensitive across the Mac and
@@ -97,4 +101,36 @@ echo "   ${#KEEP[@]} keep-green tiles PASS"
 echo "== open audit items (reported, not judged) =="
 awk '$1=="TILE" && $4!="PASS" {printf "   %s %s %s\n", $2, $3, $4}' "$WORK/tiles.txt"
 grep TILES_FAILING "$WORK/tiles.txt" | sed 's/^/   /'
+
+# C. secureTextEntry (item 11) beyond pixels: a FOCUSED secure field still
+# paints bullets (the edit-buffer paint path, not the unfocused one), and
+# select-all + copy/cut never reach the clipboard. The plain control field in
+# the same tile proves the instrument: it MUST copy, or "refused" means nothing.
+# Tile 64 sits at cell (720,1800): control field centre (790,1865), secure
+# field centre (910,1865).
+echo "== C. secure field: focused paint + clipboard refused =="
+crun() {  # name, --type spec
+  set +e
+  ( cd "$(dirname "$BIN")" && "$BIN" --bundle "$BUNDLE" --app-name probe --headless \
+      --probe-banner off --width 1200 --height 2100 --initial-url probe://grid \
+      --supersample-rnsvg "$SS" --type "$2" --screenshot "$WORK/$1.ppm" ) > "$WORK/$1.log" 2>&1
+  local rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { tail -10 "$WORK/$1.log" >&2; fail "C: $1 run exited $rc"; }
+}
+crun plain '790,1865:<SA><COPY>'
+grep -q 'clipboard op=copy bytes=3' "$WORK/plain.log" \
+  || fail "C: the PLAIN control field did not copy ($(grep -m1 'clipboard op' "$WORK/plain.log")): the refusal check below would be vacuous"
+crun secure '910,1865:<SA><COPY><CUT>'
+grep -q 'type_focus=[1-9]' "$WORK/secure.log" || fail "C: the secure field did not take focus"
+n_ref="$(grep -c 'clipboard op=refused-secure' "$WORK/secure.log" || true)"
+n_leak="$(grep -cE 'clipboard op=(copy|cut)' "$WORK/secure.log" || true)"
+echo "   control copied 3 bytes; secure field: refused=$n_ref leaked=$n_leak"
+[ "$n_leak" -eq 0 ] || fail "C: secure field put its value on the clipboard ($n_leak copy/cut ops)"
+[ "$n_ref" -eq 2 ] || fail "C: secure field refusal count $n_ref, want 2 (copy + cut)"
+python3 "$ROOT/tools/style-audit-measure.py" "$WORK/secure.ppm" "$ROOT/fixtures/style-audit/index.js" > "$WORK/secure-tiles.txt"
+v="$(awk '$1=="TILE" && $3=="textInputSecure" {print $4}' "$WORK/secure-tiles.txt")"
+[ "$v" = PASS ] || fail "C: FOCUSED secure field does not paint bullets ($(awk '$1=="TILE" && $3=="textInputSecure"' "$WORK/secure-tiles.txt" | cut -c1-120))"
+echo "   focused secure field paints 3 bullets"
+
 echo "STYLE_AUDIT_GATE_PASS landed=${#LANDED[@]} keep=${#KEEP[@]}"
