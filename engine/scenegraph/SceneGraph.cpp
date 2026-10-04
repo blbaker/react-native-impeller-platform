@@ -42,6 +42,20 @@ namespace {
 // 3). One constant so the two cannot drift.
 constexpr float kTextInputPad = 4.0f;
 
+// ENG-16: y of a TextInput's first line. alignV is react::TextAlignmentVertical
+// (0 Auto, 1 Top, 2 Bottom, 3 Center). Auto resolves to Top for a multiline
+// field (iOS UITextView, and what Gluestack's Textarea expects) and Center for
+// a single-line one (UITextField). Top/Bottom sit inside the content insets
+// (padding + border), the box RN lays the text out in.
+float TextInputLineTop(float y, float h, float blockH, float insetTop,
+                       float insetBottom, bool multiline, int alignV) {
+  int mode = alignV;
+  if (mode == 0) mode = multiline ? 1 : 3;
+  if (mode == 1) return y + insetTop;
+  if (mode == 2) return y + h - insetBottom - blockH;
+  return y + (h - blockH) * 0.5f;
+}
+
 // ENG-22: one setter for every paragraph style the painter builds (Paragraph,
 // TextInput glyphs + selection + caret, click-to-caret boundaries), so the
 // family measure used cannot be dropped from one paint path and not another.
@@ -533,6 +547,11 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
             dynamic_cast<const react::BaseTextInputProps*>(view.props.get())) {
       node.tiValue = tp->text;
       node.tiPlaceholder = tp->placeholder;
+      node.tiMultiline = tp->multiline;  // ENG-16
+      node.tiAlignVertical =
+          tp->paragraphAttributes.textAlignVertical.has_value()
+              ? (int)*tp->paragraphAttributes.textAlignVertical
+              : 0;
       node.tiEditable = tp->editable;  // item 11
       const auto attrs = tp->getEffectiveTextAttributes(1.0f);
       if (attrs.fontSize > 0) node.fontSize = (float)attrs.fontSize;
@@ -1500,9 +1519,34 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     const std::string shown = focused ? tiEditValue_ : node.tiValue;
     const bool showPlaceholder = shown.empty() && !node.tiPlaceholder.empty();
     const std::string& drawStr = showPlaceholder ? node.tiPlaceholder : shown;
-    // Vertically centre the single line in the field's height.
+    // ENG-16: where the first line sits. Single-line fields centre it (the
+    // pre-ENG-16 rule, unchanged); multiline fields default to the TOP of the
+    // content box, and textAlignVertical overrides either.
     const float lineH = node.fontSize * 1.2f;
-    const float ty = y + (h - lineH) * 0.5f;
+    const auto& insets = node.layoutMetrics.contentInsets;
+    // A multiline value can wrap or hold newlines: bottom/center must place
+    // the WHOLE text block, so measure it (same face, same wrap width).
+    float blockH = lineH;
+    if (node.tiMultiline && !drawStr.empty() && node.tiAlignVertical >= 2) {
+      ImpellerParagraphStyle ms = ImpellerParagraphStyleNew();
+      ImpellerParagraphStyleSetFontSize(ms, node.fontSize);
+      ApplyFontFamily(ms, node.fontFamily);
+      ImpellerParagraphBuilder mb = ImpellerParagraphBuilderNew(typography_);
+      ImpellerParagraphBuilderPushStyle(mb, ms);
+      ImpellerParagraphBuilderAddText(mb, (const uint8_t*)drawStr.c_str(),
+                                      drawStr.size());
+      ImpellerParagraph mp = ImpellerParagraphBuilderBuildParagraphNew(
+          mb, w > kTextInputPad ? w - kTextInputPad : 1e6f);
+      if (mp != nullptr) {
+        blockH = std::max(lineH, ImpellerParagraphGetHeight(mp));
+        ImpellerParagraphRelease(mp);
+      }
+      ImpellerParagraphBuilderRelease(mb);
+      ImpellerParagraphStyleRelease(ms);
+    }
+    const float ty = TextInputLineTop(y, h, blockH, (float)insets.top,
+                                      (float)insets.bottom, node.tiMultiline,
+                                      node.tiAlignVertical);
     // A small left inset so the glyphs (and caret) do not sit on the border.
     // Shared with glyphBoundariesLocked (item 3 click-to-caret): a click and
     // the painted text must agree on where the text starts.

@@ -266,6 +266,12 @@ bash tools/ci-line-height.sh | grep -E "LINE_HEIGHT_GATE_PASS|OK [A-D]:"
 echo "### gate 24c: <world> nearest-neighbour sampling (ENG-21)"
 bash tools/ci-world-nearest.sh | grep -E "WORLD_NEAREST_GATE_PASS|OK [A-D]"
 
+# Headless, prebuilt bundle. A multiline TextInput starts at the TOP of its
+# content box; textAlignVertical top/center/bottom are honoured; single-line
+# stays centred. Mutants: mutation-verify-textinput-valign.sh.
+echo "### gate 24d: TextInput vertical placement (ENG-16)"
+bash tools/ci-textinput-valign.sh | grep -E "TEXTINPUT_VALIGN_GATE_PASS|OK [A-E]:"
+
 # ⛔ THE NETWORKING GATE EXISTED FOR A DAY AND WAS NEVER IN THIS FILE.
 # tools/ci-p10.sh was written with the Networking TurboModule (c4e59e1) and TLS
 # (a932ded) and is only referenced by tools/mutation-verify-p10.sh — so the ONLY

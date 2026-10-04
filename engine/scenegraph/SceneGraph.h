@@ -162,6 +162,11 @@ struct SceneNode {
   // being edited, so an unfocused controlled field still shows its value.
   std::string tiValue;
   std::string tiPlaceholder;
+  // ENG-16: multiline + textAlignVertical (react::TextAlignmentVertical:
+  // 0 Auto, 1 Top, 2 Bottom, 3 Center). Auto = top for multiline (UITextView)
+  // and centre for single-line (UITextField), measured from contentInsets.
+  bool tiMultiline{false};
+  int tiAlignVertical{0};
   float tiPlaceholderColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
   // item 4a: selection highlight fill. Defaults to rgba(51,144,255,0.35) (a
   // common desktop selection blue) when the field sets no `selectionColor`
