@@ -102,6 +102,20 @@ F2_Y=94
 SETGET_XY="110,145"
 SETNEWLINE_XY="110,185"
 
+# The platform's primary shortcut modifier. FabricHost::dispatchKeyEvent maps
+# Select-all/Copy/Cut/Paste to Cmd (meta) under __APPLE__ and to Ctrl
+# everywhere else, so a chord hard-coded to ctrl is a no-op on darwin and
+# arms b-f could never pass there. RNI_CLIP_PMOD overrides the pick so the
+# mutation check can drive the WRONG chord and prove the gate goes red.
+case "$(uname -s)" in
+  Darwin) PMOD_AUTO=meta ;;
+  *)      PMOD_AUTO=ctrl ;;
+esac
+PMOD="${RNI_CLIP_PMOD:-$PMOD_AUTO}"
+case "$PMOD" in ctrl|meta) ;; *) fail "RNI_CLIP_PMOD must be ctrl or meta, got '$PMOD'" ;; esac
+echo "   primary modifier: $PMOD (uname $(uname -s), auto=$PMOD_AUTO)"
+SA="a:down:$PMOD"; CP="c:down:$PMOD"; CT="x:down:$PMOD"; PS="v:down:$PMOD"
+
 assert_scene_mounted() {  # $1 = log path
   local nodes
   nodes="$(sed -n 's/^rn-impeller: scene_nodes=\([0-9]*\)$/\1/p' "$1" | tail -1)"
@@ -111,6 +125,18 @@ assert_scene_mounted() {  # $1 = log path
 }
 onchange_last() { sed -n "s/^\[js\] ONCHANGE$2 text=\(.*\)\$/\1/p" "$1" | tail -1; }
 clip_ops()      { grep -c "^rn-impeller: clipboard op=$2" "$1" || true; }
+# POSITIVE CONTROL: the exact clipboard op counts the arm's chords must have
+# produced. A text assertion alone can be satisfied without the shortcut
+# path ever firing; a count of 0 here means the $PMOD chord never reached
+# Copy/Cut/Paste on this platform. $1=log $2=arm $3="op=N op=N ...".
+assert_ops() {
+  local log="$1" arm="$2" pair op want got
+  for pair in $3; do
+    op="${pair%%=*}"; want="${pair#*=}"
+    got="$(clip_ops "$log" "$op ")"
+    [ "$got" = "$want" ] || { dump "$log"; fail "$arm: expected exactly $want 'clipboard op=$op' line(s) from the $PMOD chord; got $got -- the $PMOD+key shortcut did not reach the clipboard action on $(uname -s)"; }
+  done
+}
 dump() { grep -E 'ONCHANGE|ONSEL|GETSTRING|clipboard op=|textinput_focus' "$1" | sed 's/^/   /' >&2; }
 
 run_win() {  # $1=log $2=frames $3...=extra args
@@ -132,10 +158,10 @@ echo "   OK: GETSTRING=hello é"
 
 echo "== b. copy field1, focus field2, paste -> 'abcdef' =="
 run_win "$WORK/b.log" 50 --click-after-frames "5:300,$F1_Y" \
-  --key-after-frames "15:a:down:ctrl;c:down:ctrl;Shift:down;Shift:down;v:down:ctrl" \
+  --key-after-frames "15:$SA;$CP;Shift:down;Shift:down;$PS" \
   --mouse-after-frames "17:down@300,$F2_Y;up@300,$F2_Y"
-[ "$(clip_ops "$WORK/b.log" copy)" = "1" ] \
-  || { dump "$WORK/b.log"; fail "b: expected exactly one 'clipboard op=copy' line; the Copy shortcut did not reach the system clipboard write"; }
+assert_ops "$WORK/b.log" b "copy=1 cut=0 paste=1"
+echo "   OK: positive control -- $PMOD chord produced exactly 1 op=copy, 1 op=paste"
 B_RESULT="$(onchange_last "$WORK/b.log" 2)"
 [ "$B_RESULT" = "abcdef" ] \
   || { dump "$WORK/b.log"; fail "b: pasting into field2 after copying field1's full selection should give 'abcdef'; got '$B_RESULT' -- Copy/Paste are not round-tripping through the system clipboard"; }
@@ -143,8 +169,9 @@ echo "   OK: field2 = 'abcdef'"
 
 echo "== c. cut field1 'def', paste into field2 -> field1 'abc' field2 'def' =="
 run_win "$WORK/c.log" 50 --click-after-frames "5:300,$F1_Y" \
-  --key-after-frames "15:ArrowLeft:down:shift;ArrowLeft:down:shift;ArrowLeft:down:shift;x:down:ctrl;Shift:down;Shift:down;v:down:ctrl" \
+  --key-after-frames "15:ArrowLeft:down:shift;ArrowLeft:down:shift;ArrowLeft:down:shift;$CT;Shift:down;Shift:down;$PS" \
   --mouse-after-frames "19:down@300,$F2_Y;up@300,$F2_Y"
+assert_ops "$WORK/c.log" c "cut=1 copy=0 paste=1"
 C_F1="$(onchange_last "$WORK/c.log" 1)"
 C_F2="$(onchange_last "$WORK/c.log" 2)"
 [ "$C_F1" = "abc" ] \
@@ -156,8 +183,9 @@ echo "   OK: field1='abc' field2='def'"
 echo "== d. paste replaces a selection: clipboard 'XY', select {3,6} -> 'abcXY' =="
 run_win "$WORK/d.log" 50 --click-after-frames "5:200,$F2_Y" \
   --char-after-frames "10:88;89" \
-  --key-after-frames "15:a:down:ctrl;c:down:ctrl;Shift:down;Shift:down;ArrowLeft:down:shift;ArrowLeft:down:shift;ArrowLeft:down:shift;v:down:ctrl" \
+  --key-after-frames "15:$SA;$CP;Shift:down;Shift:down;ArrowLeft:down:shift;ArrowLeft:down:shift;ArrowLeft:down:shift;$PS" \
   --mouse-after-frames "17:down@300,$F1_Y;up@300,$F1_Y"
+assert_ops "$WORK/d.log" d "copy=1 cut=0 paste=1"
 D_CLIP_SRC="$(onchange_last "$WORK/d.log" 2)"
 [ "$D_CLIP_SRC" = "XY" ] \
   || { dump "$WORK/d.log"; fail "d: typing X,Y into field2 should give 'XY' before it is copied; got '$D_CLIP_SRC'"; }
@@ -169,7 +197,8 @@ echo "   OK: field1 = 'abcXY'"
 echo "== e. newline flattening: 'a\\nb\\r\\nc' pastes as 'a b c' =="
 run_win "$WORK/e.log" 50 --click-after-frames "5:$SETNEWLINE_XY" \
   --mouse-after-frames "10:down@300,$F2_Y;up@300,$F2_Y" \
-  --key-after-frames "10:Shift:down;Shift:down;v:down:ctrl"
+  --key-after-frames "10:Shift:down;Shift:down;$PS"
+assert_ops "$WORK/e.log" e "copy=0 cut=0 paste=1"
 E_RESULT="$(onchange_last "$WORK/e.log" 2)"
 [ "$E_RESULT" = "a b c" ] \
   || { dump "$WORK/e.log"; fail "e: pasting 'a\\nb\\r\\nc' into a single-line field should flatten every CR/LF run to one space, giving 'a b c'; got '$E_RESULT' -- newline flattening on paste is missing or wrong"; }
@@ -177,11 +206,12 @@ echo "   OK: field2 = 'a b c'"
 
 echo "== f. copy with an empty selection does not touch the clipboard =="
 run_win "$WORK/f.log" 50 --click-after-frames "5:300,$F1_Y" \
-  --key-after-frames "15:a:down:ctrl;c:down:ctrl;ArrowLeft:down;c:down:ctrl;Shift:down;Shift:down;v:down:ctrl" \
+  --key-after-frames "15:$SA;$CP;ArrowLeft:down;$CP;Shift:down;Shift:down;$PS" \
   --mouse-after-frames "19:down@300,$F2_Y;up@300,$F2_Y"
 F_COPY_COUNT="$(clip_ops "$WORK/f.log" copy)"
 [ "$F_COPY_COUNT" = "1" ] \
   || { dump "$WORK/f.log"; fail "f: expected exactly 1 'clipboard op=copy' line (the first Ctrl+C only); got $F_COPY_COUNT -- a Ctrl+C with no selection wrote to the clipboard anyway"; }
+assert_ops "$WORK/f.log" f "cut=0 paste=1"
 F_RESULT="$(onchange_last "$WORK/f.log" 2)"
 [ "$F_RESULT" = "abcdef" ] \
   || { dump "$WORK/f.log"; fail "f: pasting after a no-op Copy should still give the FIRST copy's content 'abcdef'; got '$F_RESULT' -- the clipboard was corrupted or cleared by the empty-selection Copy"; }

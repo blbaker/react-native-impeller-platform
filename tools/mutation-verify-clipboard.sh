@@ -7,6 +7,8 @@
 #       -- engine/modules/ClipboardModule.h
 #   M3  no newline flattening on paste -- engine/fabric/FabricHost.cpp
 #   M4  cut copies but does not erase the selection -- engine/fabric/FabricHost.cpp
+#   M5  the gate drives the OTHER platform's modifier (ctrl on darwin, meta
+#       elsewhere) -- gate-side, no rebuild; arm b's op-count control kills it
 #
 # Each mutant is checked against which arm it ACTUALLY trips (not merely the
 # arm it was designed for) before being trusted:
@@ -74,6 +76,18 @@ rebuild
 run_gate "$BAK/control.log" || { tail -60 "$BAK/control.log" >&2; fail "gate fails on the UNMUTATED tree"; }
 grep -q CLIPBOARD_GATE_PASS "$BAK/control.log" || fail "control did not print CLIPBOARD_GATE_PASS"
 echo "   OK: control passes"
+
+echo "== M5: the shortcut chord uses the OTHER platform's modifier =="
+# Gate-side mutant, no rebuild: the binary is the unmutated control build.
+# This is what the gate looked like on darwin before PMOD (ctrl hard-coded
+# while FabricHost maps Copy to Cmd under __APPLE__). Text assertions alone
+# could be met without Copy ever firing; the op-count positive control in
+# arm b must be what kills it.
+case "$(uname -s)" in Darwin) WRONG_PMOD=ctrl ;; *) WRONG_PMOD=meta ;; esac
+set +e
+RNI_CLIP_PMOD="$WRONG_PMOD" bash tools/ci-clipboard.sh > "$BAK/M5.log" 2>&1
+set -e
+expect_killed M5 "$BAK/M5.log" "b: expected exactly 1 'clipboard op=copy' line\(s\) from the $WRONG_PMOD chord; got 0"
 
 echo "== M1: paste ignores the selection (inserts at the caret) =="
 mutate "$FH" \
