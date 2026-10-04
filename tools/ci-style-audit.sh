@@ -32,6 +32,8 @@ LANDED=(
   shadowIOS:1 boxShadow:2 boxShadowInset:3 elevation:4
   textInputSecure:11 overflowRounded:13
   lineHeight:12 textInputMultiline:16
+  fontWeight:5 fontWeightBold:5 textAlignCenter:7 textAlignRight:7
+  underline:9 lineThrough:9 decorationColor:9
 )
 # Features the audit measured working on 02cf8ea7; must stay PASS.
 # (aspectRatio and nestedTextSize are font/bundle sensitive across the Mac and

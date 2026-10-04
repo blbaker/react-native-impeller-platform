@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "text/LineHeight.h"
+#include "text/TextStyle.h"
 #include "text/TextTransform.h"
 
 namespace rni {
@@ -59,6 +60,9 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
     }
     // ENG-23: the same setter SceneGraph paints with (text/LineHeight.h).
     ApplyLineHeight(style, (float)attrs.lineHeight, fontSize);
+    // Style audit item 5: the SAME weight setter paint uses (text/TextStyle.h),
+    // so a bold label is measured in the bold face's advances.
+    ApplyFontWeight(style, attrs.fontWeight.has_value() ? (int)*attrs.fontWeight : 0);
     if (paragraphAttributes.maximumNumberOfLines > 0) {
       ImpellerParagraphStyleSetMaxLines(
           style, (uint32_t)paragraphAttributes.maximumNumberOfLines);

@@ -216,6 +216,82 @@ def bullets(c, f, d):
     return same_band and round_ and max(hs) < ctall * 0.6 and max(hs) - min(hs) <= 1
 
 
+def row_runs(px, y, x0, x1, want=lambda v: ink(v)):
+    """Number of separate runs of `want` pixels along row y, x0..x1."""
+    vals = [want(px[(x, y)]) for x in range(x0, x1 + 1)]
+    return sum(1 for i, v in enumerate(vals) if v and (i == 0 or not vals[i - 1]))
+
+
+def full_rule(px, y, x0, x1, want=lambda v: ink(v) and cls(v) == "black"):
+    """Row y is one unbroken `want` line spanning the text width x0..x1."""
+    return all(want(px[(x, y)]) for x in range(x0, x1 + 1))
+
+
+def glyphs_same(c, f, y0, y1):
+    """Feature rows y0..y1 are pixel-identical to the control (decoration
+    must not restyle the glyphs themselves)."""
+    return all(c[(x, y)] == f[(x, y)] for y in range(y0, y1 + 1) for x in range(120))
+
+
+def underline_ok(c, f, d):
+    """A solid black rule spanning the text, BELOW the control's glyph box,
+    with the glyph rows untouched."""
+    cb = stats(c)["bbox"]
+    below = [y for y in range(cb[3] + 1, 136) if full_rule(f, y, cb[0], cb[2])]
+    return bool(below) and glyphs_same(c, f, cb[1], cb[3])
+
+
+def strike_ok(c, f, d):
+    """A solid black rule spanning the text INSIDE the middle half of the glyph
+    band, nothing painted below the glyphs, and no such rule in the control."""
+    cb, fb = stats(c)["bbox"], stats(f)["bbox"]
+    h = cb[3] - cb[1]
+    mid = range(cb[1] + h // 4, cb[3] - h // 4 + 1)
+    hit = [y for y in mid if full_rule(f, y, cb[0], cb[2])]
+    return bool(hit) and fb[3] == cb[3] and not any(full_rule(c, y, cb[0], cb[2]) for y in mid)
+
+
+def deco_color_ok(c, f, d):
+    """textDecorationColor red + style dashed. The CONTROL is a plain black
+    underline, so its rule rows say where the underline belongs: the red must
+    sit on those rows (+-1), in at least 4 separate dashes along one row, and
+    the glyphs above keep their own colour."""
+    cb = stats(c)["bbox"]
+    under = [y for y in range(cb[1], cb[3] + 1) if full_rule(c, y, cb[0], cb[2])]
+    red = [(x, y) for (x, y), v in f.items() if cls(v) == "red"]
+    if not under or not red:
+        return False
+    if not all(min(under) - 1 <= y <= max(under) + 1 for _, y in red):
+        return False
+    is_red = lambda v: cls(v) == "red"
+    dashes = max(row_runs(f, y, cb[0], cb[2], is_red) for y in {y for _, y in red})
+    return dashes >= 4 and glyphs_same(c, f, cb[1], min(under) - 2)
+
+
+def weight_ok(c, f, d):
+    """Heavier strokes AND still one line: weight must reach MEASURE too, or a
+    bold 'Ab' measured in the regular face wraps the 'b' to a second line."""
+    cb, fb = stats(c)["bbox"], stats(f)["bbox"]
+    ck, fk = stats(c)["counts"].get("black", 0), stats(f)["counts"].get("black", 0)
+    one_line = abs((fb[3] - fb[1]) - (cb[3] - cb[1])) <= 2
+    return fk > ck * 1.3 and one_line and fb[2] >= cb[2]
+
+
+def align_ok(where):
+    """Same glyphs (ink width within 1 px of the control) moved to the centre or
+    right of the 80 pt box at slot x 30..109; still one line."""
+    def rule(c, f, d):
+        cb, fb = stats(c)["bbox"], stats(f)["bbox"]
+        same_w = abs((fb[2] - fb[0]) - (cb[2] - cb[0])) <= 1
+        one_line = fb[1] == cb[1] and fb[3] == cb[3]
+        if where == "center":
+            pos = abs((fb[0] + fb[2]) / 2 - 69.5) <= 2
+        else:
+            pos = 105 <= fb[2] <= 109
+        return same_w and one_line and pos
+    return rule
+
+
 # STRICT rules, ANDed with RULES. The Mac's RULES are kept verbatim so its
 # measure.py and this one agree on every PASS it reports; these only add the
 # properties a plausible-but-wrong implementation would miss (a shadow cast the
@@ -233,6 +309,15 @@ STRICT = {
     # corner white).
     "overflowRounded": lambda c, f, d: cls(at(f, 60, 60)) == "red"
     and cls(at(f, 31, 60)) == "red" and 2700 < stats(f)["n"] < 3000,
+    # Items 5, 7, 9: the Mac's rules are `d > 0`-shaped; these pin position,
+    # style and measure-agreement.
+    "underline": underline_ok,
+    "lineThrough": strike_ok,
+    "decorationColor": deco_color_ok,
+    "fontWeight": weight_ok,
+    "fontWeightBold": weight_ok,
+    "textAlignCenter": align_ok("center"),
+    "textAlignRight": align_ok("right"),
 }
 
 

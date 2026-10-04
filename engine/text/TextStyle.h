@@ -1,0 +1,72 @@
+#pragma once
+// Style audit items 5, 7, 9: fontWeight, textAlign, textDecoration*.
+//
+// One set of setters shared by MEASURE (ImpellerTextLayoutManager) and PAINT
+// (SceneGraph Paragraph), the same contract as text/LineHeight.h: a bold label
+// measured in the regular face would be sized too narrow and clip its last
+// glyph. Inputs are RN's own enum values as ints, so this header needs no
+// react includes:
+//   fontWeight  react::FontWeight             100..900, 0 = unset
+//   align       react::TextAlignment          0 Natural, 1 Left, 2 Center,
+//                                             3 Right, 4 Justified
+//   decoLine    react::TextDecorationLineType 0 None, 1 Underline,
+//                                             2 Strikethrough, 3 both
+//   decoStyle   react::TextDecorationStyle    0 Solid, 1 Double, 2 Dotted,
+//                                             3 Dashed
+//
+// Only fontWeight changes glyph advances, so only it is applied at measure.
+// Alignment moves lines inside the layout width and decorations paint over
+// laid-out glyphs; neither changes LongestLineWidth or Height.
+
+#include "impeller.h"
+
+namespace rni {
+
+inline bool ApplyFontWeight(ImpellerParagraphStyle style, int weight) {
+  if (weight <= 0) return false;  // unset: Impeller's default (400)
+  int idx = (weight + 50) / 100;  // nearest hundred, 1..9
+  if (idx < 1) idx = 1;
+  if (idx > 9) idx = 9;
+  ImpellerParagraphStyleSetFontWeight(style,
+                                      (ImpellerFontWeight)(kImpellerFontWeight100 + idx - 1));
+  return true;
+}
+
+// Paint only. The paragraph must be laid out at the node's real width (not
+// the 1e6 "unconstrained" width) or centre/right push the glyphs off-screen.
+inline bool ApplyTextAlign(ImpellerParagraphStyle style, int align) {
+  ImpellerTextAlignment a;
+  switch (align) {
+    case 1: a = kImpellerTextAlignmentLeft; break;
+    case 2: a = kImpellerTextAlignmentCenter; break;
+    case 3: a = kImpellerTextAlignmentRight; break;
+    case 4: a = kImpellerTextAlignmentJustify; break;
+    default: return false;  // Natural: Impeller's default (start)
+  }
+  ImpellerParagraphStyleSetTextAlignment(style, a);
+  return true;
+}
+
+// Paint only. `color` is textDecorationColor when set, else the text colour
+// (RN and CSS both default the decoration to currentColor).
+inline bool ApplyTextDecoration(ImpellerParagraphStyle style, int decoLine,
+                                int decoStyle, ImpellerColor color) {
+  int types = kImpellerTextDecorationTypeNone;
+  if (decoLine == 1 || decoLine == 3) types |= kImpellerTextDecorationTypeUnderline;
+  if (decoLine == 2 || decoLine == 3) types |= kImpellerTextDecorationTypeLineThrough;
+  if (types == kImpellerTextDecorationTypeNone) return false;
+  ImpellerTextDecoration d{};
+  d.types = types;
+  d.color = color;
+  switch (decoStyle) {
+    case 1: d.style = kImpellerTextDecorationStyleDouble; break;
+    case 2: d.style = kImpellerTextDecorationStyleDotted; break;
+    case 3: d.style = kImpellerTextDecorationStyleDashed; break;
+    default: d.style = kImpellerTextDecorationStyleSolid; break;
+  }
+  d.thickness_multiplier = 1.0f;
+  ImpellerParagraphStyleSetTextDecoration(style, &d);
+  return true;
+}
+
+}  // namespace rni

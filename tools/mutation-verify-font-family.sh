@@ -52,7 +52,7 @@ run_mutant() {  # $1 name  $2 ERE the FAIL line must match
 echo "MUTATION_VERIFY_FONT_FAMILY_START"
 
 mutate "$SG" "    ApplyFontFamily(style, node.fontFamily);  // ENG-22
-    if (node.maxLines > 0) {" "    if (node.maxLines > 0) {  // MUTANT M1"
+    ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23" "    ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23 MUTANT M1"
 run_mutant "M1 Paragraph paint drops the family" "A|C"
 
 mutate "$SG" "      ApplyFontFamily(style, node.fontFamily);  // ENG-22

@@ -17,6 +17,7 @@
 
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
+#include "text/TextStyle.h"
 #include "text/TextTransform.h"
 
 // ENG item 2 — supersample offscreen render. Direct GL entry points link on
@@ -538,6 +539,11 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     node.text.clear();
     node.fontFamily.clear();
     node.lineHeight = 0.0f;
+    node.fontWeight = 0;
+    node.textAlign = 0;
+    node.decoLine = 0;
+    node.decoStyle = 0;
+    node.hasDecoColor = false;
     node.maxLines = 0;
     node.ellipsizeMode = 0;
     node.textTransform = 0;
@@ -575,6 +581,20 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
         // ENG-23: same last-fragment-wins rule; NaN (unset) is skipped.
         if (fragment.textAttributes.lineHeight > 0) {
           node.lineHeight = (float)fragment.textAttributes.lineHeight;
+        }
+        // Style audit items 5, 7, 9: same last-fragment-wins rule.
+        const auto& ta = fragment.textAttributes;
+        if (ta.fontWeight.has_value()) node.fontWeight = (int)*ta.fontWeight;
+        if (ta.alignment.has_value()) node.textAlign = (int)*ta.alignment;
+        if (ta.textDecorationLineType.has_value()) {
+          node.decoLine = (int)*ta.textDecorationLineType;
+        }
+        if (ta.textDecorationStyle.has_value()) {
+          node.decoStyle = (int)*ta.textDecorationStyle;
+        }
+        if (ta.textDecorationColor) {
+          colorToFloats(ta.textDecorationColor, node.decoColor);
+          node.hasDecoColor = true;
         }
         if (fragment.textAttributes.foregroundColor) {
           colorToFloats(fragment.textAttributes.foregroundColor, node.textColor);
@@ -1555,6 +1575,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerParagraphStyleSetFontSize(style, node.fontSize);
     ApplyFontFamily(style, node.fontFamily);  // ENG-22
     ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23
+    // Style audit items 5, 7 (text/TextStyle.h). Weight is measured too.
+    ApplyFontWeight(style, node.fontWeight);
+    ApplyTextAlign(style, node.textAlign);
     if (node.maxLines > 0) {
       // Painting must honour the same clamp measurement did, or a
       // numberOfLines={1} label is measured at one line and painted at three,
@@ -1577,6 +1600,11 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerColor tc = impellerColor(node.textColor, OwnAlpha(node));
     ImpellerPaintSetColor(textPaint, &tc);
     ImpellerParagraphStyleSetForeground(style, textPaint);
+    // Style audit item 9: decoration colour defaults to the text colour.
+    ApplyTextDecoration(style, node.decoLine, node.decoStyle,
+                        impellerColor(node.hasDecoColor ? node.decoColor
+                                                        : node.textColor,
+                                      OwnAlpha(node)));
 
     ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
     ImpellerParagraphBuilderPushStyle(pb, style);

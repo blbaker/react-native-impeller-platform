@@ -138,6 +138,15 @@ struct SceneNode {
   // with the SAME setter measure uses (text/LineHeight.h), so the box height
   // and the painted line pitch agree.
   float lineHeight{0.0f};
+  // Style audit items 5, 7, 9 (text/TextStyle.h). Same last-fragment-wins rule
+  // as fontSize. fontWeight is also applied at MEASURE; align and decoration
+  // are paint-only (they do not change the measured box).
+  int fontWeight{0};        // react::FontWeight 100..900, 0 = unset
+  int textAlign{0};         // react::TextAlignment, 0 = Natural
+  int decoLine{0};          // react::TextDecorationLineType, 0 = None
+  int decoStyle{0};         // react::TextDecorationStyle, 0 = Solid
+  bool hasDecoColor{false};
+  float decoColor[4]{0, 0, 0, 1};
   float textColor[4]{0, 0, 0, 1};
   // numberOfLines. Must be applied at PAINT time as well as measure time, or a
   // clamped label measures one line and paints three.
