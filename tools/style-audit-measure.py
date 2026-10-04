@@ -340,6 +340,61 @@ def align_ok(where):
     return rule
 
 
+def _box_colours(px, box):
+    x0, y0, x1, y1 = box[:4]
+    return {cls(px[(x, y)]) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)}
+
+
+def nested_color_ok(c, f, d):
+    """Item 14, 'AA' + nested red 'BB'. The four glyph boxes match the
+    control's within 1 px (one paragraph, so the inner run does not move),
+    the first two glyphs have black ink and no red, and the last two have
+    red and no black. Painting the whole paragraph in one colour fails either
+    half."""
+    cb, fb = blobs(c), blobs(f)
+    if len(cb) != 4 or len(fb) != 4:
+        return False
+    same = all(abs(a[i] - b[i]) <= 1 for a, b in zip(cb, fb) for i in range(4))
+    k = [_box_colours(f, b) for b in fb]
+    outer = all("black" in s and "red" not in s for s in k[:2])
+    inner = all("red" in s and "black" not in s for s in k[2:])
+    return same and outer and inner
+
+
+def nested_size_ok(c, f, d):
+    """Item 14, 'AA' at 14 pt + nested 'AA' at 30 pt, on ONE line. The first
+    two glyphs keep the control's 14 pt height (within 1 px), the last two are
+    at least 1.8x taller, and all four bottoms sit on one baseline (within
+    1 px). Painting every glyph at 30 pt (the old bug) fails the first part,
+    and the wrap it causes fails the baseline."""
+    cb, fb = blobs(c), blobs(f)
+    if len(fb) != 4 or not cb:
+        return False
+    ch = cb[0][3] - cb[0][1] + 1
+    hs = [b[3] - b[1] + 1 for b in fb]
+    small = all(abs(h - ch) <= 1 for h in hs[:2])
+    big = all(h >= 1.8 * ch for h in hs[2:])
+    baseline = max(b[3] for b in fb) - min(b[3] for b in fb) <= 1
+    return small and big and baseline
+
+
+def text_bg_ok(c, f, d):
+    """Item 14, 'A' + nested 'B' with green backgroundColor. Green fills
+    behind 'B' only: the green box starts right of 'A''s glyph and encloses
+    'B''s glyph box, and the 'A' glyph keeps black ink with no green. A
+    background on the whole paragraph, or on none of it, fails."""
+    cb = blobs(c)
+    gs = [k for k, v in f.items() if cls(v) == "green"]
+    if len(cb) != 2 or not gs:
+        return False
+    a, b = cb
+    gx0, gx1 = min(x for x, _ in gs), max(x for x, _ in gs)
+    gy0, gy1 = min(y for _, y in gs), max(y for _, y in gs)
+    behind_b = a[2] < gx0 <= b[0] and gx1 >= b[2] and gy0 <= b[1] and gy1 >= b[3]
+    ka = _box_colours(f, a)
+    return behind_b and "black" in ka and "green" not in ka
+
+
 # STRICT rules, ANDed with RULES. The Mac's RULES are kept verbatim so its
 # measure.py and this one agree on every PASS it reports; these only add the
 # properties a plausible-but-wrong implementation would miss (a shadow cast the
@@ -369,6 +424,9 @@ STRICT = {
     # Items 10 + 25: pixel match against the RN iOS dash geometry (3w / 1w).
     "borderDashed": dash_ok(12),
     "borderDotted": dash_ok(4),
+    # P1 item 14: nested runs keep their own colour / background, in place.
+    "nestedText": nested_color_ok,
+    "textBackground": text_bg_ok,
 }
 
 # Mac RULES that the RN source itself cannot meet, REPLACED (not ANDed) here
@@ -378,8 +436,16 @@ STRICT = {
 #   edge. RN iOS dashes at on = off = 3 x width (RCTBorderDrawing.m:558), so a
 #   60 pt box with a 4 pt border has a 56 pt top run and a 24 pt period: at
 #   most 3 dashes, i.e. 4 transitions. Judged by the iOS-oracle STRICT rule.
+#   nestedTextSize: the Mac asks for an ink height > 25 px. 'AA' at 14 pt +
+#   'AA' at 30 pt fits ONE line, and the tallest ink is a 30 pt cap 'A':
+#   cap height 0.70 em here (iOS SF: 0.705 em) = 21 px. > 25 is reachable only
+#   when the line WRAPS, which is what the old all-30pt paint did (Mac
+#   baseline bbox height 56). Kept: the Mac's "black < 450" half. Replaced:
+#   the height half, by per-glyph heights on one baseline (nested_size_ok).
 CORRECTED = {
     "borderDashed": lambda c, f, d: edge_runs(f, 32) >= 4,
+    "nestedTextSize": lambda c, f, d: stats(f)["counts"].get("black", 0) < 450
+    and nested_size_ok(c, f, d),
 }
 
 

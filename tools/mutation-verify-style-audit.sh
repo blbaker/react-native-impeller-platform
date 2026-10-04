@@ -28,6 +28,9 @@
 #   M20 borderStyle never read                        -> borderDashed borderDotted
 #   M21 corner miter joins dropped                    -> borderDashed (dotted has
 #       no dash running through a corner at this size)
+#   M22 every run painted in the LAST run's colour     -> nestedText
+#   M23 every run painted at the LAST run's size       -> nestedTextSize
+#   M24 a nested run's backgroundColor never painted   -> textBackground
 # Not covered (the fixture cannot see it, so it is not claimed): boxShadow's
 # clip-out of the border box, which only shows under a translucent background;
 # the secure caret/selection offsets mapped through the mask (the caret stays
@@ -227,8 +230,26 @@ mutate "$BD" "    if (before && after && total > 0.0f) {" "    if (false && befo
 check M21 borderDashed
 fi
 
+if want M22; then
+echo "== M22: every run painted in the last run's colour (one-style paint) =="
+mutate "$SG" "      ImpellerColor tc = impellerColor(run.color, OwnAlpha(node));" "      ImpellerColor tc = impellerColor(node.textColor, OwnAlpha(node));"
+check M22 nestedText
+fi
+
+if want M23; then
+echo "== M23: every run painted at the last run's font size =="
+mutate "$SG" "      ImpellerParagraphStyleSetFontSize(style, run.fontSize);" "      ImpellerParagraphStyleSetFontSize(style, node.fontSize);"
+check M23 nestedTextSize
+fi
+
+if want M24; then
+echo "== M24: a nested run's backgroundColor never painted =="
+mutate "$SG" "      if (run.hasBackground) {" "      if (false) {"
+check M24 textBackground
+fi
+
 if [ -n "${ONLY:-}" ]; then
   echo "STYLE_MUTATION_PARTIAL_PASS (ONLY=$ONLY killed for their own tile; not a full run)"
 else
-  echo "STYLE_MUTATION_PASS (21/21 mutants killed for their own tile: shadows 1-4, secure 11, rounded clip 13, weight 5, align 7, decoration 9, dashed/dotted 10/25)"
+  echo "STYLE_MUTATION_PASS (24/24 mutants killed for their own tile: shadows 1-4, secure 11, rounded clip 13, weight 5, align 7, decoration 9, dashed/dotted 10/25, nested runs P1-14)"
 fi

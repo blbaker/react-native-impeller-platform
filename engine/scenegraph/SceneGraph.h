@@ -30,6 +30,29 @@
 
 namespace rni {
 
+// P1 item 14 (nested Text runs). One entry per non-attachment fragment of a
+// Paragraph's AttributedString, in order. These are the same fragments
+// ImpellerTextLayoutManager pushes one style each for at MEASURE. The old paint
+// path drew the concatenated string in ONE style (the last fragment's colour,
+// size and family), so the box was measured per run and painted as one.
+struct TextRun {
+  std::string text;  // fragment.string with ITS textTransform applied (as measure)
+  float fontSize{14};
+  std::string fontFamily;
+  float lineHeight{0.0f};
+  int fontWeight{0};
+  int decoLine{0};
+  int decoStyle{0};
+  bool hasDecoColor{false};
+  float decoColor[4]{0, 0, 0, 1};
+  float color[4]{0, 0, 0, 1};  // RN's default foreground is black
+  // A nested <Text style={{backgroundColor}}>. The ROOT Text's backgroundColor
+  // never lands here: BaseParagraphProps clears it from textAttributes because
+  // the Paragraph's own View background paints it.
+  bool hasBackground{false};
+  float background[4]{0, 0, 0, 0};
+};
+
 // Everything we need to paint one node, snapshotted from its ShadowView. We
 // copy rather than hold Props::Shared so paint never dereferences a prop
 // object the JS thread is concurrently replacing.
@@ -163,6 +186,9 @@ struct SceneNode {
   // measured string and the painted string are the same object — measuring the
   // raw case and painting the transformed case would disagree on width.
   int textTransform{0};  // react::TextTransform: 0 None,1 Upper,2 Lower,3 Capitalize,4 Unset
+  // P1 item 14: per-fragment styles. Paint draws THESE; node.text is their
+  // concatenation (paragraph_text reports, the selectable-Text copy string).
+  std::vector<TextRun> runs;
 
   // <TextInput>. ENG-01b. A TextInput is NOT a Paragraph: it paints a single
   // editable line from a native-held buffer, a placeholder when that buffer is

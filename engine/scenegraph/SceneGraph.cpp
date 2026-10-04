@@ -571,7 +571,38 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
               facebook::react::ParagraphState>&>(*view.state)
               .getData();
       bool tookTransform = false;
+      node.runs.clear();
       for (const auto& fragment : stateData.attributedString.getFragments()) {
+        // P1 item 14: an inline-view attachment is a U+FFFC placeholder that
+        // measure skips (ImpellerTextLayoutManager), so paint skips it too
+        // instead of drawing a replacement glyph in a box sized without it.
+        if (!fragment.isAttachment()) {
+          const auto& fa = fragment.textAttributes;
+          TextRun run;
+          run.text = applyTextTransform(
+              fragment.string,
+              fa.textTransform.has_value() ? (int)fa.textTransform.value() : 0);
+          if (fa.fontSize > 0) run.fontSize = (float)fa.fontSize;
+          run.fontFamily = fa.fontFamily;
+          if (fa.lineHeight > 0) run.lineHeight = (float)fa.lineHeight;
+          if (fa.fontWeight.has_value()) run.fontWeight = (int)*fa.fontWeight;
+          if (fa.textDecorationLineType.has_value()) {
+            run.decoLine = (int)*fa.textDecorationLineType;
+          }
+          if (fa.textDecorationStyle.has_value()) {
+            run.decoStyle = (int)*fa.textDecorationStyle;
+          }
+          if (fa.textDecorationColor) {
+            colorToFloats(fa.textDecorationColor, run.decoColor);
+            run.hasDecoColor = true;
+          }
+          if (fa.foregroundColor) colorToFloats(fa.foregroundColor, run.color);
+          if (fa.backgroundColor) {
+            colorToFloats(fa.backgroundColor, run.background);
+            run.hasBackground = run.background[3] > 0.0f;
+          }
+          node.runs.push_back(std::move(run));
+        }
         node.text += fragment.string;
         if (fragment.textAttributes.fontSize > 0) {
           node.fontSize = (float)fragment.textAttributes.fontSize;
@@ -1574,46 +1605,61 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
 #endif
 
-  if (node.isParagraph && !node.text.empty() && typography_ != nullptr) {
-    ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
-    ImpellerParagraphStyleSetFontSize(style, node.fontSize);
-    ApplyFontFamily(style, node.fontFamily);  // ENG-22
-    ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23
-    // Style audit items 5, 7 (text/TextStyle.h). Weight is measured too.
-    ApplyFontWeight(style, node.fontWeight);
-    ApplyTextAlign(style, node.textAlign);
-    if (node.maxLines > 0) {
-      // Painting must honour the same clamp measurement did, or a
-      // numberOfLines={1} label is measured at one line and painted at three,
-      // overflowing whatever sits below it.
-      ImpellerParagraphStyleSetMaxLines(style, (uint32_t)node.maxLines);
-      // ⛔ ELLIPSIS ONLY MAKES SENSE ON A CLAMPED PARAGRAPH.
-      // ellipsizeMode without maxLines is meaningless — an unclamped paragraph
-      // wraps forever and never truncates — so the setter is scoped inside the
-      // maxLines guard. RN's EllipsizeMode: 0 Clip (hard cut, NO ellipsis
-      // string), 1 Head, 2 Tail (RN default), 3 Middle. Impeller's C API exposes
-      // one ellipsis STRING, not a position, so Head/Tail/Middle all set "…" and
-      // the engine truncates at the tail; Clip passes nullptr for a hard cut.
-      // This is the real ImpellerParagraphStyleSetEllipsis setter (impeller.h
-      // :2585) — no manual U+2026 append needed.
-      if (node.ellipsizeMode != 0) {
-        ImpellerParagraphStyleSetEllipsis(style, "\xE2\x80\xA6");  // U+2026 …
-      }
-    }
-    ImpellerPaint textPaint = ImpellerPaintNew();
-    ImpellerColor tc = impellerColor(node.textColor, OwnAlpha(node));
-    ImpellerPaintSetColor(textPaint, &tc);
-    ImpellerParagraphStyleSetForeground(style, textPaint);
-    // Style audit item 9: decoration colour defaults to the text colour.
-    ApplyTextDecoration(style, node.decoLine, node.decoStyle,
-                        impellerColor(node.hasDecoColor ? node.decoColor
-                                                        : node.textColor,
-                                      OwnAlpha(node)));
-
+  if (node.isParagraph && !node.runs.empty() && typography_ != nullptr) {
+    // P1 item 14: one style push per run, mirroring ImpellerTextLayoutManager
+    // fragment for fragment, so measure and paint agree on every run's size,
+    // face, weight and pitch. Paragraph-level settings (alignment, clamp,
+    // ellipsis) ride on EVERY run's style: Impeller takes them from the first
+    // style on the stack, and measure sets the clamp on every run the same way.
+    std::vector<ImpellerPaint> runPaints;
     ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
-    ImpellerParagraphBuilderPushStyle(pb, style);
-    ImpellerParagraphBuilderAddText(pb, (const uint8_t*)node.text.c_str(),
-                                    node.text.size());
+    for (const TextRun& run : node.runs) {
+      if (run.text.empty()) continue;
+      ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
+      ImpellerParagraphStyleSetFontSize(style, run.fontSize);
+      ApplyFontFamily(style, run.fontFamily);  // ENG-22
+      ApplyLineHeight(style, run.lineHeight, run.fontSize);  // ENG-23
+      // Style audit items 5, 7 (text/TextStyle.h). Weight is measured too.
+      ApplyFontWeight(style, run.fontWeight);
+      ApplyTextAlign(style, node.textAlign);
+      if (node.maxLines > 0) {
+        // Painting must honour the same clamp measurement did, or a
+        // numberOfLines={1} label is measured at one line and painted at
+        // three, overflowing whatever sits below it.
+        ImpellerParagraphStyleSetMaxLines(style, (uint32_t)node.maxLines);
+        // ⛔ ELLIPSIS ONLY MAKES SENSE ON A CLAMPED PARAGRAPH. RN's
+        // EllipsizeMode: 0 Clip (hard cut, NO ellipsis string), 1 Head,
+        // 2 Tail (RN default), 3 Middle. Impeller's C API exposes one ellipsis
+        // STRING, not a position, so Head/Tail/Middle all truncate at the tail.
+        if (node.ellipsizeMode != 0) {
+          ImpellerParagraphStyleSetEllipsis(style, "\xE2\x80\xA6");  // U+2026 …
+        }
+      }
+      ImpellerPaint textPaint = ImpellerPaintNew();
+      ImpellerColor tc = impellerColor(run.color, OwnAlpha(node));
+      ImpellerPaintSetColor(textPaint, &tc);
+      ImpellerParagraphStyleSetForeground(style, textPaint);
+      runPaints.push_back(textPaint);
+      // A nested <Text style={{backgroundColor}}> fills behind its own glyphs
+      // only (RN iOS NSBackgroundColorAttributeName), not the whole line box.
+      if (run.hasBackground) {
+        ImpellerPaint bgPaint = ImpellerPaintNew();
+        ImpellerColor bc = impellerColor(run.background, OwnAlpha(node));
+        ImpellerPaintSetColor(bgPaint, &bc);
+        ImpellerParagraphStyleSetBackground(style, bgPaint);
+        runPaints.push_back(bgPaint);
+      }
+      // Style audit item 9: decoration colour defaults to the run's colour.
+      ApplyTextDecoration(style, run.decoLine, run.decoStyle,
+                          impellerColor(run.hasDecoColor ? run.decoColor
+                                                         : run.color,
+                                        OwnAlpha(node)));
+      ImpellerParagraphBuilderPushStyle(pb, style);
+      ImpellerParagraphBuilderAddText(pb, (const uint8_t*)run.text.c_str(),
+                                      run.text.size());
+      ImpellerParagraphBuilderPopStyle(pb);
+      ImpellerParagraphStyleRelease(style);
+    }
     ImpellerParagraph paragraph =
         ImpellerParagraphBuilderBuildParagraphNew(pb, w > 0 ? w : 1e6f);
     if (paragraph != nullptr) {
@@ -1622,8 +1668,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerParagraphRelease(paragraph);
     }
     ImpellerParagraphBuilderRelease(pb);
-    ImpellerPaintRelease(textPaint);
-    ImpellerParagraphStyleRelease(style);
+    for (ImpellerPaint p : runPaints) ImpellerPaintRelease(p);
   }
 
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
