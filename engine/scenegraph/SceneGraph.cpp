@@ -15,6 +15,7 @@
 #include "svg/SvgPath.h"
 #endif
 
+#include "scenegraph/BorderDash.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
@@ -322,6 +323,9 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
                                           metrics.borderColors.right,
                                           metrics.borderColors.bottom,
                                           metrics.borderColors.left};
+    // Items 10 + 25. RN iOS takes the TOP edge's style for the whole border
+    // (RCTViewComponentView: borderMetrics.borderStyles.top) -- same here.
+    node.borderStyle = (int)metrics.borderStyles.top;
     for (int i = 0; i < 4; ++i) {
       node.borderWidths[i] = (float)widths[i];
       node.hasBorderColors[i] = (bool)colors[i];
@@ -2694,6 +2698,17 @@ void SceneGraph::paintBorders(ImpellerDisplayListBuilder builder,
       if (node.borderColors[i][c] != node.borderColors[0][c]) { uniformColor = false; break; }
     }
     if (!uniformColor) break;
+  }
+
+  // Items 10 + 25: dashed / dotted, uniform width + colour on a square box
+  // (scenegraph/BorderDash.h has the RN iOS dash geometry). Rounded dashed borders
+  // fall through to the solid rounded stroke below; not claimed.
+  if (node.borderStyle != 0 && !rounded && uniformWidth && uniformColor &&
+      node.hasBorderColors[0] && node.borderColors[0][3] > 0.0f) {
+    if (PaintDashedBorder(builder, node.borderStyle, x, y, w, h, t,
+                          impellerColor(node.borderColors[0], OwnAlpha(node)))) {
+      return;
+    }
   }
 
   if (rounded && uniformWidth && uniformColor) {

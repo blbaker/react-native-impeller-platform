@@ -22,6 +22,12 @@
 #       colour + style against its control, 39 judges position)
 #   M16 decoration colour ignored                     -> decorationColor
 #   M17 dashed style dropped alone                    -> decorationColor
+#   M18 dashed drawn at the dotted length             -> borderDashed
+#   M19 dash phase restarts at every corner           -> borderDashed (dotted's
+#       period divides the 56 pt edge, so its phase is the same either way)
+#   M20 borderStyle never read                        -> borderDashed borderDotted
+#   M21 corner miter joins dropped                    -> borderDashed (dotted has
+#       no dash running through a corner at this size)
 # Not covered (the fixture cannot see it, so it is not claimed): boxShadow's
 # clip-out of the border box, which only shows under a translucent background;
 # the secure caret/selection offsets mapped through the mask (the caret stays
@@ -35,7 +41,8 @@ HP=engine/fabric/platform/impeller/react/renderer/components/view/HostPlatformVi
 FH=engine/fabric/FabricHost.cpp
 TL=engine/text/ImpellerTextLayoutManager.cpp
 TS=engine/text/TextStyle.h
-FILES=("$SG" "$SH" "$HP" "$FH" "$TL" "$TS")
+BD=engine/scenegraph/BorderDash.h
+FILES=("$SG" "$SH" "$HP" "$FH" "$TL" "$TS" "$BD")
 BAK="$(mktemp -d)"
 for f in "${FILES[@]}"; do mkdir -p "$BAK/$(dirname "$f")"; cp "$f" "$BAK/$f"; done
 put_back() { for f in "${FILES[@]}"; do cp "$BAK/$f" "$f"; done; }
@@ -196,8 +203,32 @@ mutate "$TS" "    case 3: d.style = kImpellerTextDecorationStyleDashed; break;" 
 check M17 decorationColor
 fi
 
+if want M18; then
+echo "== M18: dashed drawn at the dotted length (1w instead of 3w) =="
+mutate "$BD" "  if (style == 2) return 3.0f * width;" "  if (style == 2) return 1.0f * width;"
+check M18 borderDashed
+fi
+
+if want M19; then
+echo "== M19: dash phase restarts at every corner (not continuous) =="
+mutate "$BD" "    for (float s = std::floor(T / period) * period; s < T + g.len; s += period) {" "    for (float s = T; s < T + g.len; s += period) {"
+check M19 borderDashed
+fi
+
+if want M20; then
+echo "== M20: borderStyle never read from props =="
+mutate "$SG" "    node.borderStyle = (int)metrics.borderStyles.top;" "    node.borderStyle = 0;"
+check M20 borderDashed borderDotted
+fi
+
+if want M21; then
+echo "== M21: miter joins dropped where a dash runs through a corner =="
+mutate "$BD" "    if (before && after && total > 0.0f) {" "    if (false && before && after && total > 0.0f) {"
+check M21 borderDashed
+fi
+
 if [ -n "${ONLY:-}" ]; then
   echo "STYLE_MUTATION_PARTIAL_PASS (ONLY=$ONLY killed for their own tile; not a full run)"
 else
-  echo "STYLE_MUTATION_PASS (17/17 mutants killed for their own tile: shadows 1-4, secure 11, rounded clip 13, weight 5, align 7, decoration 9)"
+  echo "STYLE_MUTATION_PASS (21/21 mutants killed for their own tile: shadows 1-4, secure 11, rounded clip 13, weight 5, align 7, decoration 9, dashed/dotted 10/25)"
 fi

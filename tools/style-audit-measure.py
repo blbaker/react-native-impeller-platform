@@ -277,6 +277,54 @@ def weight_ok(c, f, d):
     return fk > ck * 1.3 and one_line and fb[2] >= cb[2]
 
 
+def ios_dash_mask(on, width=4, box=(30, 31, 89, 90)):
+    """Spec oracle for items 10/25, written from RN iOS's source, not from our
+    C++: RCTBorderDrawing.m strokes ONE closed path along the centre line,
+    clockwise from the top-left (RCTPathCreateWithRoundedRect), dash
+    on = off = `on`, phase 0, butt caps, miter joins. Returns the set of slot
+    pixels that path covers (1x, integer geometry)."""
+    bx0, by0, bx1, by1 = box[0], box[1], box[2] + 1, box[3] + 1
+    hw = width / 2
+    x0, y0, x1, y1 = bx0 + hw, by0 + hw, bx1 - hw, by1 - hw
+    period = 2 * on
+    edges = [((x0, y0), (1, 0), x1 - x0), ((x1, y0), (0, 1), y1 - y0),
+             ((x1, y1), (-1, 0), x1 - x0), ((x0, y1), (0, -1), y1 - y0)]
+    rects, T = [], 0.0
+    on_at = lambda t: (max(t, 0.0) % period) < on
+    for e, ((sx, sy), (dx, dy), ln) in enumerate(edges):
+        s = (T // period) * period
+        while s < T + ln:
+            a, b = max(s, T) - T, min(s + on, T + ln) - T
+            if b > a:
+                ax, ay, bx_, by_ = sx + dx * a, sy + dy * a, sx + dx * b, sy + dy * b
+                if dy == 0:
+                    rects.append((min(ax, bx_), ay - hw, max(ax, bx_), ay + hw))
+                else:
+                    rects.append((ax - hw, min(ay, by_), ax + hw, max(ay, by_)))
+            s += period
+        T += ln
+        after = on_at(0.0) if e == 3 else on_at(T + 1e-3)
+        if on_at(T - 1e-3) and after:
+            nx, ny = edges[(e + 1) % 4][0]
+            rects.append((nx - hw, ny - hw, nx + hw, ny + hw))
+    return {(x, y) for (rx0, ry0, rx1, ry1) in rects
+            for x in range(int(rx0), int(rx1)) for y in range(int(ry0), int(ry1))}
+
+
+def dash_ok(on):
+    """The painted border band matches the iOS dash oracle pixel for pixel.
+    At most 2 px may differ (measured: 0 on linux at 1x). Dropping the corner
+    miter joins (mutant M21) changes exactly 8 px here: the outer 2x2 of the
+    top-left and top-right corners. A 1%-of-band tolerance (8 px) let it pass."""
+    def rule(c, f, d):
+        want = ios_dash_mask(on)
+        band = {(x, y) for x in range(30, 90) for y in range(31, 91)
+                if x < 34 or x > 85 or y < 35 or y > 86}
+        got = {p for p in band if cls(f[p]) == "black"}
+        return bool(want) and len(want ^ got) <= 2
+    return rule
+
+
 def align_ok(where):
     """Same glyphs (ink width within 1 px of the control) moved to the centre or
     right of the 80 pt box at slot x 30..109; still one line."""
@@ -318,6 +366,20 @@ STRICT = {
     "fontWeightBold": weight_ok,
     "textAlignCenter": align_ok("center"),
     "textAlignRight": align_ok("right"),
+    # Items 10 + 25: pixel match against the RN iOS dash geometry (3w / 1w).
+    "borderDashed": dash_ok(12),
+    "borderDotted": dash_ok(4),
+}
+
+# Mac RULES that the RN source itself cannot meet, REPLACED (not ANDed) here
+# and flagged `rule=corrected` on the TILE line so the override is never
+# silent. Each entry names the source line that rules the Mac's value out.
+#   borderDashed: the Mac asks for >= 6 ink/no-ink transitions on the top
+#   edge. RN iOS dashes at on = off = 3 x width (RCTBorderDrawing.m:558), so a
+#   60 pt box with a 4 pt border has a 56 pt top run and a 24 pt period: at
+#   most 3 dashes, i.e. 4 transitions. Judged by the iOS-oracle STRICT rule.
+CORRECTED = {
+    "borderDashed": lambda c, f, d: edge_runs(f, 32) >= 4,
 }
 
 
@@ -397,7 +459,8 @@ def main():
         c, f = pixels(i, "c"), pixels(i, "f")
         d = diff(c, f)
         try:
-            r = RULES.get(t, lambda *a: None)(c, f, d)
+            rule = CORRECTED.get(t) or RULES.get(t, lambda *a: None)
+            r = rule(c, f, d)
             if r and t in STRICT:
                 r = bool(STRICT[t](c, f, d))
         except TypeError:  # a None bbox (no ink at all) where the rule needs one
@@ -405,8 +468,9 @@ def main():
         word = {True: "PASS", False: "FAIL", None: "NOTE"}[bool(r) if r is not None else None]
         bad += word == "FAIL"
         sf = stats(f)
+        mark = " rule=corrected" if t in CORRECTED else ""
         print(f"TILE {i+1} {t} {word} diff={d} out={outside(f)} n={sf['n']} "
-              f"bbox={sf['bbox']} counts={sf['counts']}")
+              f"bbox={sf['bbox']} counts={sf['counts']}{mark}")
     print(f"TILES_FAILING {bad}")
 
 

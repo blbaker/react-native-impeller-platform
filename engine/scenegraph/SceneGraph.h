@@ -52,6 +52,9 @@ struct SceneNode {
   // completely reasonable in a screenshot and is wrong for every app that sets
   // a single edge. Order below is top, right, bottom, left throughout.
   float borderWidths[4]{0, 0, 0, 0};
+  // Style audit items 10 + 25: react::BorderStyle of the whole border
+  // (0 Solid, 1 Dotted, 2 Dashed). RN iOS draws one style for all edges.
+  int borderStyle{0};
   bool hasBorderColors[4]{false, false, false, false};
   float borderColors[4][4]{};
 
