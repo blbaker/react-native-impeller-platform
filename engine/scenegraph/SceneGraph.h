@@ -26,6 +26,7 @@
 
 #include "impeller.h"
 #include "modules/WorldRasterStore.h"
+#include "scenegraph/Shadows.h"
 
 namespace rni {
 
@@ -74,6 +75,12 @@ struct SceneNode {
   std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
 
   bool overflowHidden{false};
+  // Style audit items 1-4 (scenegraph/Shadows.h). `shadows` holds the iOS
+  // shadow* props (as one spec) and every boxShadow entry, in paint order.
+  // elevation is Android's material shadow, painted by DrawShadow.
+  std::vector<ShadowSpec> shadows;
+  float elevation{0.0f};
+  float elevationColor[4]{0, 0, 0, 1};
   // parity item 9: RN `pointerEvents` (0 auto, 1 none, 2 box-none,
   // 3 box-only), mirrored from PointerEventsMode. Hit testing honours it.
   int pointerEvents{0};
@@ -707,6 +714,9 @@ class SceneGraph {
   ImpellerColorSource makeGradientSource(const SceneNode* def, float x, float y,
                                          float w, float h, float alpha) const;
   int painted_{0};  // reset per paint(); incremented in paintNode()
+  // The paint's point->pixel scale, for DrawShadow's device_pixel_ratio
+  // (style audit item 4, elevation). Set at the top of paint().
+  float pointScale_{1.0f};
 
   // ENG item 2 — supersample state.
   // renderContext_ is the ImpellerContext whose GL sharegroup the offscreen FBO

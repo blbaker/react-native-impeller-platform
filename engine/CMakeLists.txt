@@ -226,6 +226,7 @@ add_executable(rn-impeller
   modules/WebSocketModule.cpp
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
+  scenegraph/Shadows.cpp
   text/ImpellerTextLayoutManager.cpp
   text/FontRegistry.cpp
 )

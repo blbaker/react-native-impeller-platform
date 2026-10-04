@@ -335,6 +335,64 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
 
     node.overflowHidden = props->getClipsContentToBounds();
 
+    // SHADOWS. Style audit items 1-4.
+    //
+    // iOS model: CALayer shadow = shadowColor at shadowOpacity, offset by
+    // shadowOffset, blurred by shadowRadius. Painted only when opacity > 0 and
+    // the colour is visible, exactly the RCTViewComponentView test
+    // (layerHasShadow). RN's BaseViewProps defaults shadowOffset to (0,-3) and
+    // shadowRadius to 3, so a bare shadowOpacity still casts a shadow upward,
+    // as on iOS.
+    //
+    // CALayer shadowRadius r reads like a gaussian of sigma ~ r/2; RN's own
+    // boxShadow path sets CALayer radius = blurRadius/2, i.e. CSS blur B
+    // corresponds to CALayer radius B/2, and CSS blur B is sigma B/2. So the
+    // CALayer radius is used as sigma directly for iOS shadows, and blur/2
+    // for boxShadow, which keeps the two models consistent with each other.
+    node.shadows.clear();
+    {
+      float sc[4] = {0, 0, 0, 1};
+      const bool hasColor = (bool)props->shadowColor;
+      if (hasColor) colorToFloats(props->shadowColor, sc);
+      const float op = std::clamp((float)props->shadowOpacity, 0.0f, 1.0f);
+      if (op > 0.0f && sc[3] > 0.0f) {
+        ShadowSpec s;
+        s.offsetX = (float)props->shadowOffset.width;
+        s.offsetY = (float)props->shadowOffset.height;
+        s.sigma = std::max(0.0f, (float)props->shadowRadius);
+        for (int k = 0; k < 4; ++k) s.color[k] = sc[k];
+        s.color[3] *= op;
+        // A CALayer shadow is cast by the layer's alpha, so it shows through
+        // a translucent background (no clip-out, unlike CSS boxShadow). With
+        // an opaque background the box paints over the umbra either way.
+        s.clipOutsideBox = false;
+        node.shadows.push_back(s);
+      }
+    }
+    for (const auto& bs : props->boxShadow) {
+      ShadowSpec s;
+      s.offsetX = (float)bs.offsetX;
+      s.offsetY = (float)bs.offsetY;
+      s.sigma = std::max(0.0f, (float)bs.blurRadius) * 0.5f;
+      s.spread = (float)bs.spreadDistance;
+      s.inset = bs.inset;
+      s.clipOutsideBox = true;
+      if (bs.color) {
+        colorToFloats(bs.color, s.color);
+      } else {
+        s.color[0] = s.color[1] = s.color[2] = 0.0f;  // CSS: currentColor;
+        s.color[3] = 1.0f;                              // black in RN
+      }
+      node.shadows.push_back(s);
+    }
+    // ViewProps IS HostPlatformViewProps; ours (engine/fabric/platform/
+    // impeller) parses elevation, which RN's tvos/cxx variants drop.
+    node.elevation = std::max(0.0f, (float)props->elevation);
+    // Android tints the material shadow with outlineSpotShadowColor; RN does
+    // not expose it on Fabric desktop, so elevation shadows are black, as on
+    // an Android device with default theming.
+    node.elevationColor[0] = node.elevationColor[1] = node.elevationColor[2] = 0.0f;
+    node.elevationColor[3] = 1.0f;
     // ENG-09 hover/cursor. Collapse RN's full Cursor enum to the three shapes
     // the host has standard GLFW cursors for. Everything that is not an
     // explicit pointer/text request reads as arrow -- including Cursor::Auto,
@@ -1280,6 +1338,18 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     }
   };
 
+  // SHADOWS (style audit items 1-4), BEHIND the box: elevation's material
+  // shadow, then the iOS shadow and outer boxShadows. They paint before the
+  // background so the box covers its own umbra.
+  ShadowBox shadowBox{x, y, w, h, radii, rounded};
+  if (node.elevation > 0.0f) {
+    PaintElevationShadow(builder, shadowBox, node.elevation, node.elevationColor,
+                         OwnAlpha(node), pointScale_);
+  }
+  if (!node.shadows.empty()) {
+    PaintOuterShadows(builder, shadowBox, node.shadows, OwnAlpha(node));
+  }
+
   // GRADIENT first: in CSS a background image paints over the background colour.
   if (node.hasGradient) {
     std::vector<ImpellerColor> colors;
@@ -1314,6 +1384,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerColor c = impellerColor(node.bg, OwnAlpha(node));
     ImpellerPaintSetColor(paint, &c);
     fillBox();
+  }
+
+  // Inset boxShadows sit over the background and under the border (CSS).
+  if (!node.shadows.empty()) {
+    PaintInsetShadows(builder, shadowBox, node.borderWidths, node.shadows,
+                      OwnAlpha(node));
   }
 
   paintBorders(builder, node, x, y, w, h, radii, rounded);
@@ -2731,6 +2807,7 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder,
   // broken offscreen degrades to a correct-but-aliased frame, never a blank one.
   // N=0 (disabled) and N=1 (the mutant control) never enter here — they take the
   // in-place walk and paint the flat, un-antialiased edge the gate proves.
+  pointScale_ = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;  // elevation DPR
   if (supersample_ >= 2 && paintTreeSupersampled(builder, pointScaleFactor)) {
     // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
     // so it already reflects the visited node count.
@@ -2756,6 +2833,7 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder,
   // reachable children", and those differ by exactly this number.
   painted_ = 0;
   spritesDrawn_ = 0;
+  pointScale_ = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;  // elevation DPR
   for (auto rootTag : roots_) {
     auto it = nodes_.find(rootTag);
     if (it == nodes_.end()) continue;

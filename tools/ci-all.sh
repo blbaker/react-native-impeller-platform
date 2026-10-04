@@ -272,6 +272,13 @@ bash tools/ci-world-nearest.sh | grep -E "WORLD_NEAREST_GATE_PASS|OK [A-D]"
 echo "### gate 24d: TextInput vertical placement (ENG-16)"
 bash tools/ci-textinput-valign.sh | grep -E "TEXTINPUT_VALIGN_GATE_PASS|OK [A-E]:"
 
+# Headless, prebuilt bundle. The Mac's 66-cell style-audit grid: every landed
+# audit item must PASS (shadows, boxShadow, elevation so far) and every tile
+# the audit found working must STAY passing. Mutants:
+# mutation-verify-style-audit.sh.
+echo "### gate 24e: style audit grid (shadows + keep-green regression)"
+bash tools/ci-style-audit.sh | grep -E "STYLE_AUDIT_GATE_PASS|item [0-9]+:"
+
 # ⛔ THE NETWORKING GATE EXISTED FOR A DAY AND WAS NEVER IN THIS FILE.
 # tools/ci-p10.sh was written with the Networking TurboModule (c4e59e1) and TLS
 # (a932ded) and is only referenced by tools/mutation-verify-p10.sh — so the ONLY

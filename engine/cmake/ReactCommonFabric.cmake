@@ -106,7 +106,9 @@ set(reactcommon_fabric_SRC
   ${rr_animated_SRC} ${rr_animated_nodes_SRC} ${rr_animated_drivers_SRC}
   ${rr_animated_evdrv_SRC} ${rr_animated_internal_SRC}
   # item 11: the tvos HostPlatformViewProps has a .cpp (cxx is header-only).
-  ${RR}/components/view/platform/tvos/react/renderer/components/view/HostPlatformViewProps.cpp
+  # Style audit item 4: now OUR copy of it (engine/fabric/platform/impeller),
+  # which also parses `elevation` (only RN's android variant does).
+  ${CMAKE_SOURCE_DIR}/fabric/platform/impeller/react/renderer/components/view/HostPlatformViewProps.cpp
 )
 # Same targeted Perfetto rule as ReactCommonCore.cmake — see the long comment
 # there for why a blanket "Perfetto" filter breaks the non-Perfetto build.
@@ -128,7 +130,10 @@ target_include_directories(reactcommon_fabric SYSTEM PUBLIC
   # its traits differ only in unused parameter names. TextInputProps derive
   # from ViewProps, so fields get it too (TextInput.js always sends it, false
   # for tabIndex -1).
-  ${RR}/components/view/platform/tvos
+  # Style audit item 4: the tvos headers are vendored into
+  # engine/fabric/platform/impeller with `elevation` added, so that root is
+  # used instead of ${RR}/components/view/platform/tvos.
+  ${CMAKE_SOURCE_DIR}/fabric/platform/impeller
   ${RR}/graphics/platform/cxx
   ${RR}/textlayoutmanager/platform/cxx
   ${RR}/imagemanager/platform/cxx
