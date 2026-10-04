@@ -189,6 +189,11 @@ struct SceneNode {
   // P1 item 14: per-fragment styles. Paint draws THESE; node.text is their
   // concatenation (paragraph_text reports, the selectable-Text copy string).
   std::vector<TextRun> runs;
+  // P1 item 15: <Text selectable>. ParagraphProps::isSelectable (RN keeps the
+  // plain Paragraph component unless enablePreparedTextLayout is on, so the
+  // prop rides on the same descriptor). A press-drag over a selectable
+  // paragraph selects a byte range of `text`; see SceneGraph::textSel*_.
+  bool selectable{false};
 
   // <TextInput>. ENG-01b. A TextInput is NOT a Paragraph: it paints a single
   // editable line from a native-held buffer, a placeholder when that buffer is
@@ -641,6 +646,24 @@ class SceneGraph {
   // this exposes the JS re-render result to a headless assertion.
   std::string paragraphTextReport();
 
+  // P1 item 15: <Text selectable>. One selection at a time across all
+  // paragraphs (like a TextInput's focus): tag + [anchor, caret) UTF-8 byte
+  // offsets into that paragraph's node.text. 0 = none.
+  // selectableTextAt: the tag of a SELECTABLE paragraph under (x,y), or 0.
+  facebook::react::Tag selectableTextAt(float x, float y);
+  // The UTF-8 byte offset in `tag`'s text nearest (x,y), measured with the
+  // SAME per-run paragraph paint draws (so a wrapped or mixed-size paragraph
+  // maps a point to the glyph actually painted there).
+  size_t textOffsetAt(facebook::react::Tag tag, float x, float y);
+  void setTextSelection(facebook::react::Tag tag, size_t anchor, size_t caret);
+  void clearTextSelection();
+  facebook::react::Tag textSelectionTag();
+  // The selected bytes of the selected paragraph ("" when collapsed/none).
+  std::string selectedText();
+  // The string a selectable paragraph PAINTS (its runs joined, each with its
+  // own textTransform). Selection offsets index into this, not node.text.
+  std::string selectableTextFor(facebook::react::Tag tag);
+
  private:
   // item 3. Codepoint-boundary byte offsets of `tag`'s displayed text and the
   // SCREEN x (layout points) of each, measured with the SAME prefix-width
@@ -851,6 +874,15 @@ class SceneGraph {
   // collapsed -- "is there a selection" is `tiSelAnchor_ != tiCaret_`, never
   // a separate bool, so the two can never disagree about the collapsed case.
   size_t tiSelAnchor_{0};
+  // P1 item 15: the selectable-Text selection (see selectableTextAt). Kept
+  // separate from tiSel*: a paragraph is never focused or edited, and a click
+  // into a TextInput must not inherit a paragraph's byte offsets.
+  facebook::react::Tag textSelTag_{0};
+  size_t textSelAnchor_{0};
+  size_t textSelCaret_{0};
+  // Builds `node`'s paragraph exactly as paintNode draws it (one style per
+  // run) at layout width `w`. Caller owns the result. Caller holds mutex_.
+  ImpellerParagraph buildRunParagraph(const SceneNode& node, float w);
   // item 11: focused non-TextInput View (focus ring). 0 = none.
   facebook::react::Tag focusedView_{0};
   // <TextInput>. ENG-01b item 5: caret blink. The steady_clock instant the

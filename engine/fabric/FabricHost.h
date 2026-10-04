@@ -157,7 +157,18 @@ class FabricHost {
                        bool shift = false);
   // item 4b: extend the selection while the button is held after a press in a
   // TextInput. Returns true when the move was handled as a selection drag.
+  // P1 item 15: also extends a selectable-<Text> drag begun by
+  // beginTextSelection.
   bool dragTextSelection(float x, float y);
+  // P1 item 15: a press on a <Text selectable> starts a selection there
+  // (clickCount 2 = word, 3+ = whole text); a press anywhere else clears it.
+  // Returns the paragraph tag, or 0. Called on EVERY left press by both the
+  // windowed host and the headless --drag probe, so the two cannot diverge.
+  int beginTextSelection(float x, float y, int clickCount = 1);
+  // P1 item 15: put the selectable-<Text> selection on the clipboard (the
+  // same clipboardSet_ a field's Copy uses). Logs `clipboard op=copy-text
+  // bytes=N`; returns false (and writes nothing) when nothing is selected.
+  bool copyTextSelection();
 
   // item 11. Moves keyboard focus to the next (forward) or previous element
   // in SceneGraph::tabOrder(), wrapping. Blurs the old element; a TextInput
@@ -336,6 +347,10 @@ class FabricHost {
   int dragUnit_{1};
   size_t dragAnchorLo_{0};
   size_t dragAnchorHi_{0};
+  // P1 item 15: the selectable <Text> a held press is dragging over (0 none),
+  // and the byte offset the press landed at.
+  int textDragTag_{0};
+  size_t textDragAnchor_{0};
 
   // <TextInput>. ENG-01b. Monotonic native event counter. RN's TextInput.js
   // discards a native onChange whose eventCount is <= the last it saw, to drop

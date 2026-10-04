@@ -15,6 +15,8 @@
 #      gradient, zIndex, layout, textTransform, numberOfLines,
 #      placeholderTextColor, ...) must still PASS.
 # A tile in neither list is reported, not judged (open audit items).
+# Arms C (secure field clipboard) and D (selectable Text, P1 item 15) drive
+# input on their own scenes; see each below.
 #
 # Node-free: the bundle is committed (tools/build-style-audit-bundle.sh
 # regenerates it) and the measurer is pure python3, so the Mac runs
@@ -137,4 +139,63 @@ v="$(awk '$1=="TILE" && $3=="textInputSecure" {print $4}' "$WORK/secure-tiles.tx
 [ "$v" = PASS ] || fail "C: FOCUSED secure field does not paint bullets ($(awk '$1=="TILE" && $3=="textInputSecure"' "$WORK/secure-tiles.txt" | cut -c1-120))"
 echo "   focused secure field paints 3 bullets"
 
-echo "STYLE_AUDIT_GATE_PASS landed=${#LANDED[@]} keep=${#KEEP[@]}"
+# D. selectable <Text> (P1 item 15): the Mac's own `select` scene ('SELECT ME',
+# 32 pt, selectable). Every drag point comes from the CONTROL frame's glyph
+# ink columns (tools/select-text-measure.py), never from the engine's offset
+# report, so a defect that moves both the highlight and the report (a wrong
+# cluster rect, a wrong hit mapping) cannot pass. darwin glyph x's differ
+# from linux; deriving the points keeps one gate valid on both.
+echo "== D. selectable Text: drag paints a highlight, Copy copies it =="
+srun() {  # name, scene, extra args...
+  local name="$1" scene="$2"; shift 2
+  set +e
+  ( cd "$(dirname "$BIN")" && RNI_DRAG_COPY=1 "$BIN" --bundle "$BUNDLE" --app-name probe \
+      --headless --probe-banner off --width 400 --height 300 --initial-url "probe://$scene" \
+      --supersample-rnsvg "$SS" "$@" --screenshot "$WORK/$name.ppm" ) > "$WORK/$name.log" 2>&1
+  local rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { tail -10 "$WORK/$name.log" >&2; fail "D: $name run exited $rc"; }
+}
+kv() { echo "$1" | tr ' ' '\n' | awk -F= -v k="$2" '$1==k {print $2}'; }
+srun sel-ctl select-control
+fr="$(grep -m1 -o 'node_frame=Paragraph,[0-9]*,[0-9.,]*' "$WORK/sel-ctl.log" | cut -d, -f3-6)"
+[ -n "$fr" ] || fail "D: no Paragraph node_frame in the select-control run"
+IFS=, read -r FX FY FW FH <<< "$fr"
+FX=${FX%.*}; FY=${FY%.*}; FW=${FW%.*}; FH=${FH%.*}
+m0="$(python3 "$ROOT/tools/select-text-measure.py" "$WORK/sel-ctl.ppm" "$WORK/sel-ctl.ppm" "$FX" "$FY" "$FW" "$FH")"
+IFS=, read -r -a SEGS <<< "$(kv "$m0" SEGS)"
+[ "${#SEGS[@]}" -eq 8 ] || fail "D: control shows ${#SEGS[@]} glyph columns, want 8 ('SELECT ME' minus the space): $m0"
+sx0() { echo "${SEGS[$1]%-*}"; }; sx1() { echo "${SEGS[$1]#*-}"; }
+YM=$((FY + FH / 2))
+PX=$(( $(sx0 0) + ($(sx1 0) - $(sx0 0)) / 4 ))          # left quarter of 'S'
+CX=$(( $(sx0 4) + 3 * ($(sx1 4) - $(sx0 4)) / 4 ))      # right quarter of 'C'
+EX=$((FX + FW + 40))                                    # past the end
+dcheck() {  # name, want-text, want-x1-lo, want-x1-hi
+  local m; m="$(python3 "$ROOT/tools/select-text-measure.py" "$WORK/sel-ctl.ppm" "$WORK/$1.ppm" "$FX" "$FY" "$FW" "$FH")"
+  echo "   $1: $(grep -m1 -o 'clipboard op=copy-text.*' "$WORK/$1.log" || echo 'no copy') | $m"
+  grep -q "clipboard op=copy-text bytes=${#2} text=$2\$" "$WORK/$1.log" \
+    || fail "D: $1 copied '$(grep -m1 -o 'text=.*' "$WORK/$1.log" || true)', want '$2'"
+  local hl x0 x1 rows out core tint
+  hl=$(kv "$m" HL); x0=$(kv "$m" HL_X0); x1=$(kv "$m" HL_X1); rows=$(kv "$m" HL_ROWS)
+  out=$(kv "$m" HL_OUT); core=$(kv "$m" CORE); tint=$(kv "$m" CORE_TINT)
+  [ "$hl" -gt 0 ] || fail "D: $1 painted no selection highlight"
+  [ "$out" -lt 20 ] || fail "D: $1 highlight spills outside the paragraph ($out px)"
+  [ "$x0" -le "$(sx0 0)" ] || fail "D: $1 highlight starts at x$x0, after the first glyph's ink (x$(sx0 0))"
+  [ "$x1" -ge "$3" ] && [ "$x1" -lt "$4" ] \
+    || fail "D: $1 highlight ends at x$x1, want [$3,$4) from the control's glyph columns"
+  [ $((rows * 10)) -ge $((FH * 8)) ] || fail "D: $1 highlight is $rows rows tall, want >= 80% of the line ($FH)"
+  [ "$core" -gt 50 ] || fail "D: $1 only $core glyph-core px under the highlight: instrument blind"
+  [ $((tint * 10)) -lt "$core" ] || fail "D: $1 tinted $tint of $core glyph cores: highlight painted OVER the text"
+}
+srun sel-full select --drag "$PX,$YM:$EX,$YM"
+dcheck sel-full 'SELECT ME' "$(sx1 7)" $((FX + FW + 2))
+srun sel-part select --drag "$PX,$YM:$CX,$YM"
+dcheck sel-part 'SELEC' "$(sx1 4)" "$(sx0 5)"
+# A press with no travel selects nothing: no highlight, nothing copied.
+srun sel-tap select --drag "$PX,$YM:$PX,$YM"
+mt="$(python3 "$ROOT/tools/select-text-measure.py" "$WORK/sel-ctl.ppm" "$WORK/sel-tap.ppm" "$FX" "$FY" "$FW" "$FH")"
+echo "   sel-tap: $mt"
+[ "$(kv "$mt" HL)" -eq 0 ] || fail "D: sel-tap: a press with no drag painted a highlight"
+! grep -q 'clipboard op=copy-text' "$WORK/sel-tap.log" || fail "D: sel-tap: a press with no drag copied text"
+
+echo "STYLE_AUDIT_GATE_PASS landed=${#LANDED[@]} keep=${#KEEP[@]} select=1"

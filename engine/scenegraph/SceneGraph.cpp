@@ -557,6 +557,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       // ellipsizeMode is only consulted when the paragraph is line-clamped; an
       // unclamped Text never truncates, so the mode is irrelevant there.
       node.ellipsizeMode = (int)pp->paragraphAttributes.ellipsizeMode;
+      node.selectable = pp->isSelectable;  // P1 item 15
     }
     // textTransform rides on the per-fragment TextAttributes, not on
     // ParagraphProps. Read it from the FIRST non-empty fragment: RN resolves a
@@ -1158,7 +1159,119 @@ bool UsesOpacityLayer(const SceneNode& n) {
 float OwnAlpha(const SceneNode& n) {
   return UsesOpacityLayer(n) ? 1.0f : n.opacity;
 }
+
+// P1 item 15: the string a paragraph PAINTS, i.e. its runs joined (each run
+// already carries its own textTransform). Selection offsets index this.
+std::string JoinRuns(const SceneNode& n) {
+  std::string s;
+  for (const TextRun& r : n.runs) s += r.text;
+  return s;
+}
+
+// P1 item 15: the grapheme cluster's bounds in PARAGRAPH space. Impeller's
+// interop (impeller/toolkit/interop/glyph_info.cc, SDK 114eb18 and upstream
+// master as of 2026-10) builds the rect as {bounds.y(), bounds.x(), w, h}:
+// x and y arrive SWAPPED. Measured on 'SELECT ME' at 32 pt: r.x stays 0.1
+// for every glyph while r.y steps 0, 16.8, 34.7 ... Un-swap here, in ONE
+// place, so the highlight and the press->offset mapping agree. If an SDK
+// bump fixes the swap, ci-style-audit tile `select` fails (highlight turns
+// into a 1-glyph-wide column) and this is the line to delete.
+ImpellerRect ClusterBounds(ImpellerGlyphInfo gi) {
+  ImpellerRect r{};
+  ImpellerGlyphInfoGetGraphemeClusterBounds(gi, &r);
+  return ImpellerRect{r.y, r.x, r.width, r.height};
+}
+
+// UTF-8 byte offset -> UTF-16 code-unit index (Impeller's paragraph indexes
+// glyphs in UTF-16 units). A 4-byte sequence is a surrogate pair (2 units).
+size_t Utf8ToUtf16Index(const std::string& s, size_t byteOff) {
+  size_t units = 0;
+  for (size_t i = 0; i < byteOff && i < s.size();) {
+    const unsigned char c = (unsigned char)s[i];
+    const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
+    units += len == 4 ? 2 : 1;
+    i += len;
+  }
+  return units;
+}
+
+// Inverse: UTF-16 index -> UTF-8 byte offset, clamped, on a codepoint boundary.
+size_t Utf16ToUtf8Index(const std::string& s, size_t units) {
+  size_t i = 0, u = 0;
+  while (i < s.size() && u < units) {
+    const unsigned char c = (unsigned char)s[i];
+    const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
+    u += len == 4 ? 2 : 1;
+    i += len;
+  }
+  return std::min(i, s.size());
+}
 }  // namespace
+
+// P1 item 14: one style push per run, mirroring ImpellerTextLayoutManager
+// fragment for fragment, so measure and paint agree on every run's size, face,
+// weight and pitch. Paragraph-level settings (alignment, clamp, ellipsis) ride
+// on EVERY run's style: Impeller takes them from the first style on the stack,
+// and measure sets the clamp on every run the same way. Item 15's hit mapping
+// builds through here too, so a point maps to the glyph PAINTED there.
+ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) {
+  if (typography_ == nullptr) return nullptr;
+  std::vector<ImpellerPaint> runPaints;
+  ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
+  if (pb == nullptr) return nullptr;
+  for (const TextRun& run : node.runs) {
+    if (run.text.empty()) continue;
+    ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
+    ImpellerParagraphStyleSetFontSize(style, run.fontSize);
+    ApplyFontFamily(style, run.fontFamily);  // ENG-22
+    ApplyLineHeight(style, run.lineHeight, run.fontSize);  // ENG-23
+    // Style audit items 5, 7 (text/TextStyle.h). Weight is measured too.
+    ApplyFontWeight(style, run.fontWeight);
+    ApplyTextAlign(style, node.textAlign);
+    if (node.maxLines > 0) {
+      // Painting must honour the same clamp measurement did, or a
+      // numberOfLines={1} label is measured at one line and painted at
+      // three, overflowing whatever sits below it.
+      ImpellerParagraphStyleSetMaxLines(style, (uint32_t)node.maxLines);
+      // ⛔ ELLIPSIS ONLY MAKES SENSE ON A CLAMPED PARAGRAPH. RN's
+      // EllipsizeMode: 0 Clip (hard cut, NO ellipsis string), 1 Head,
+      // 2 Tail (RN default), 3 Middle. Impeller's C API exposes one ellipsis
+      // STRING, not a position, so Head/Tail/Middle all truncate at the tail.
+      if (node.ellipsizeMode != 0) {
+        ImpellerParagraphStyleSetEllipsis(style, "\xE2\x80\xA6");  // U+2026 …
+      }
+    }
+    ImpellerPaint textPaint = ImpellerPaintNew();
+    ImpellerColor tc = impellerColor(run.color, OwnAlpha(node));
+    ImpellerPaintSetColor(textPaint, &tc);
+    ImpellerParagraphStyleSetForeground(style, textPaint);
+    runPaints.push_back(textPaint);
+    // A nested <Text style={{backgroundColor}}> fills behind its own glyphs
+    // only (RN iOS NSBackgroundColorAttributeName), not the whole line box.
+    if (run.hasBackground) {
+      ImpellerPaint bgPaint = ImpellerPaintNew();
+      ImpellerColor bc = impellerColor(run.background, OwnAlpha(node));
+      ImpellerPaintSetColor(bgPaint, &bc);
+      ImpellerParagraphStyleSetBackground(style, bgPaint);
+      runPaints.push_back(bgPaint);
+    }
+    // Style audit item 9: decoration colour defaults to the run's colour.
+    ApplyTextDecoration(style, run.decoLine, run.decoStyle,
+                        impellerColor(run.hasDecoColor ? run.decoColor
+                                                       : run.color,
+                                      OwnAlpha(node)));
+    ImpellerParagraphBuilderPushStyle(pb, style);
+    ImpellerParagraphBuilderAddText(pb, (const uint8_t*)run.text.c_str(),
+                                    run.text.size());
+    ImpellerParagraphBuilderPopStyle(pb);
+    ImpellerParagraphStyleRelease(style);
+  }
+  ImpellerParagraph paragraph =
+      ImpellerParagraphBuilderBuildParagraphNew(pb, w > 0 ? w : 1e6f);
+  ImpellerParagraphBuilderRelease(pb);
+  for (ImpellerPaint p : runPaints) ImpellerPaintRelease(p);
+  return paragraph;
+}
 
 void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                            const SceneNode& node, float originX,
@@ -1606,69 +1719,39 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
 #endif
 
   if (node.isParagraph && !node.runs.empty() && typography_ != nullptr) {
-    // P1 item 14: one style push per run, mirroring ImpellerTextLayoutManager
-    // fragment for fragment, so measure and paint agree on every run's size,
-    // face, weight and pitch. Paragraph-level settings (alignment, clamp,
-    // ellipsis) ride on EVERY run's style: Impeller takes them from the first
-    // style on the stack, and measure sets the clamp on every run the same way.
-    std::vector<ImpellerPaint> runPaints;
-    ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
-    for (const TextRun& run : node.runs) {
-      if (run.text.empty()) continue;
-      ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
-      ImpellerParagraphStyleSetFontSize(style, run.fontSize);
-      ApplyFontFamily(style, run.fontFamily);  // ENG-22
-      ApplyLineHeight(style, run.lineHeight, run.fontSize);  // ENG-23
-      // Style audit items 5, 7 (text/TextStyle.h). Weight is measured too.
-      ApplyFontWeight(style, run.fontWeight);
-      ApplyTextAlign(style, node.textAlign);
-      if (node.maxLines > 0) {
-        // Painting must honour the same clamp measurement did, or a
-        // numberOfLines={1} label is measured at one line and painted at
-        // three, overflowing whatever sits below it.
-        ImpellerParagraphStyleSetMaxLines(style, (uint32_t)node.maxLines);
-        // ⛔ ELLIPSIS ONLY MAKES SENSE ON A CLAMPED PARAGRAPH. RN's
-        // EllipsizeMode: 0 Clip (hard cut, NO ellipsis string), 1 Head,
-        // 2 Tail (RN default), 3 Middle. Impeller's C API exposes one ellipsis
-        // STRING, not a position, so Head/Tail/Middle all truncate at the tail.
-        if (node.ellipsizeMode != 0) {
-          ImpellerParagraphStyleSetEllipsis(style, "\xE2\x80\xA6");  // U+2026 …
-        }
-      }
-      ImpellerPaint textPaint = ImpellerPaintNew();
-      ImpellerColor tc = impellerColor(run.color, OwnAlpha(node));
-      ImpellerPaintSetColor(textPaint, &tc);
-      ImpellerParagraphStyleSetForeground(style, textPaint);
-      runPaints.push_back(textPaint);
-      // A nested <Text style={{backgroundColor}}> fills behind its own glyphs
-      // only (RN iOS NSBackgroundColorAttributeName), not the whole line box.
-      if (run.hasBackground) {
-        ImpellerPaint bgPaint = ImpellerPaintNew();
-        ImpellerColor bc = impellerColor(run.background, OwnAlpha(node));
-        ImpellerPaintSetColor(bgPaint, &bc);
-        ImpellerParagraphStyleSetBackground(style, bgPaint);
-        runPaints.push_back(bgPaint);
-      }
-      // Style audit item 9: decoration colour defaults to the run's colour.
-      ApplyTextDecoration(style, run.decoLine, run.decoStyle,
-                          impellerColor(run.hasDecoColor ? run.decoColor
-                                                         : run.color,
-                                        OwnAlpha(node)));
-      ImpellerParagraphBuilderPushStyle(pb, style);
-      ImpellerParagraphBuilderAddText(pb, (const uint8_t*)run.text.c_str(),
-                                      run.text.size());
-      ImpellerParagraphBuilderPopStyle(pb);
-      ImpellerParagraphStyleRelease(style);
-    }
-    ImpellerParagraph paragraph =
-        ImpellerParagraphBuilderBuildParagraphNew(pb, w > 0 ? w : 1e6f);
+    ImpellerParagraph paragraph = buildRunParagraph(node, w);
     if (paragraph != nullptr) {
+      // P1 item 15: a selectable paragraph's selection highlight, UNDER the
+      // glyphs (drawn first), one rect per selected grapheme cluster as laid
+      // out in THIS paragraph, so a wrapped selection follows its lines.
+      if (node.selectable && textSelTag_ == node.tag &&
+          textSelAnchor_ != textSelCaret_) {
+        const std::string shown = JoinRuns(node);
+        const size_t lo8 = std::min(textSelAnchor_, textSelCaret_);
+        const size_t hi8 = std::min(std::max(textSelAnchor_, textSelCaret_),
+                                    shown.size());
+        const size_t lo16 = Utf8ToUtf16Index(shown, lo8);
+        const size_t hi16 = Utf8ToUtf16Index(shown, hi8);
+        ImpellerPaint selPaint = ImpellerPaintNew();
+        ImpellerColor sc = impellerColor(node.tiSelectionColor, OwnAlpha(node));
+        ImpellerPaintSetColor(selPaint, &sc);
+        for (size_t i = lo16; i < hi16;) {
+          ImpellerGlyphInfo gi =
+              ImpellerParagraphCreateGlyphInfoAtCodeUnitIndexNew(paragraph, i);
+          if (gi == nullptr) break;
+          const ImpellerRect r = ClusterBounds(gi);
+          const size_t end = ImpellerGlyphInfoGetGraphemeClusterCodeUnitRangeEnd(gi);
+          ImpellerGlyphInfoRelease(gi);
+          ImpellerRect at = {x + r.x, y + r.y, r.width, r.height};
+          ImpellerDisplayListBuilderDrawRect(builder, &at, selPaint);
+          i = end > i ? end : i + 1;
+        }
+        ImpellerPaintRelease(selPaint);
+      }
       ImpellerPoint at = {x, y};
       ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
       ImpellerParagraphRelease(paragraph);
     }
-    ImpellerParagraphBuilderRelease(pb);
-    for (ImpellerPaint p : runPaints) ImpellerPaintRelease(p);
   }
 
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
@@ -3363,6 +3446,98 @@ std::string SceneGraph::paragraphTextReport() {
     }
   }
   return out;
+}
+
+// P1 item 15. The hit walk resolves the DEEPEST node with a frame under the
+// point; a selectable <Text> is a leaf Paragraph (its nested runs are
+// fragments, not nodes), so a direct hit on it is exactly "the press is on
+// this text". Its own pointerEvents/clip/scroll rules come from hitTestNode.
+facebook::react::Tag SceneGraph::selectableTextAt(float x, float y) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (auto it = roots_.rbegin(); it != roots_.rend(); ++it) {
+    auto root = nodes_.find(*it);
+    if (root == nodes_.end()) continue;
+    if (auto hit = hitTestNode(root->second, 0, 0, x, y)) {
+      auto n = nodes_.find(hit);
+      if (n != nodes_.end() && n->second.isParagraph && n->second.selectable &&
+          !n->second.runs.empty()) {
+        return hit;
+      }
+      return 0;
+    }
+  }
+  return 0;
+}
+
+size_t SceneGraph::textOffsetAt(facebook::react::Tag tag, float x, float y) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end() || !it->second.isParagraph) return 0;
+  const SceneNode& node = it->second;
+  float ox = 0.0f, oy = 0.0f;
+  if (!absoluteOriginLocked(tag, &ox, &oy)) return 0;
+  const std::string shown = JoinRuns(node);
+  ImpellerParagraph par =
+      buildRunParagraph(node, (float)node.layoutMetrics.frame.size.width);
+  if (par == nullptr) return 0;
+  size_t off = 0;
+  ImpellerGlyphInfo gi = ImpellerParagraphCreateGlyphInfoAtParagraphCoordinatesNew(
+      par, (double)(x - ox), (double)(y - oy));
+  if (gi != nullptr) {
+    // Nearer edge of the cluster under the point: a press on the right half
+    // of a glyph puts the boundary AFTER it, the way every text view does.
+    const ImpellerRect r = ClusterBounds(gi);
+    const size_t b = ImpellerGlyphInfoGetGraphemeClusterCodeUnitRangeBegin(gi);
+    const size_t e = ImpellerGlyphInfoGetGraphemeClusterCodeUnitRangeEnd(gi);
+    const bool after = (x - ox) > r.x + r.width * 0.5f;
+    off = Utf16ToUtf8Index(shown, after ? e : b);
+    ImpellerGlyphInfoRelease(gi);
+  } else if ((x - ox) > 0.0f) {
+    off = shown.size();  // past the last glyph
+  }
+  ImpellerParagraphRelease(par);
+  return off;
+}
+
+void SceneGraph::setTextSelection(facebook::react::Tag tag, size_t anchor,
+                                  size_t caret) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (tag == textSelTag_ && anchor == textSelAnchor_ && caret == textSelCaret_) return;
+  textSelTag_ = tag;
+  textSelAnchor_ = anchor;
+  textSelCaret_ = caret;
+  // P12-01: the highlight moved -- scene damage, or an idle window never
+  // repaints it (the same rule setTextInputSelection follows).
+  bumpVersion();
+}
+
+void SceneGraph::clearTextSelection() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (textSelTag_ == 0 && textSelAnchor_ == textSelCaret_) return;
+  textSelTag_ = 0;
+  textSelAnchor_ = textSelCaret_ = 0;
+  bumpVersion();  // P12-01: the highlight disappears
+}
+
+facebook::react::Tag SceneGraph::textSelectionTag() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return textSelAnchor_ != textSelCaret_ ? textSelTag_ : 0;
+}
+
+std::string SceneGraph::selectableTextFor(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  return it == nodes_.end() ? std::string() : JoinRuns(it->second);
+}
+
+std::string SceneGraph::selectedText() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(textSelTag_);
+  if (it == nodes_.end() || textSelAnchor_ == textSelCaret_) return {};
+  const std::string shown = JoinRuns(it->second);
+  const size_t lo = std::min(std::min(textSelAnchor_, textSelCaret_), shown.size());
+  const size_t hi = std::min(std::max(textSelAnchor_, textSelCaret_), shown.size());
+  return shown.substr(lo, hi - lo);
 }
 
 std::string SceneGraph::describe() {

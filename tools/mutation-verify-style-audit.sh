@@ -31,10 +31,20 @@
 #   M22 every run painted in the LAST run's colour     -> nestedText
 #   M23 every run painted at the LAST run's size       -> nestedTextSize
 #   M24 a nested run's backgroundColor never painted   -> textBackground
+#   M25 `selectable` never read                        -> arm D sel-full (nothing copied)
+#   M26 Impeller's swapped cluster rect used raw       -> arm D sel-full (highlight
+#       becomes a column spilling out of the paragraph)
+#   M27 selection highlight never painted              -> arm D sel-full
+#   M28 highlight painted OVER the glyphs              -> arm D sel-full (cores tinted)
+#   M29 a held move never extends the selection        -> arm D sel-full (nothing copied)
+#   M30 press always lands after the glyph it hits     -> arm D sel-full ('ELECT ME')
+#   M31 Copy chord never reaches the text selection    -> arm D sel-full (nothing copied)
 # Not covered (the fixture cannot see it, so it is not claimed): boxShadow's
 # clip-out of the border box, which only shows under a translucent background;
 # the secure caret/selection offsets mapped through the mask (the caret stays
-# right of the bullets either way).
+# right of the bullets either way); item 15's double/triple-click word/line
+# selection and a press elsewhere clearing it (the headless --drag path is
+# one single-click press, and its move collapses any press-time selection).
 # Sources are restored on exit, whatever happens.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -248,8 +258,57 @@ mutate "$SG" "      if (run.hasBackground) {" "      if (false) {"
 check M24 textBackground
 fi
 
+# P1 item 15: arm D (selectable Text). check() matches the words of the FAIL
+# line, so each mutant names the arm-D check that must catch it.
+if want M25; then
+echo "== M25: \`selectable\` never read from ParagraphProps =="
+mutate "$SG" "node.selectable = pp->isSelectable;  // P1 item 15" "node.selectable = false;  // P1 item 15"
+check M25 sel-full copied
+fi
+
+if want M26; then
+echo "== M26: cluster rect used as Impeller returns it (x/y swapped) =="
+mutate "$SG" "  return ImpellerRect{r.y, r.x, r.width, r.height};" "  return r;"
+check M26 sel-full highlight
+fi
+
+if want M27; then
+echo "== M27: selection highlight never painted =="
+mutate "$SG" "      if (node.selectable && textSelTag_ == node.tag &&" "      if (false && node.selectable && textSelTag_ == node.tag &&"
+check M27 sel-full highlight
+fi
+
+if want M28; then
+echo "== M28: highlight painted OVER the glyphs =="
+mutate "$SG" "      if (node.selectable && textSelTag_ == node.tag &&" "      ImpellerPoint pre = {x, y};
+      ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &pre);
+      if (node.selectable && textSelTag_ == node.tag &&"
+mutate "$SG" "      ImpellerPoint at = {x, y};
+      ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
+      ImpellerParagraphRelease(paragraph);" "      ImpellerParagraphRelease(paragraph);"
+check M28 sel-full OVER
+fi
+
+if want M29; then
+echo "== M29: a held move never extends the selection =="
+mutate "$FH" "  if (sceneGraph_ && textDragTag_ != 0) {" "  if (false && sceneGraph_ && textDragTag_ != 0) {"
+check M29 sel-full
+fi
+
+if want M30; then
+echo "== M30: press offset ignores the half-glyph rule (always the glyph's end) =="
+mutate "$SG" "const bool after = (x - ox) > r.x + r.width * 0.5f;" "const bool after = true; (void)ox;"
+check M30 sel-full
+fi
+
+if want M31; then
+echo "== M31: Copy chord with no focused field never copies the text selection =="
+mutate "$FH" "    if (copyChord) copyTextSelection();" "    (void)copyChord;"
+check M31 sel-full copied
+fi
+
 if [ -n "${ONLY:-}" ]; then
   echo "STYLE_MUTATION_PARTIAL_PASS (ONLY=$ONLY killed for their own tile; not a full run)"
 else
-  echo "STYLE_MUTATION_PASS (24/24 mutants killed for their own tile: shadows 1-4, secure 11, rounded clip 13, weight 5, align 7, decoration 9, dashed/dotted 10/25, nested runs P1-14)"
+  echo "STYLE_MUTATION_PASS (31/31 mutants killed for their own tile: shadows 1-4, secure 11, rounded clip 13, weight 5, align 7, decoration 9, dashed/dotted 10/25, nested runs P1-14, selectable Text P1-15)"
 fi

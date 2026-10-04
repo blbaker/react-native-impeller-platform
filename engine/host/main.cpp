@@ -718,6 +718,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       // (extend) come from the surface, which counted this press.
       const int focused = fabric.focusTextInputAt(
           x, y, surface.lastClickCount(), surface.lastPressShift());
+      // P1 item 15: the same press starts (or clears) a selectable-<Text>
+      // selection. A press that focused a field cannot also be on text.
+      if (focused == 0) fabric.beginTextSelection(x, y, surface.lastClickCount());
       printf("rn-impeller: textinput_focus=%d at=%.1f,%.1f clicks=%d\n",
              focused, x, y, surface.lastClickCount());
       ++touchDowns;
@@ -2403,11 +2406,18 @@ int main(int argc, char** argv) {
       int downTag = fabric.beginTouchCapture(pts.front().first, pts.front().second);
       printf("rn-impeller: drag_down_tag=%d at=%.1f,%.1f\n", downTag,
              pts.front().first, pts.front().second);
+      // P1 item 15: the SAME press-path the windowed mouse handler runs, so a
+      // headless drag across a <Text selectable> selects exactly as a real
+      // one does (the Mac audit's probe://select scene drives this).
+      fabric.beginTextSelection(pts.front().first, pts.front().second);
       // Every intermediate point is a held move; the LAST point is the release.
       // Report the tag each move reached: it MUST equal downTag for the whole
       // drag, including a waypoint outside the control's bounds.
       int lastMoveTag = downTag;
       for (size_t i = 1; i + 1 < pts.size(); ++i) {
+        // P1 item 15: the windowed hover handler extends a held selection
+        // FIRST (dragTextSelection), then routes the captured move; mirror it.
+        fabric.dragTextSelection(pts[i].first, pts[i].second);
         int mt = fabric.dispatchCapturedMove(pts[i].first, pts[i].second);
         lastMoveTag = mt;
         printf("rn-impeller: drag_move_tag=%d at=%.1f,%.1f\n", mt, pts[i].first,
@@ -2420,14 +2430,32 @@ int main(int argc, char** argv) {
       // plain tap. This move is at the release point, which is the off-control
       // location the gate places to catch a re-hit-test.
       if (pts.size() == 2) {
+        fabric.dragTextSelection(pts.back().first, pts.back().second);
         int mt = fabric.dispatchCapturedMove(pts.back().first, pts.back().second);
         lastMoveTag = mt;
         printf("rn-impeller: drag_move_tag=%d at=%.1f,%.1f\n", mt,
                pts.back().first, pts.back().second);
+      } else {
+        // A real pointer reaches the release point through a cursor move
+        // first; extend a held text selection to it the same way.
+        fabric.dragTextSelection(pts.back().first, pts.back().second);
       }
       int upTag = fabric.endTouchCapture(pts.back().first, pts.back().second);
+      fabric.endTextSelectionDrag();  // the windowed release does the same
       printf("rn-impeller: drag_up_tag=%d at=%.1f,%.1f\n", upTag,
              pts.back().first, pts.back().second);
+      // P1 item 15: RNI_DRAG_COPY=1 presses the platform Copy chord after the
+      // release, through dispatchKeyEvent (the real key path), so a gate can
+      // prove a selectable <Text>'s selection reaches the clipboard.
+      if (const char* dc = std::getenv("RNI_DRAG_COPY"); dc && dc[0] == '1') {
+        rni::FabricHost::KeyModifiers cm{};
+#if defined(__APPLE__)
+        cm.meta = true;
+#else
+        cm.ctrl = true;
+#endif
+        fabric.dispatchKeyEvent("c", "KeyC", rni::FabricHost::KeyEventPhase::Down, cm);
+      }
       // After release the capture MUST be clear: a move now is a hover, not a
       // drag. captured=0 here proves endTouchCapture reset the state -- a stuck
       // capture would silently swallow every later click as a drag move.

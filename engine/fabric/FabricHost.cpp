@@ -1255,6 +1255,19 @@ int FabricHost::focusTextInputAt(float x, float y, int clickCount,
 // unit the press chose (1 char, 2 word, 3 line). Returns true when it handled
 // the move (the caller skips hover dispatch).
 bool FabricHost::dragTextSelection(float x, float y) {
+  // P1 item 15: a held press that began on a selectable <Text> extends that
+  // paragraph's selection from the press point. The point is mapped through
+  // the paragraph's OWN layout even when the cursor leaves its box (a drag
+  // past the end selects to the end), so no re-hit-test happens here.
+  if (sceneGraph_ && textDragTag_ != 0) {
+    const react::Tag tag = (react::Tag)textDragTag_;
+    const size_t caret = sceneGraph_->textOffsetAt(tag, x, y);
+    sceneGraph_->setTextSelection(tag, textDragAnchor_, caret);
+    printf("rn-impeller: text_selection tag=%d anchor=%zu caret=%zu drag=1\n",
+           (int)tag, textDragAnchor_, caret);
+    fflush(stdout);
+    return true;
+  }
   if (!sceneGraph_ || !runtimeScheduler_ || dragTag_ == 0) return false;
   const react::Tag tag = (react::Tag)dragTag_;
   if (sceneGraph_->focusedTextInput() != tag) {
@@ -1310,7 +1323,51 @@ bool FabricHost::dragTextSelection(float x, float y) {
   return true;
 }
 
-void FabricHost::endTextSelectionDrag() { dragTag_ = 0; }
+void FabricHost::endTextSelectionDrag() {
+  dragTag_ = 0;
+  textDragTag_ = 0;  // P1 item 15: the selection itself stays until a press
+}
+
+// P1 item 15. See the header. A press that does not land on selectable text
+// clears any paragraph selection, as a click elsewhere does on every desktop.
+int FabricHost::beginTextSelection(float x, float y, int clickCount) {
+  if (!sceneGraph_) return 0;
+  textDragTag_ = 0;
+  const react::Tag tag = sceneGraph_->selectableTextAt(x, y);
+  if (tag == 0) {
+    sceneGraph_->clearTextSelection();
+    return 0;
+  }
+  const std::string shown = sceneGraph_->selectableTextFor(tag);
+  const size_t hit = sceneGraph_->textOffsetAt(tag, x, y);
+  size_t anchor = hit, caret = hit;
+  if (clickCount >= 3) {
+    anchor = 0;
+    caret = shown.size();
+  } else if (clickCount == 2) {
+    anchor = Utf8WordStartAt(shown, hit);
+    caret = Utf8WordEndAt(shown, hit);
+  }
+  sceneGraph_->setTextSelection(tag, anchor, caret);
+  // A word/line press drags from the start of what it selected.
+  textDragTag_ = (int)tag;
+  textDragAnchor_ = anchor;
+  printf("rn-impeller: text_selection tag=%d anchor=%zu caret=%zu clicks=%d\n",
+         (int)tag, anchor, caret, clickCount);
+  fflush(stdout);
+  return (int)tag;
+}
+
+bool FabricHost::copyTextSelection() {
+  if (!sceneGraph_ || sceneGraph_->textSelectionTag() == 0) return false;
+  const std::string selected = sceneGraph_->selectedText();
+  if (selected.empty()) return false;
+  if (clipboardSet_) clipboardSet_(selected);
+  printf("rn-impeller: clipboard op=copy-text bytes=%zu text=%s\n",
+         selected.size(), EscapeForLog(selected).c_str());
+  fflush(stdout);
+  return true;
+}
 
 bool FabricHost::hasTextInputFocus() {
   return sceneGraph_ && sceneGraph_->focusedTextInput() != 0;
@@ -1677,6 +1734,20 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
     }
     // item 4a: Shift extends the selection for caret moves.
     if (isCaretKey) dispatchKey(caretAction, 0, mods.shift);
+  }
+
+  // P1 item 15: Copy with NO focused field copies a selectable <Text>'s
+  // selection (Cmd+C on darwin, Ctrl+C / Ctrl+Insert elsewhere, the same
+  // chords the field path uses). A focused field always wins: it owns the
+  // keyboard, and a stale paragraph selection must not hijack its Copy.
+  if (sceneGraph_->focusedTextInput() == 0 && phase != KeyEventPhase::Up) {
+#if defined(__APPLE__)
+    const bool copyChord = (key == "c" || key == "C") && mods.meta && !mods.alt;
+#else
+    const bool copyChord = ((key == "c" || key == "C") && mods.ctrl && !mods.alt) ||
+                           (key == "Insert" && mods.ctrl && !mods.alt);
+#endif
+    if (copyChord) copyTextSelection();
   }
 
   // (a) TextInput onKeyPress. Down/Repeat only -- onKeyPress has no release
