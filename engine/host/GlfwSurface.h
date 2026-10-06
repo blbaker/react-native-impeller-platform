@@ -44,6 +44,13 @@ class GlfwSurface {
   // HeadlessSurface's contract.
   bool init(int width, int height, std::string* error);
 
+  // --title: the string handed to glfwCreateWindow (window title bar, macOS
+  // Window menu). Call BEFORE init(); an empty string keeps the default.
+  void setTitle(const std::string& title) {
+    if (!title.empty()) title_ = title;
+  }
+  const std::string& title() const { return title_; }
+
   ImpellerContext context() const { return context_; }
   ImpellerSurface surface() const { return surface_; }
   ImpellerTypographyContext typography() const { return typography_; }
@@ -470,6 +477,8 @@ class GlfwSurface {
   void present();  // glfwSwapBuffers
 
  private:
+  std::string title_ = "React Native (Impeller)";
+
 #if defined(__APPLE__)
   // Builds the ANGLE display/context and the window surface bound to the
   // Cocoa view. Split out because it is the entire darwin-only story.

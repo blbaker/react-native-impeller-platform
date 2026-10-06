@@ -74,6 +74,10 @@
 // right after init and BEFORE anything measures (see text/FontRegistry.h).
 static std::vector<std::string> gFontDirs;
 
+// --title: windowed-mode window title (title bar + macOS Window menu). Empty =
+// GlfwSurface's default, "React Native (Impeller)".
+static std::string gWindowTitle;
+
 // Process-start clock for the first_present_ms line. Static init runs before
 // main(), so this is as close to "launch" as the process can see.
 static const auto gProcessStart = std::chrono::steady_clock::now();
@@ -138,6 +142,9 @@ void Usage() {
           "                     default 4 on darwin, 0 (off) elsewhere\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
+          "                   [--title <string>]  (windowed) window title, also\n"
+          "                     the macOS Window menu entry. Default\n"
+          "                     \"React Native (Impeller)\".\n"
           "                   [--screenshot-first <file.ppm>]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
           "       rn-impeller --test-openurl   (URL predicate self-test)\n"
@@ -384,6 +391,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   (void)bundleSize;
   rni::GlfwSurface surface;
   std::string error;
+  surface.setTitle(gWindowTitle);  // before init: glfwCreateWindow takes it
+  std::printf("rn-impeller: window_title=%s\n", surface.title().c_str());
+  std::fflush(stdout);
   if (!surface.init(width, height, &error)) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
@@ -2053,6 +2063,7 @@ int main(int argc, char** argv) {
     // ENG-22: a dir of .ttf/.otf/.ttc files to register (repeatable; also
     // RNI_FONT_DIRS, colon-separated). Faces register under their own family.
     else if (a == "--font-dir") gFontDirs.push_back(next("--font-dir"));
+    else if (a == "--title") gWindowTitle = next("--title");
     else if (a == "--test-urlparse") testUrlParse = true;
     else if (a == "--test-http") testHttp = true;
     else if (a == "--color-scheme") colorScheme = next("--color-scheme");

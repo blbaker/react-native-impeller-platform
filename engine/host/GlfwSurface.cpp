@@ -459,8 +459,7 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
     std::fflush(stdout);
   }
 
-  window_ = glfwCreateWindow(width, height, "React Native (Impeller)", nullptr,
-                             nullptr);
+  window_ = glfwCreateWindow(width, height, title_.c_str(), nullptr, nullptr);
   if (!window_) return fail("glfwCreateWindow failed");
 
   // ⛔ CENTRE IN THE MONITOR WORK AREA WHEN WE CHOSE THE SIZE OURSELVES.
