@@ -348,6 +348,59 @@ struct MouseSpec {
   bool ctrl = false, alt = false, meta = false;
 };
 
+// ENG-18. One --type token. The headless probe and the windowed hook both
+// read the SAME parsed list, so a spec means the same thing in both modes.
+//   plain text   one character (UTF-8 decoded to a codepoint)
+//   <BS>         Backspace       <CR>    Enter        <S-CR>  Shift+Enter
+//   <SA>         select all      <COPY>  copy         <CUT>   cut
+struct TypeToken {
+  enum Kind { Char, Backspace, Enter, ShiftEnter, SelectAll, Copy, Cut } kind;
+  unsigned int codepoint = 0;
+};
+
+static std::vector<TypeToken> ParseTypeSeq(const std::string& seq) {
+  std::vector<TypeToken> out;
+  static const struct { const char* tag; TypeToken::Kind kind; } kTags[] = {
+      {"<S-CR>", TypeToken::ShiftEnter}, {"<BS>", TypeToken::Backspace},
+      {"<CR>", TypeToken::Enter},        {"<SA>", TypeToken::SelectAll},
+      {"<COPY>", TypeToken::Copy},       {"<CUT>", TypeToken::Cut},
+  };
+  for (size_t i = 0; i < seq.size();) {
+    bool tagged = false;
+    for (const auto& t : kTags) {
+      const size_t n = std::strlen(t.tag);
+      if (seq.compare(i, n, t.tag) == 0) {
+        out.push_back({t.kind, 0});
+        i += n;
+        tagged = true;
+        break;
+      }
+    }
+    if (tagged) continue;
+    // UTF-8 decode one codepoint (ASCII is one byte, unchanged from before).
+    const unsigned char c = (unsigned char)seq[i];
+    unsigned int cp = c;
+    size_t len = 1;
+    if (c >= 0xF0) {
+      cp = c & 0x07; len = 4;
+    } else if (c >= 0xE0) {
+      cp = c & 0x0F; len = 3;
+    } else if (c >= 0xC0) {
+      cp = c & 0x1F; len = 2;
+    }
+    if (i + len > seq.size()) len = 1, cp = c;
+    for (size_t k = 1; k < len; ++k) cp = (cp << 6) | ((unsigned char)seq[i + k] & 0x3F);
+    out.push_back({TypeToken::Char, cp});
+    i += len;
+  }
+  return out;
+}
+
+// ENG-18: the windowed --type spec, set by main() before RunWindowed. File
+// scope (like gFontDirs) so RunWindowed's long positional signature does not
+// grow again. Empty = no windowed typing.
+static std::string gWindowedTypeSpec;
+
 #if RNI_WITH_WINDOW
 // The windowed repaint loop.
 //
@@ -973,6 +1026,38 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // dirty explicitly below.
   uint64_t lastPresentedVersion = 0;
 
+  // ENG-18: windowed --type. Settle the mount, focus the field at X,Y (layout
+  // points, the same coordinates headless --type takes), then feed ONE token
+  // per frame through the real windowed entry points: characters through
+  // GlfwSurface::synthesiseChar (the char callback's handler) and Enter /
+  // Shift+Enter / Backspace through GlfwSurface::synthesiseKey (the key
+  // callback's translation, so onKeyPress, keyDown and the editing handler
+  // all run exactly as for a real keystroke). Then print the same
+  // textinput_value + paragraph report headless prints, capture --screenshot
+  // two frames later, and exit unless --frames / --idle-run-sec ask for more.
+  std::vector<TypeToken> typeTokens;
+  float typeX = 0.0f, typeY = 0.0f;
+  const bool typePlan = !gWindowedTypeSpec.empty();
+  if (typePlan) {
+    const auto colon = gWindowedTypeSpec.find(':');
+    if (colon == std::string::npos ||
+        std::sscanf(gWindowedTypeSpec.substr(0, colon).c_str(), "%f,%f",
+                    &typeX, &typeY) != 2) {
+      fprintf(stderr, "rn-impeller: FATAL: --type wants X,Y:SEQ (got '%s')\n",
+              gWindowedTypeSpec.c_str());
+      return 1;
+    }
+    typeTokens = ParseTypeSeq(gWindowedTypeSpec.substr(colon + 1));
+    printf("rn-impeller: type_window tokens=%zu at=%.1f,%.1f\n",
+           typeTokens.size(), typeX, typeY);
+    fflush(stdout);
+  }
+  int typeFocusTag = -1;  // -1 = not focused yet
+  size_t typeNext = 0;
+  bool typeDone = !typePlan;
+  int typeDoneFrame = -1;
+  const auto typeStart = std::chrono::steady_clock::now();
+
   while (!surface.shouldClose()) {
     surface.pollEvents();
 
@@ -1090,7 +1175,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
           (mouseAfterFrames > 0 &&
            frameIndex <= mouseAfterFrames + (int)mouseSequence.size()) ||
           (!screenshotFirstPath.empty() && !capturedFirst) ||
-          (!screenshotPath.empty() && !capturedTimed);
+          (!screenshotPath.empty() && !capturedTimed) ||
+          (typePlan && (!typeDone || frameIndex <= typeDoneFrame + 3));
       // A caret blink is a time-based clock nothing marks dirty: refuse the skip
       // while a field is focused or the cached frame would freeze mid-blink.
       const bool clockLive =
@@ -1109,12 +1195,21 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // fbo 0 post-swap -- all zeros on darwin.
     const bool wantFirst = shouldPaint && !capturedFirst && frameIndex == 0 &&
                            !screenshotFirstPath.empty();
-    const bool wantTimed =
-        shouldPaint && !screenshotPath.empty() && screenshotAfterMs >= 0 &&
-        !capturedTimed &&
+    const long long sinceStartMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start)
-                .count() >= screenshotAfterMs;
+            .count();
+    // ENG-18: with a windowed --type plan, --screenshot waits for the typing
+    // to finish (plus two frames for the JS re-render to mount), with or
+    // without --screenshot-after.
+    const bool typeCaptureReady =
+        typePlan && typeDone && frameIndex >= typeDoneFrame + 2;
+    const bool wantTimed =
+        shouldPaint && !screenshotPath.empty() && !capturedTimed &&
+        (typePlan ? (typeCaptureReady && (screenshotAfterMs < 0 ||
+                                          sinceStartMs >= screenshotAfterMs))
+                  : (screenshotAfterMs >= 0 &&
+                     sinceStartMs >= screenshotAfterMs));
     grabOk = false;
     grabArmed = wantFirst || wantTimed;
 
@@ -1266,6 +1361,74 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       }
     }
 
+    // ENG-18: the windowed --type plan (see its state above the loop).
+    if (typePlan && !typeDone && frameIndex >= 2) {
+      if (typeFocusTag < 0) {
+        // Same mount settle as headless --type: poll for a REAL TextInput
+        // under the point, bounded, so a never-mounting field fails loudly.
+        const long long waited =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - typeStart)
+                .count();
+        if (!fabric.isTextInputAt(typeX, typeY) && waited < 10000) {
+          host.waitForJsIdle(200);
+        } else {
+          printf("rn-impeller: type_mount_settle_ms=%lld field=%d\n", waited,
+                 (int)fabric.isTextInputAt(typeX, typeY));
+          typeFocusTag = fabric.focusTextInputAt(typeX, typeY);
+          printf("rn-impeller: type_focus=%d at=%.1f,%.1f\n", typeFocusTag,
+                 typeX, typeY);
+          fflush(stdout);
+          host.waitForJsIdle(5000);
+        }
+      } else if (typeNext < typeTokens.size()) {
+        const TypeToken& tk = typeTokens[typeNext++];
+        auto pressKey = [&](const char* name, bool shift) {
+          rni::GlfwSurface::KeyMods mods;
+          mods.shift = shift;
+          surface.synthesiseKey(name, rni::GlfwSurface::KeyPhase::Down, mods);
+          surface.synthesiseKey(name, rni::GlfwSurface::KeyPhase::Up, mods);
+        };
+        switch (tk.kind) {
+          case TypeToken::Char:
+            surface.synthesiseChar(tk.codepoint);
+            break;
+          case TypeToken::Backspace:
+            pressKey("Backspace", false);
+            break;
+          case TypeToken::Enter:
+            pressKey("Enter", false);
+            break;
+          case TypeToken::ShiftEnter:
+            pressKey("Enter", true);
+            break;
+          case TypeToken::SelectAll:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
+            break;
+          case TypeToken::Copy:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Copy, 0);
+            break;
+          case TypeToken::Cut:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
+            break;
+        }
+        host.waitForJsIdle(5000);
+      } else {
+        host.waitForJsIdle(5000);
+        // Read the field the plan focused, even if Enter blurred it since.
+        const int tag = typeFocusTag;
+        const std::string v = sceneGraph.textInputValueFor(tag);
+        const size_t caret = sceneGraph.textInputCaretFor(tag);
+        printf("rn-impeller: textinput_value tag=%d len=%zu caret=%zu v=%s\n",
+               tag, v.size(), caret, v.c_str());
+        fputs(sceneGraph.paragraphTextReport().c_str(), stdout);
+        printf("rn-impeller: type_done frame=%d\n", frameIndex);
+        fflush(stdout);
+        typeDone = true;
+        typeDoneFrame = frameIndex;
+      }
+    }
+
 
     // item 4b. SYNTHETIC MOUSE HOOK: one press/release/move per frame through
     // GlfwSurface::synthesiseMouse (the same dispatchCursorPoint /
@@ -1369,6 +1532,25 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       }
     }
 
+    // ENG-18: a --type plan holds the run open until the typing and its
+    // capture are done (30 s wall cap), then ends it unless --frames or
+    // --idle-run-sec ask for a longer run.
+    if (typePlan) {
+      const bool typeFinished = typeDone && frameIndex > typeDoneFrame + 2 &&
+                                (screenshotPath.empty() || capturedTimed);
+      const double typeWall = std::chrono::duration<double>(
+                                  std::chrono::steady_clock::now() - typeStart)
+                                  .count();
+      if (!typeFinished && typeWall > 30.0) {
+        fprintf(stderr,
+                "rn-impeller: FATAL: windowed --type did not finish in 30 s "
+                "(focus=%d, %zu/%zu tokens)\n",
+                typeFocusTag, typeNext, typeTokens.size());
+        break;
+      }
+      if (!typeFinished) continue;
+      if (frames <= 0 && idleRunSec <= 0.0) break;
+    }
     if (frames > 0 && frameIndex >= frames) break;
   }
 
@@ -1433,6 +1615,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 
   printf("RN_IMPELLER_WINDOW_OK app=%s frames=%d\n", appName.c_str(), frameIndex);
   fflush(stdout);
+  // ENG-18: an unfinished --type plan is a failed run, not a quiet exit.
+  if (typePlan && !typeDone) return 4;
   return 0;
 }
 #endif  // RNI_WITH_WINDOW
@@ -2217,6 +2401,7 @@ int main(int argc, char** argv) {
     // handsPending guard keeps every frame-anchored windowed gate (resize/click/
     // scroll/hover/stall/screenshot/--frames) painting on schedule regardless.
     if (!idleSkipSet && frames == 0) idleSkip = true;
+    gWindowedTypeSpec = typeSpec;  // ENG-18
     return RunWindowed(sourceUrl, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl,
                        widthGiven ? width : 0, heightGiven ? height : 0,
@@ -2532,28 +2717,33 @@ int main(int argc, char** argv) {
       printf("rn-impeller: type_focus=%d at=%.1f,%.1f\n", focused, fx, fy);
       host.waitForJsIdle(5000);
       const std::string seq = typeSpec.substr(colon + 1);
-      for (size_t i = 0; i < seq.size();) {
-        if (seq.compare(i, 4, "<BS>") == 0) {
-          fabric.dispatchKey(rni::FabricHost::KeyAction::Backspace, 0);
-          i += 4;
-        } else if (seq.compare(i, 4, "<CR>") == 0) {
-          fabric.dispatchKey(rni::FabricHost::KeyAction::Submit, 0);
-          i += 4;
-        } else if (seq.compare(i, 4, "<SA>") == 0) {
-          // Style audit item 11 gate: select all, then <COPY>/<CUT>, so a
-          // headless run can prove a secure field refuses the clipboard.
-          fabric.dispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
-          i += 4;
-        } else if (seq.compare(i, 6, "<COPY>") == 0) {
-          fabric.dispatchKey(rni::FabricHost::KeyAction::Copy, 0);
-          i += 6;
-        } else if (seq.compare(i, 5, "<CUT>") == 0) {
-          fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
-          i += 5;
-        } else {
-          fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar,
-                             (unsigned char)seq[i]);
-          i += 1;
+      // ENG-18: the same token list the windowed --type hook consumes.
+      for (const TypeToken& tk : ParseTypeSeq(seq)) {
+        switch (tk.kind) {
+          case TypeToken::Backspace:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Backspace, 0);
+            break;
+          case TypeToken::Enter:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Submit, 0);
+            break;
+          case TypeToken::ShiftEnter:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Newline, 0);
+            break;
+          case TypeToken::SelectAll:
+            // Style audit item 11 gate: select all, then <COPY>/<CUT>, so a
+            // headless run can prove a secure field refuses the clipboard.
+            fabric.dispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
+            break;
+          case TypeToken::Copy:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Copy, 0);
+            break;
+          case TypeToken::Cut:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
+            break;
+          case TypeToken::Char:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar,
+                               tk.codepoint);
+            break;
         }
         host.waitForJsIdle(5000);
       }

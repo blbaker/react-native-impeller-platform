@@ -279,6 +279,12 @@ bash tools/ci-textinput-valign.sh | grep -E "TEXTINPUT_VALIGN_GATE_PASS|OK [A-E]
 echo "### gate 24e: style audit grid (shadows + keep-green regression)"
 bash tools/ci-style-audit.sh | grep -E "STYLE_AUDIT_GATE_PASS|item [0-9]+:"
 
+# Windowed (xvfb on linux), prebuilt bundle. --type types into a WINDOWED run
+# through the real char/key entry points and --screenshot shows the result.
+# Mutants: mutation-verify-window-type.sh.
+echo "### gate 24f: windowed --type (ENG-18)"
+bash tools/ci-window-type.sh | grep -E "WINDOW_TYPE_PASS|NL field"
+
 # ⛔ THE NETWORKING GATE EXISTED FOR A DAY AND WAS NEVER IN THIS FILE.
 # tools/ci-p10.sh was written with the Networking TurboModule (c4e59e1) and TLS
 # (a932ded) and is only referenced by tools/mutation-verify-p10.sh — so the ONLY
