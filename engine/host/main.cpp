@@ -396,6 +396,16 @@ static std::vector<TypeToken> ParseTypeSeq(const std::string& seq) {
   return out;
 }
 
+// ENG-24: a multiline value prints on ONE log line ('\n' -> "\\n").
+static std::string EscapeNewlines(const std::string& v) {
+  std::string out;
+  for (char ch : v) {
+    if (ch == '\n') out += "\\n";
+    else out += ch;
+  }
+  return out;
+}
+
 // ENG-18: the windowed --type spec, set by main() before RunWindowed. File
 // scope (like gFontDirs) so RunWindowed's long positional signature does not
 // grow again. Empty = no windowed typing.
@@ -1420,7 +1430,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         const std::string v = sceneGraph.textInputValueFor(tag);
         const size_t caret = sceneGraph.textInputCaretFor(tag);
         printf("rn-impeller: textinput_value tag=%d len=%zu caret=%zu v=%s\n",
-               tag, v.size(), caret, v.c_str());
+               tag, v.size(), caret, EscapeNewlines(v).c_str());
         fputs(sceneGraph.paragraphTextReport().c_str(), stdout);
         printf("rn-impeller: type_done frame=%d\n", frameIndex);
         fflush(stdout);
@@ -2718,7 +2728,25 @@ int main(int argc, char** argv) {
       host.waitForJsIdle(5000);
       const std::string seq = typeSpec.substr(colon + 1);
       // ENG-18: the same token list the windowed --type hook consumes.
+      // ENG-24: Enter / Shift+Enter / Backspace also send the key event a
+      // real key does first (onKeyPress, keyDown), then the edit, then the
+      // release -- the order GlfwSurface::dispatchKeyEvent runs them in.
+      auto keyEvent = [&](const char* key, bool shift,
+                          rni::FabricHost::KeyEventPhase phase) {
+        rni::FabricHost::KeyModifiers mods;
+        mods.shift = shift;
+        fabric.dispatchKeyEvent(key, key, phase, mods);
+      };
       for (const TypeToken& tk : ParseTypeSeq(seq)) {
+        const bool keyed = tk.kind == TypeToken::Backspace ||
+                           tk.kind == TypeToken::Enter ||
+                           tk.kind == TypeToken::ShiftEnter;
+        const char* keyName =
+            tk.kind == TypeToken::Backspace ? "Backspace" : "Enter";
+        const bool keyShift = tk.kind == TypeToken::ShiftEnter;
+        if (keyed) {
+          keyEvent(keyName, keyShift, rni::FabricHost::KeyEventPhase::Down);
+        }
         switch (tk.kind) {
           case TypeToken::Backspace:
             fabric.dispatchKey(rni::FabricHost::KeyAction::Backspace, 0);
@@ -2745,6 +2773,9 @@ int main(int argc, char** argv) {
                                tk.codepoint);
             break;
         }
+        if (keyed) {
+          keyEvent(keyName, keyShift, rni::FabricHost::KeyEventPhase::Up);
+        }
         host.waitForJsIdle(5000);
       }
       // The engine's own view of the field: buffer, length, caret. This is the
@@ -2754,7 +2785,7 @@ int main(int argc, char** argv) {
       std::string v = sceneGraph.textInputValueFor(focused);
       size_t caret = sceneGraph.textInputCaretFor(focused);
       printf("rn-impeller: textinput_value tag=%d len=%zu caret=%zu v=%s\n",
-             focused, v.size(), caret, v.c_str());
+             focused, v.size(), caret, EscapeNewlines(v).c_str());
       // The JS-side truth: every Paragraph's painted text. The fixture's
       // controlled label renders `len=N v=...`, so this line proves onChangeText
       // actually ran in JS and re-rendered -- not merely that the native buffer

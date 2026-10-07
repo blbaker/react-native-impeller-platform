@@ -220,6 +220,8 @@ struct SceneNode {
   // (text/SecureText.h); Copy/Cut refused by FabricHost.
   bool tiSecure{false};
   int tiAlignVertical{0};
+  // ENG-24: RN's resolved submitBehavior (see textInputKeyTraits).
+  int tiSubmitBehavior{2};
   float tiPlaceholderColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
   // item 4a: selection highlight fill. Defaults to rgba(51,144,255,0.35) (a
   // common desktop selection blue) when the field sets no `selectionColor`
@@ -601,6 +603,15 @@ class SceneGraph {
   // edit buffer from the value already on screen.
   // Style audit item 11: true for a secureTextEntry field (Copy/Cut refused).
   bool isSecureTextInput(facebook::react::Tag tag);
+  // ENG-24: the field's Enter traits. `submitBehavior` is RN's resolved
+  // react::SubmitBehavior (1 Submit, 2 BlurAndSubmit, 3 Newline;
+  // BaseTextInputProps::getNonDefaultSubmitBehavior, so Default never shows).
+  bool textInputKeyTraits(facebook::react::Tag tag, bool* multiline,
+                          int* submitBehavior);
+  // ENG-24: onContentSizeChange's contentSize, in points: the laid-out text
+  // (the live buffer while focused, else the value; one line minimum) plus
+  // the field's padding. Multiline wraps at the box; single-line never wraps.
+  bool textInputContentSize(facebook::react::Tag tag, float* w, float* h);
   std::string textInputValueFor(facebook::react::Tag tag);
   // The caret index within the focused field's edit buffer. Returns 0 when the
   // tag is not the focused field (an unfocused field paints no caret). Exposed
@@ -665,6 +676,10 @@ class SceneGraph {
   std::string selectableTextFor(facebook::react::Tag tag);
 
  private:
+  // ENG-24: the TextInput paragraph paintNode draws (see the .cpp).
+  ImpellerParagraph buildTextInputParagraphLocked(const SceneNode& node,
+                                                  const std::string& raw,
+                                                  float boxW);
   // item 3. Codepoint-boundary byte offsets of `tag`'s displayed text and the
   // SCREEN x (layout points) of each, measured with the SAME prefix-width
   // paragraph build paintNode uses for the caret. Caller holds mutex_.
@@ -874,6 +889,12 @@ class SceneGraph {
   // collapsed -- "is there a selection" is `tiSelAnchor_ != tiCaret_`, never
   // a separate bool, so the two can never disagree about the collapsed case.
   size_t tiSelAnchor_{0};
+  // ENG-24: the focused field's text scroll, in points. Sideways for a
+  // single-line field, vertical for a multiline one. Set by paintNode so the
+  // caret stays inside the box; reset on every focus change; subtracted by
+  // the click-to-caret mapping so a click lands on the glyph it painted over.
+  float tiScrollX_{0.0f};
+  float tiScrollY_{0.0f};
   // P1 item 15: the selectable-Text selection (see selectableTextAt). Kept
   // separate from tiSel*: a paragraph is never focused or edited, and a click
   // into a TextInput must not inherit a paragraph's byte offsets.

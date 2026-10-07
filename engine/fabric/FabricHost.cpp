@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include "fabric/FabricHost.h"
 
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
@@ -1196,6 +1197,7 @@ int FabricHost::focusTextInputAt(float x, float y, int clickCount,
     m.eventCount = ++tiEventCount_;
     runtimeScheduler_->scheduleWork(
         [te, m](facebook::jsi::Runtime&) { te->onFocus(m); });
+    emitContentSizeIfChanged((int)target);  // ENG-24: the starting size
   }
   // item 3: click-to-caret. The caret goes to the codepoint boundary nearest
   // the click x, measured by SceneGraph with the painter's own text layout.
@@ -1427,16 +1429,41 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
       std::dynamic_pointer_cast<const react::TextInputEventEmitter>(emitter);
   if (!te) return 0;
 
+  bool insertNewline = false;  // ENG-24: set only by the multiline Enter path
   if (action == KeyAction::Submit || action == KeyAction::Newline) {
-    // Single-line field: a bare Enter (or Shift+Enter, routed the same until
-    // a real multiline buffer exists) submits rather than inserting or
-    // moving. Buffer and caret are untouched.
-    react::TextInputEventEmitter::Metrics m{};
-    m.text = sceneGraph_->textInputValueFor(tag);
-    m.eventCount = ++tiEventCount_;
-    runtimeScheduler_->scheduleWork(
-        [te, m](facebook::jsi::Runtime&) { te->onSubmitEditing(m); });
-    return (int)tag;
+    // ENG-24: Enter follows RN's submitBehavior (resolved by
+    // BaseTextInputProps::getNonDefaultSubmitBehavior: 1 submit,
+    // 2 blurAndSubmit, 3 newline). In a MULTILINE field Shift+Enter (the
+    // Newline action) always breaks the line, the desktop chat convention
+    // and react-native-macos's default (only a bare Enter is a submit key).
+    // A single-line field has no line to break: Enter and Shift+Enter both
+    // submit, and buffer and caret are untouched.
+    bool multiline = false;
+    int submitBehavior = 2;
+    sceneGraph_->textInputKeyTraits(tag, &multiline, &submitBehavior);
+    const bool newline =
+        multiline && (action == KeyAction::Newline || submitBehavior == 3);
+    if (!newline) {
+      react::TextInputEventEmitter::Metrics m{};
+      m.text = sceneGraph_->textInputValueFor(tag);
+      m.eventCount = ++tiEventCount_;
+      runtimeScheduler_->scheduleWork(
+          [te, m](facebook::jsi::Runtime&) { te->onSubmitEditing(m); });
+      const bool blur = submitBehavior == 2;
+      printf("rn-impeller: ti_submit tag=%d behavior=%d blur=%d\n", (int)tag,
+             submitBehavior, (int)blur);
+      fflush(stdout);
+      if (blur) {
+        // blurAndSubmit: onSubmitEditing first, then the field lets go.
+        emitTextInputFocusEvent((int)tag, false);
+        sceneGraph_->clearTextInputFocus();
+        dragTag_ = 0;
+      }
+      return (int)tag;
+    }
+    // A line break, inserted at the caret like a typed character.
+    action = KeyAction::InsertChar;
+    insertNewline = true;
   }
 
   std::string value = sceneGraph_->textInputValueFor(tag);
@@ -1531,7 +1558,12 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
       // halves -- see Utf8EncodeAppend's header. Inserted AT THE CARET, not
       // appended at the end.
       std::string encoded;
-      if (Utf8EncodeAppend(&encoded, codepoint)) {
+      if (insertNewline) {
+        encoded = "\n";  // ENG-24: the multiline Enter path
+      } else if (!Utf8EncodeAppend(&encoded, codepoint)) {
+        encoded.clear();
+      }
+      if (!encoded.empty()) {
         value.insert(caret, encoded);
         caret += encoded.size();
         textChanged = true;
@@ -1627,7 +1659,35 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
     // for a no-op edit at a buffer edge) either way.
     te->onSelectionChange(m);
   });
+  if (textChanged) emitContentSizeIfChanged((int)tag);  // ENG-24
   return (int)tag;
+}
+
+// ENG-24. onContentSizeChange: RN's TextInputEventEmitter payload
+// ({contentSize: {width, height}, target}). Sent only on a change, the way
+// UITextView's contentSize observer fires, so a growing composer gets one
+// event per new line rather than one per keystroke.
+void FabricHost::emitContentSizeIfChanged(int tag) {
+  if (!sceneGraph_ || !runtimeScheduler_) return;
+  float cw = 0.0f, ch = 0.0f;
+  if (!sceneGraph_->textInputContentSize(tag, &cw, &ch)) return;
+  auto it = lastContentSize_.find(tag);
+  if (it != lastContentSize_.end() && std::fabs(it->second.first - cw) < 0.5f &&
+      std::fabs(it->second.second - ch) < 0.5f) {
+    return;
+  }
+  lastContentSize_[tag] = {cw, ch};
+  auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
+      sceneGraph_->eventEmitterFor(tag));
+  if (!te) return;
+  react::TextInputEventEmitter::Metrics m{};
+  m.text = sceneGraph_->textInputValueFor(tag);
+  m.contentSize = react::Size{cw, ch};
+  m.eventCount = tiEventCount_;
+  printf("rn-impeller: ti_content_size tag=%d w=%.1f h=%.1f\n", tag, cw, ch);
+  fflush(stdout);
+  runtimeScheduler_->scheduleWork(
+      [te, m](facebook::jsi::Runtime&) { te->onContentSizeChange(m); });
 }
 
 // desktop-input-gap P0 item 1. Full keyboard forwarding to JS -- see the
@@ -1777,11 +1837,31 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
       } else {
         text = key;
       }
-      react::TextInputEventEmitter::KeyPressMetrics kpm{};
-      kpm.text = text;
-      kpm.eventCount = ++tiEventCount_;
+      // ENG-24: RN core's KeyPressMetrics carries only text + eventCount, so
+      // nativeEvent.shiftKey was undefined and a composer could not tell
+      // Shift+Enter from Enter. Dispatch the same "keyPress" event RN's
+      // onKeyPress does (its key derivation, reproduced by `text` above, is
+      // our W3C key byte for byte) with the modifier flags added, the shape
+      // react-native-macos / -windows send.
+      (void)text;
+      const int eventCount = ++tiEventCount_;
       runtimeScheduler_->scheduleWork(
-          [te, kpm](facebook::jsi::Runtime&) { te->onKeyPress(kpm); });
+          [te, key, mods, eventCount](facebook::jsi::Runtime&) {
+            te->dispatchEvent(
+                "keyPress",
+                [key, mods, eventCount](facebook::jsi::Runtime& runtime) {
+                  auto payload = facebook::jsi::Object(runtime);
+                  payload.setProperty(runtime, "eventCount", eventCount);
+                  payload.setProperty(
+                      runtime, "key",
+                      facebook::jsi::String::createFromUtf8(runtime, key));
+                  payload.setProperty(runtime, "shiftKey", mods.shift);
+                  payload.setProperty(runtime, "ctrlKey", mods.ctrl);
+                  payload.setProperty(runtime, "altKey", mods.alt);
+                  payload.setProperty(runtime, "metaKey", mods.meta);
+                  return facebook::jsi::Value(std::move(payload));
+                });
+          });
     }
   }
 
@@ -1897,6 +1977,7 @@ void FabricHost::runCommand(const ViewCommand& cmd) {
     blurFocusedView();
     sceneGraph_->setTextInputFocus(tag);  // caret at the end, like iOS
     emitTextInputFocusEvent(tag, true);
+    emitContentSizeIfChanged(tag);  // ENG-24
     return;
   }
   if (cmd.name == "blur") {
@@ -1931,6 +2012,7 @@ void FabricHost::runCommand(const ViewCommand& cmd) {
       printf("rn-impeller: settext_unfocused tag=%d text=%s\n", cmd.tag,
              EscapeForLog(value).c_str());
       fflush(stdout);
+      if (textChanged) emitContentSizeIfChanged(cmd.tag);  // ENG-24
       return;
     }
     size_t anchor = sceneGraph_->textInputSelectionAnchorFor(tag);
@@ -1952,6 +2034,9 @@ void FabricHost::runCommand(const ViewCommand& cmd) {
     printf("rn-impeller: selection tag=%d anchor=%zu caret=%zu command=1\n",
            cmd.tag, anchor, caret);
     fflush(stdout);
+    // ENG-24: JS replaced the text (a composer cleared after send): report
+    // the new size so the field can shrink back.
+    if (textChanged) emitContentSizeIfChanged(cmd.tag);
     // A command does NOT fire onChange (JS already holds the text it set),
     // but the selection change is reported, as on iOS.
     auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(

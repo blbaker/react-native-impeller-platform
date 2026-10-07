@@ -371,6 +371,11 @@ class FabricHost {
   // its text is dropped, the same rule RN Android applies.
   std::map<int, int> lastChangeEventCount_;
   void emitTextInputFocusEvent(int tag, bool focus);
+  // ENG-24: fire onContentSizeChange when the field's content size (see
+  // SceneGraph::textInputContentSize) differs from the last one sent for it.
+  // Called after every native edit, every JS value change and every focus.
+  void emitContentSizeIfChanged(int tag);
+  std::map<int, std::pair<float, float>> lastContentSize_;
   void emitViewFocusEvent(int tag, bool focus);
 
   // item 5. Wired by main.cpp's setClipboardAccess; see that method's header
