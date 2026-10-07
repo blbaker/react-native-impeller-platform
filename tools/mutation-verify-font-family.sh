@@ -51,8 +51,8 @@ run_mutant() {  # $1 name  $2 ERE the FAIL line must match
 
 echo "MUTATION_VERIFY_FONT_FAMILY_START"
 
-mutate "$SG" "    ApplyFontFamily(style, node.fontFamily);  // ENG-22
-    ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23" "    ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23 MUTANT M1"
+mutate "$SG" "    ApplyFontFamily(style, run.fontFamily);  // ENG-22
+    ApplyLineHeight(style, run.lineHeight, run.fontSize);  // ENG-23" "    ApplyLineHeight(style, run.lineHeight, run.fontSize);  // ENG-23 MUTANT M1"
 run_mutant "M1 Paragraph paint drops the family" "A|C"
 
 # ENG-25: TextInput paint builds its paragraph in BuildTextInputParagraph
