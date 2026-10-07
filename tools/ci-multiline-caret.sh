@@ -87,9 +87,18 @@ read -r INK_TOP INK_BOT INK_RIGHT <<< "$($PX ink "$WORK/base-first.ppm" $TX0 $BY
 [ $((INK_BOT - INK_TOP)) -ge 40 ] \
   || fail "0: ink spans rows $INK_TOP..$INK_BOT -- the fixture did not wrap to 3 lines"
 echo "   OK: ink rows $INK_TOP..$INK_BOT inside the box"
+# Clicks are SCREEN coords. With --scale 1 pinned, a 2x (Retina) backing
+# store maps screen->layout by x2 (same as ci-world-resize, 4e452e9), so a
+# window that opens on a Retina display would click twice as far out and miss
+# the box. Divide every click by the backing scale the engine reports; pixel
+# coordinates need no change (at --scale 1 one PPM pixel is one layout point).
+BS="$(sed -n 's/.*backing_scale=\([0-9.]*\).*/\1/p' "$WORK/base.log" | head -1)"
+BS="${BS:-1}"
+at() { echo "$1" | awk -F'[:,]' -v s="$BS" '{printf "%s:%g,%g", $1, $2 / s, $3 / s}'; }
+[ "$BS" = "1.00" ] || [ "$BS" = "1" ] || echo "   backing scale $BS: clicks divided by it"
 
 echo "== A. End: caret on the LAST painted line, inside the box =="
-run_win a --click-after-frames "5:200,130" --key-after-frames "10:End:down"
+run_win a --click-after-frames "$(at 5:200,130)" --key-after-frames "10:End:down"
 CA="$(caret_of a)"
 [ "$CA" != "NONE" ] \
   || fail "A: End painted NO caret anywhere in the window (it walked off the right edge)"
@@ -106,7 +115,7 @@ grep -q '^\[js\] ENG25 sel=77,77$' "$WORK/a.log" || fail "A: onSelectionChange n
 echo "   OK: caret x $AX0 rows $AY0..$AY1, after the last glyph (x $LAST_RIGHT), sel 77"
 
 echo "== B. click wrapped line 3 at ($CLICK_X,$CLICK_Y), type Z =="
-run_win b1 --click-after-frames "5:$CLICK_X,$CLICK_Y"
+run_win b1 --click-after-frames "$(at 5:$CLICK_X,$CLICK_Y)"
 C3="$(caret_of b1)"
 [ "$C3" != "NONE" ] || fail "B: the click painted no caret"
 read -r CX0 CY0 CX1 CY1 _ <<< "$C3"
@@ -114,7 +123,7 @@ read -r CX0 CY0 CX1 CY1 _ <<< "$C3"
   || fail "B: the click at y $CLICK_Y put the caret on rows $CY0..$CY1 -- another line (line 1 is the bug)"
 [ "$(abs $((CX0 - CLICK_X)))" -le 8 ] \
   || fail "B: the click at x $CLICK_X put the caret at x $CX0"
-run_win b2 --click-after-frames "5:$CLICK_X,$CLICK_Y" --char-after-frames "12:90"
+run_win b2 --click-after-frames "$(at 5:$CLICK_X,$CLICK_Y)" --char-after-frames "12:90"
 case "$(last_change b2)" in *Z*) ;; *) fail "B: typing Z after the click changed nothing";; esac
 read -r NUP _ <<< "$($PX rows "$WORK/b2-first.ppm" "$WORK/b2.ppm" $TX0 $BY0 $BX1 "$CY0")"
 [ "$NUP" -eq 0 ] || fail "B: typing Z changed $NUP px ABOVE line 3 (lines 1-2) -- Z went to the wrong line"
@@ -125,7 +134,7 @@ read -r NL3 LX <<< "$($PX rows "$WORK/b2-first.ppm" "$WORK/b2.ppm" $TX0 "$CY0" $
 echo "   OK: caret x $CX0 rows $CY0..$CY1 under the click; Z changes line 3 from x $LX only"
 
 echo "== C. Up from line 3, then Down back =="
-run_win c1 --click-after-frames "5:$CLICK_X,$CLICK_Y" --key-after-frames "10:ArrowUp:down"
+run_win c1 --click-after-frames "$(at 5:$CLICK_X,$CLICK_Y)" --key-after-frames "10:ArrowUp:down"
 CU="$(caret_of c1)"
 [ "$CU" != "NONE" ] || fail "C: Up painted no caret"
 read -r UX0 UY0 UX1 UY1 _ <<< "$CU"
@@ -133,7 +142,7 @@ LH=$((CY1 - CY0 + 1))
 [ "$UY1" -le $((CY0 + 1)) ] && [ "$UY0" -ge $((CY0 - LH - 2)) ] \
   || fail "C: Up from rows $CY0..$CY1 put the caret on rows $UY0..$UY1 -- not one line up"
 [ "$(abs $((UX0 - CX0)))" -le 8 ] || fail "C: Up moved the caret from x $CX0 to x $UX0"
-run_win c2 --click-after-frames "5:$CLICK_X,$CLICK_Y" --key-after-frames "10:ArrowUp:down;ArrowDown:down"
+run_win c2 --click-after-frames "$(at 5:$CLICK_X,$CLICK_Y)" --key-after-frames "10:ArrowUp:down;ArrowDown:down"
 read -r DX0 DY0 _ _ _ <<< "$(caret_of c2)"
 [ "$(abs $((DX0 - CX0)))" -le 1 ] && [ "$(abs $((DY0 - CY0)))" -le 1 ] \
   || fail "C: Up then Down left the caret at ($DX0,$DY0), not back at ($CX0,$CY0)"
@@ -148,8 +157,8 @@ NCH=${#SUFFIX}
 # Pixels BRIGHTER in run 1 than in run 2 = run 1's caret at the end.
 PAD=""
 for ((i = 0; i < NCH + 3; i++)); do PAD="$PAD;Shift:down"; done
-run_win d1 --click-after-frames "5:200,130" --key-after-frames "10:End:down$PAD" --char-after-frames "12:$CPS"
-run_win d2 --click-after-frames "5:200,130" --key-after-frames "10:End:down$PAD;ArrowLeft:down" --char-after-frames "12:$CPS"
+run_win d1 --click-after-frames "$(at 5:200,130)" --key-after-frames "10:End:down$PAD" --char-after-frames "12:$CPS"
+run_win d2 --click-after-frames "$(at 5:200,130)" --key-after-frames "10:End:down$PAD;ArrowLeft:down" --char-after-frames "12:$CPS"
 case "$(last_change d1)" in *"$SUFFIX\"") ;; *) fail "D: the typed text did not land at the end ('$(last_change d1)')";; esac
 [ "$(last_change d1)" = "$(last_change d2)" ] || fail "D: the two runs typed different text"
 read -r _ NEW_BOT _ <<< "$($PX ink "$WORK/d1.ppm" $TX0 $BY0 $BX1 $BY1)"
@@ -165,7 +174,7 @@ read -r EX0 EY0 EX1 EY1 _ <<< "$CDN"
 echo "   OK: new line ink to row $NEW_BOT; caret x $EX0 rows $EY0..$EY1"
 
 echo "== E. Shift+Up from line 3: highlight follows the wrapped lines =="
-run_win e --click-after-frames "5:$CLICK_X,$CLICK_Y" --key-after-frames "10:ArrowUp:down:shift"
+run_win e --click-after-frames "$(at 5:$CLICK_X,$CLICK_Y)" --key-after-frames "10:ArrowUp:down:shift"
 grep -qE '^rn-impeller: selection tag=[0-9]+ anchor=([0-9]+) caret=([0-9]+)$' "$WORK/e.log" \
   || fail "E: no selection line after Shift+Up"
 read -r N1 _ <<< "$($PX rows "$WORK/e-first.ppm" "$WORK/e.ppm" $BX0 $BY0 $BX1 "$UY0")"
