@@ -13,6 +13,24 @@
 
 namespace rni {
 
+// Receives the parsed geometry, already absolute, with S/T reflected and arcs
+// converted to cubics. ParseSvgPathToBuilder feeds an Impeller builder; the
+// ENG-13 dasher (svg/SvgDash) feeds a sink that measures and cuts it, so both
+// read the SAME parse and a dashed stroke can never disagree with its fill.
+class SvgPathSink {
+ public:
+  virtual ~SvgPathSink() = default;
+  virtual void moveTo(float x, float y) = 0;
+  virtual void lineTo(float x, float y) = 0;
+  virtual void quadTo(float cx, float cy, float x, float y) = 0;
+  virtual void cubicTo(float c1x, float c1y, float c2x, float c2y, float x,
+                       float y) = 0;
+  virtual void close() = 0;
+};
+
+// Parses `d` onto `sink`. Same return contract as ParseSvgPathToBuilder.
+bool ParseSvgPath(const std::string& d, SvgPathSink& sink);
+
 // Appends the geometry described by `d` onto `builder` (which the caller
 // already owns — this does not create or release it). Returns false if `d`
 // could not be parsed at all (empty, or does not start with a moveto); a

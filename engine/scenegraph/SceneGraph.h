@@ -266,6 +266,10 @@ struct SceneNode {
   int svgStrokeLinecap{0};   // 0 butt, 1 round, 2 square  (rnsvg encoding)
   int svgStrokeLinejoin{0};  // 0 miter, 1 round, 2 bevel  (rnsvg encoding)
   float svgStrokeMiterlimit{4.0f};
+  // ENG-13: strokeDasharray, normalised (even count, all >= 0, sum > 0);
+  // empty = solid. strokeDashoffset may be any sign (it wraps).
+  std::vector<float> svgStrokeDash;
+  float svgStrokeDashOffset{0.0f};
 
   // ⛔ SVG's transform is a 2D AFFINE OF SIX FLOATS, not the 16-float 4x4 the
   // View `transform` prop carries. react-native-svg's extractTransform()

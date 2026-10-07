@@ -27,6 +27,12 @@ MAIN_TGZ="$(cd package && npm pack --silent --pack-destination "$WORK")"
 APP="$WORK/App"; cp -R "$BASE_APP" "$APP"; cd "$APP"
 APPNAME="$APPNAME" node -e 'const fs=require("fs");const a=JSON.parse(fs.readFileSync("app.json","utf8"));a.name=process.env.APPNAME;a.displayName=process.env.APPNAME;fs.writeFileSync("app.json",JSON.stringify(a,null,2));'
 npm install --no-audit --no-fund --silent "$WORK/$ENGINE_TGZ" "$WORK/$MAIN_TGZ" >/dev/null
+# EXTRA_NPM: extra packages the fixture imports (e.g. "react-native-svg@15.15.5").
+if [ -n "${EXTRA_NPM:-}" ]; then
+  # shellcheck disable=SC2086
+  npm install --no-audit --no-fund --silent $EXTRA_NPM >/dev/null \
+    || { echo "build-fixture-bundle: FAIL — could not install $EXTRA_NPM" >&2; exit 1; }
+fi
 cp "$SRC/index.js" "$APP/index.js"
 npx --no-install react-native init-impeller >/dev/null 2>&1 || true
 npx --no-install react-native bundle --platform impeller --dev false \

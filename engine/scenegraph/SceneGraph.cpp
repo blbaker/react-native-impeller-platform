@@ -13,6 +13,7 @@
 
 #if RNI_WITH_RNSVG
 #include <react/renderer/components/rnsvg/Props.h>
+#include "svg/SvgDash.h"
 #include "svg/SvgPath.h"
 #endif
 
@@ -182,6 +183,51 @@ bool svgBrushFromDynamic(const folly::dynamic& v, float out[4], bool* isRef,
   return svgFillFromDynamic(v, out);
 }
 
+// ENG-13: rnsvg sends strokeDasharray through extractLengthList: an array of
+// numbers or length strings (odd lists already doubled in JS), or null for
+// "none". A bare number or a "4 2" string is accepted too. Anything that is not
+// a plain length (a percentage, a unit other than px, garbage) makes the whole
+// list invalid, which SVG renders as a SOLID stroke, never a guessed pattern.
+bool svgDashLength(const std::string& s, std::vector<float>* out) {
+  size_t i = 0;
+  while (i < s.size()) {
+    while (i < s.size() && (std::isspace((unsigned char)s[i]) || s[i] == ',')) ++i;
+    if (i >= s.size()) break;
+    size_t used = 0;
+    float f = 0.0f;
+    try {
+      f = std::stof(s.substr(i), &used);
+    } catch (const std::exception&) {
+      return false;
+    }
+    i += used;
+    if (s.compare(i, 2, "px") == 0) i += 2;
+    if (i < s.size() && !std::isspace((unsigned char)s[i]) && s[i] != ',') return false;
+    out->push_back(f);
+  }
+  return true;
+}
+
+std::vector<float> svgDashFromDynamic(const folly::dynamic& v) {
+  std::vector<float> raw;
+  auto one = [&](const folly::dynamic& e) -> bool {
+    if (e.isNumber()) {
+      raw.push_back((float)e.asDouble());
+      return true;
+    }
+    if (e.isString()) return svgDashLength(e.asString(), &raw);
+    return false;
+  };
+  if (v.isArray()) {
+    for (const auto& e : v) {
+      if (!one(e)) return {};
+    }
+  } else if (!(v.isNumber() || v.isString()) || !one(v)) {
+    return {};
+  }
+  return NormaliseSvgDashArray(raw);
+}
+
 template <typename P>
 void readSvgPaintProps(SceneNode& node, const P* pp) {
   node.svgHasFill = svgBrushFromDynamic(pp->fill, node.svgFillColor,
@@ -210,6 +256,9 @@ void readSvgPaintProps(SceneNode& node, const P* pp) {
   // SVG's default miterlimit is 4; rnsvg's generated default is 0.
   node.svgStrokeMiterlimit =
       pp->strokeMiterlimit > 0.0 ? (float)pp->strokeMiterlimit : 4.0f;
+  // ENG-13: dashes. Empty = solid.
+  node.svgStrokeDash = svgDashFromDynamic(pp->strokeDasharray);
+  node.svgStrokeDashOffset = (float)pp->strokeDashoffset;
 }
 
 // Shape geometry props are folly::dynamic because rnsvg accepts a number or a
@@ -2004,7 +2053,18 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                                  ? kImpellerStrokeJoinBevel
                                  : kImpellerStrokeJoinMiter);
             ImpellerPaintSetStrokeMiter(strokePaint, node.svgStrokeMiterlimit);
-            ImpellerDisplayListBuilderDrawPath(builder, path, strokePaint);
+            // ENG-13: a dashed stroke strokes the DASHED path (cut from the
+            // same `d` parse), and the fill above keeps the whole shape. A
+            // path that cannot be dashed (too many dashes) strokes solid.
+            ImpellerPath dashed = nullptr;
+            if (!node.svgStrokeDash.empty()) {
+              dashed = BuildDashedSvgPath(node.svgD, node.svgStrokeDash,
+                                          node.svgStrokeDashOffset,
+                                          node.svgStrokeLinecap != 0);  // ENG-13 capDots
+            }
+            ImpellerDisplayListBuilderDrawPath(
+                builder, dashed != nullptr ? dashed : path, strokePaint);
+            if (dashed != nullptr) ImpellerPathRelease(dashed);
             ImpellerPaintRelease(strokePaint);
           }
 
@@ -2430,6 +2490,15 @@ std::string SceneGraph::svgSubtreeCacheKey(const SceneNode& node, int pxW,
                     n.hasSvgMatrix ? 1 : 0, n.svgMatrix[0], n.svgMatrix[1],
                     n.svgMatrix[2], n.svgMatrix[3], n.svgMatrix[4],
                     n.svgMatrix[5], n.opacity);
+      key += buf;
+      // ENG-13: dashes change the pixels, so they are part of the key.
+      key += "dash=";
+      for (float v : n.svgStrokeDash) {
+        std::snprintf(buf, sizeof(buf), "%.3f,", v);
+        key += buf;
+      }
+      std::snprintf(buf, sizeof(buf), "@%.3f,c%d;", n.svgStrokeDashOffset,
+                    n.svgStrokeLinecap);
       key += buf;
     }
     for (auto childTag : n.children) {

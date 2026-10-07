@@ -59,6 +59,8 @@ add_library(rnsvg_common STATIC
   "${RNSVG_ROOT}/common/cpp/react/renderer/components/rnsvg/RNSVGImageShadowNode.cpp"
   # Our own path parser (`d` string -> ImpellerPathBuilder calls).
   "${CMAKE_SOURCE_DIR}/svg/SvgPath.cpp"
+  # ENG-13: strokeDasharray / strokeDashoffset (cuts the same parse into dashes).
+  "${CMAKE_SOURCE_DIR}/svg/SvgDash.cpp"
 )
 
 target_include_directories(rnsvg_common SYSTEM PUBLIC
