@@ -247,6 +247,9 @@ class FabricHost {
     MoveWordRight,
     MoveHome,
     MoveEnd,
+    // ENG-25. Up/Down a wrapped line in a MULTILINE field only.
+    MoveUp,
+    MoveDown,
     DeleteForward,
     // item 4a. Anchor -> 0, caret -> end, value unchanged. Cmd+A on
     // __APPLE__, Ctrl+A elsewhere (platform dispatch is dispatchKeyEvent's
@@ -351,6 +354,12 @@ class FabricHost {
   // and the byte offset the press landed at.
   int textDragTag_{0};
   size_t textDragAnchor_{0};
+  // ENG-25: Up/Down column memory. Valid only while the field and caret are
+  // exactly where the last vertical move left them; any other move or edit
+  // changes the caret, which discards it.
+  int vertGoalTag_{0};
+  size_t vertGoalCaret_{0};
+  float vertGoalX_{-1.0f};
 
   // <TextInput>. ENG-01b. Monotonic native event counter. RN's TextInput.js
   // discards a native onChange whose eventCount is <= the last it saw, to drop

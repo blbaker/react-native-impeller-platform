@@ -1292,6 +1292,189 @@ float TextInputWrapWidth(bool multiline, float boxW, float pad) {
   if (!multiline) return 1e6f;
   return boxW > 2.0f * pad + 1.0f ? boxW - 2.0f * pad : 1.0f;
 }
+
+// ENG-25. ONE paragraph for a TextInput's text: what paint draws, and (for a
+// multiline field) what the caret, the click hit test, the selection rects
+// and Up/Down read. Wrapped at the field width minus the text inset. `fg`
+// may be null: colour does not change layout.
+//
+// Before ENG-25 only the PAINT wrapped. The caret and the click mapping
+// measured an UNWRAPPED prefix (wrap width 1e6), so in a multiline field the
+// glyphs wrapped to the box while the caret walked off its right edge on
+// line 1, and a click on wrapped line 2 landed on line 1.
+ImpellerParagraph BuildTextInputParagraph(ImpellerTypographyContext typo,
+                                          const SceneNode& node,
+                                          const std::string& text, float w,
+                                          ImpellerPaint fg) {
+  ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
+  ImpellerParagraphStyleSetFontSize(style, node.fontSize);
+  ApplyFontFamily(style, node.fontFamily);  // ENG-22
+  if (fg != nullptr) ImpellerParagraphStyleSetForeground(style, fg);
+  ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typo);
+  ImpellerParagraphBuilderPushStyle(pb, style);
+  ImpellerParagraphBuilderAddText(pb, (const uint8_t*)text.data(), text.size());
+  ImpellerParagraph par = ImpellerParagraphBuilderBuildParagraphNew(
+      pb, TextInputWrapWidth(node.tiMultiline, w, kTextInputPad));  // ENG-24
+  ImpellerParagraphBuilderRelease(pb);
+  ImpellerParagraphStyleRelease(style);
+  return par;
+}
+
+// ENG-16 + ENG-25: y of a TextInput's first line, for paint AND hit test.
+// `drawStr` is what paints (the placeholder when the field is empty).
+float TextInputTextTop(ImpellerTypographyContext typo, const SceneNode& node,
+                       float y, float w, float h, const std::string& drawStr) {
+  const float lineH = node.fontSize * 1.2f;
+  // A multiline value can wrap or hold newlines: bottom/center must place
+  // the WHOLE text block, so measure it (same face, same wrap width).
+  float blockH = lineH;
+  if (node.tiMultiline && !drawStr.empty() && node.tiAlignVertical >= 2) {
+    ImpellerParagraph mp = BuildTextInputParagraph(typo, node, drawStr, w, nullptr);
+    if (mp != nullptr) {
+      blockH = std::max(lineH, (float)ImpellerParagraphGetHeight(mp));
+      ImpellerParagraphRelease(mp);
+    }
+  }
+  const auto& insets = node.layoutMetrics.contentInsets;
+  return TextInputLineTop(y, h, blockH, (float)insets.top, (float)insets.bottom,
+                          node.tiMultiline, node.tiAlignVertical);
+}
+
+// ENG-25. One wrapped line, from the paragraph's own line metrics, in
+// paragraph space. Line L OWNS caret positions [start16_L, start16_{L+1});
+// the last line also owns the end. So a position on a soft-wrap boundary
+// paints at the START of the next line (where the next typed glyph goes).
+struct TiLine {
+  size_t start16 = 0;
+  float top = 0.0f, height = 0.0f, left = 0.0f, width = 0.0f;
+};
+
+std::vector<TiLine> TiLinesOf(ImpellerParagraph par, const std::string& shown,
+                              float fallbackH) {
+  std::vector<TiLine> out;
+  const uint32_t n = ImpellerParagraphGetLineCount(par);
+  // Owned by the paragraph (cached with it): never released here.
+  ImpellerLineMetrics lm = ImpellerParagraphGetLineMetrics(par);
+  for (uint32_t i = 0; lm != nullptr && i < n; ++i) {
+    TiLine l;
+    l.start16 = ImpellerLineMetricsGetCodeUnitStartIndex(lm, i);
+    // ENG-24 x ENG-25: a line never starts before the previous line ends
+    // (newline included). Skia reports the empty line after a trailing '\n'
+    // with a start index one short (measured: "a\n" -> line 1 start=1), which
+    // made the end position look unowned and pushed the caret a line too far.
+    if (i > 0) {
+      l.start16 = std::max(
+          l.start16,
+          (size_t)ImpellerLineMetricsGetCodeUnitEndIndexIncludingNewline(lm, i - 1));
+    }
+    l.top = (float)(ImpellerLineMetricsGetBaseline(lm, i) -
+                    std::fabs(ImpellerLineMetricsGetAscent(lm, i)));
+    l.height = (float)ImpellerLineMetricsGetHeight(lm, i);
+    l.left = (float)ImpellerLineMetricsGetLeft(lm, i);
+    l.width = (float)ImpellerLineMetricsGetWidth(lm, i);
+    out.push_back(l);
+  }
+  if (out.empty()) {
+    TiLine l;
+    l.height = fallbackH;
+    out.push_back(l);
+  }
+  // A trailing '\n' puts the caret after it on an empty line BELOW. If the
+  // layout did not emit that line, add it so the end position has one.
+  const size_t len16 = Utf8ToUtf16Index(shown, shown.size());
+  if (!shown.empty() && shown.back() == '\n' && out.back().start16 < len16) {
+    TiLine l;
+    l.start16 = len16;
+    l.top = out.back().top + out.back().height;
+    l.height = out.back().height;
+    out.push_back(l);
+  }
+  return out;
+}
+
+size_t TiLineIndex(const std::vector<TiLine>& lines, size_t p16) {
+  size_t L = 0;
+  for (size_t i = 1; i < lines.size() && lines[i].start16 <= p16; ++i) L = i;
+  return L;
+}
+
+// Paragraph-space x of the caret at byte offset `m8` of `shown`, which sits
+// on `line`. Line start = the line's left edge; otherwise the right edge of
+// the grapheme cluster that ends at the caret, read from the wrapped layout.
+float TiCaretX(ImpellerParagraph par, const TiLine& line,
+               const std::string& shown, size_t m8) {
+  if (m8 == 0 || Utf8ToUtf16Index(shown, m8) <= line.start16) return line.left;
+  size_t prev = std::min(m8, shown.size()) - 1;
+  while (prev > 0 && (((unsigned char)shown[prev]) & 0xC0) == 0x80) --prev;
+  ImpellerGlyphInfo gi = ImpellerParagraphCreateGlyphInfoAtCodeUnitIndexNew(
+      par, Utf8ToUtf16Index(shown, prev));
+  if (gi == nullptr) return line.left;
+  const ImpellerRect r = ClusterBounds(gi);
+  ImpellerGlyphInfoRelease(gi);
+  return r.x + r.width;
+}
+
+// ENG-25. Every caret position of a MULTILINE field in SCREEN space: source
+// byte offset, x, and the wrapped line it sits on. Shared by the click hit
+// test, drag, Up/Down and the ti_glyph_x report, so they cannot disagree.
+struct TiGeom {
+  std::vector<TiLine> lines;
+  std::vector<size_t> offsets;  // SOURCE byte offsets (raw, not the mask)
+  std::vector<float> xs;        // screen x of each
+  std::vector<size_t> line;     // line index of each
+  float textX = 0.0f, textY = 0.0f;
+};
+
+bool TiGeomOf(ImpellerTypographyContext typo, const SceneNode& node,
+              const std::string& raw, float ox, float oy, float scrollY,
+              TiGeom* g) {
+  const std::string shown = node.tiSecure ? SecureMask(raw) : raw;
+  const bool showPlaceholder = shown.empty() && !node.tiPlaceholder.empty();
+  const float w = (float)node.layoutMetrics.frame.size.width;
+  const float h = (float)node.layoutMetrics.frame.size.height;
+  g->textX = ox + kTextInputPad;
+  // ENG-24: a focused multiline field may be scrolled vertically.
+  g->textY = TextInputTextTop(typo, node, oy, w, h,
+                              showPlaceholder ? node.tiPlaceholder : shown) -
+             scrollY;
+  const float lineH = node.fontSize * 1.2f;
+  ImpellerParagraph par =
+      shown.empty() ? nullptr : BuildTextInputParagraph(typo, node, shown, w, nullptr);
+  if (par != nullptr) {
+    g->lines = TiLinesOf(par, shown, lineH);
+  } else {
+    TiLine l;
+    l.height = lineH;
+    g->lines.push_back(l);
+  }
+  for (size_t i = 0; i <= raw.size(); ++i) {
+    if (i > 0 && i < raw.size() && (((unsigned char)raw[i]) & 0xC0) == 0x80) continue;
+    const size_t mi = node.tiSecure ? SecureMaskOffset(raw, i) : i;
+    const size_t L = TiLineIndex(g->lines, Utf8ToUtf16Index(shown, mi));
+    g->offsets.push_back(i);
+    g->line.push_back(L);
+    g->xs.push_back(g->textX +
+                    (par != nullptr ? TiCaretX(par, g->lines[L], shown, mi)
+                                    : g->lines[L].left));
+  }
+  if (par != nullptr) ImpellerParagraphRelease(par);
+  return true;
+}
+
+// The boundary on line `L` nearest screen x `x` (index into g.offsets).
+size_t TiNearestOnLine(const TiGeom& g, size_t L, float x) {
+  size_t best = SIZE_MAX;
+  float bestD = 0.0f;
+  for (size_t i = 0; i < g.offsets.size(); ++i) {
+    if (g.line[i] != L) continue;
+    const float d = std::fabs(x - g.xs[i]);
+    if (best == SIZE_MAX || d < bestD) {
+      best = i;
+      bestD = d;
+    }
+  }
+  return best == SIZE_MAX ? 0 : best;
+}
 }  // namespace
 
 // P1 item 14: one style push per run, mirroring ImpellerTextLayoutManager
@@ -1862,30 +2045,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // pre-ENG-16 rule, unchanged); multiline fields default to the TOP of the
     // content box, and textAlignVertical overrides either.
     const float lineH = node.fontSize * 1.2f;
+    // ENG-25: the same helper the multiline hit test uses (TiGeomOf).
+    const float ty = TextInputTextTop(typography_, node, y, w, h, drawStr);
     const auto& insets = node.layoutMetrics.contentInsets;
-    // A multiline value can wrap or hold newlines: bottom/center must place
-    // the WHOLE text block, so measure it (same face, same wrap width).
-    float blockH = lineH;
-    if (node.tiMultiline && !drawStr.empty() && node.tiAlignVertical >= 2) {
-      ImpellerParagraphStyle ms = ImpellerParagraphStyleNew();
-      ImpellerParagraphStyleSetFontSize(ms, node.fontSize);
-      ApplyFontFamily(ms, node.fontFamily);
-      ImpellerParagraphBuilder mb = ImpellerParagraphBuilderNew(typography_);
-      ImpellerParagraphBuilderPushStyle(mb, ms);
-      ImpellerParagraphBuilderAddText(mb, (const uint8_t*)drawStr.c_str(),
-                                      drawStr.size());
-      ImpellerParagraph mp = ImpellerParagraphBuilderBuildParagraphNew(
-          mb, TextInputWrapWidth(true, w, kTextInputPad));  // ENG-24
-      if (mp != nullptr) {
-        blockH = std::max(lineH, ImpellerParagraphGetHeight(mp));
-        ImpellerParagraphRelease(mp);
-      }
-      ImpellerParagraphBuilderRelease(mb);
-      ImpellerParagraphStyleRelease(ms);
-    }
-    const float ty = TextInputLineTop(y, h, blockH, (float)insets.top,
-                                      (float)insets.bottom, node.tiMultiline,
-                                      node.tiAlignVertical);
     // A small left inset so the glyphs (and caret) do not sit on the border.
     // Shared with glyphBoundariesLocked (item 3 click-to-caret): a click and
     // the painted text must agree on where the text starts.
@@ -1893,10 +2055,10 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // ENG-24: a single-line field lays its text out on ONE line (it used to
     // wrap at the box and spill below it) and scrolls sideways to keep the
     // caret in view; a multiline field wraps inside the box and scrolls
-    // vertically. The scroll is kept for the focused field (tiScrollX_/Y_)
+    // vertically (wrap width: BuildTextInputParagraph, shared with the hit
+    // test). The scroll is kept for the focused field (tiScrollX_/Y_)
     // and only moves when the caret would leave the box. Glyphs, selection
     // and caret are clipped to the field's box.
-    const float wrapW = TextInputWrapWidth(node.tiMultiline, w, pad);
     float caretX = x + pad;  // unscrolled field coordinates
     float caretY = ty;
     float caretH = lineH;
@@ -1916,12 +2078,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerColor tc = impellerColor(col, OwnAlpha(node));
       ImpellerPaintSetColor(tPaint, &tc);
       ImpellerParagraphStyleSetForeground(style, tPaint);
-      ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
-      ImpellerParagraphBuilderPushStyle(pb, style);
-      ImpellerParagraphBuilderAddText(pb, (const uint8_t*)drawStr.c_str(),
-                                      drawStr.size());
+      // ENG-25: built by the SAME helper the multiline hit test uses.
       ImpellerParagraph paragraph =
-          ImpellerParagraphBuilderBuildParagraphNew(pb, wrapW);
+          BuildTextInputParagraph(typography_, node, drawStr, w, tPaint);
       if (paragraph != nullptr) {
         auto prefixW = [&](size_t n) -> float {
           if (n == 0) return 0.0f;
@@ -1937,6 +2096,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           ImpellerParagraphBuilderRelease(sb);
           return wv;
         };
+        // ENG-25: a MULTILINE field's caret and selection read THIS
+        // paragraph's wrapped lines. Single-line fields keep the unwrapped
+        // prefix measurement below, unchanged.
+        const bool wrapped = node.tiMultiline && focused && !showPlaceholder;
+        std::vector<TiLine> lines;
+        if (wrapped) lines = TiLinesOf(paragraph, editShown, lineH);
         // item 2a: the caret is painted at its CURRENT index, not always at
         // end-of-text. Single-line: the advance of the UTF-8 prefix up to
         // tiCaret_ (the measurement typing-at-end always used). ENG-24
@@ -1944,30 +2109,30 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
         // after a newline or a soft wrap sits at the next line's start.
         // Placeholder text is not editable, so no caret offset is taken from
         // it. The caret decides the scroll, so it comes first.
-        if (focused && !showPlaceholder) {
-          if (node.tiMultiline) {
-            const TiCaret c =
-                TextInputCaretAt(paragraph, editShown, toShown(tiCaret_), lineH);
-            caretX = x + pad + c.x;
-            caretY = ty + c.y;
-            caretH = c.h;
-            const float visTop = y + (float)insets.top;
-            const float visBot = y + h - (float)insets.bottom;
-            float sy = tiScrollY_;
-            if (caretY + caretH - sy > visBot) sy = caretY + caretH - visBot;
-            if (caretY - sy < visTop) sy = caretY - visTop;
-            tiScrollY_ = scrollY = std::max(0.0f, sy);
-          } else {
-            caretX = x + pad + prefixW(toShown(tiCaret_));
-            const float visL = x + pad;
-            const float visR = x + w - pad - 1.0f;  // the 1 pt caret bar fits
-            float sx = tiScrollX_;
-            if (caretX - sx > visR) sx = caretX - visR;
-            if (caretX - sx < visL) sx = caretX - visL;
-            const float textW = ImpellerParagraphGetMaxIntrinsicWidth(paragraph);
-            const float maxS = std::max(0.0f, textW - (visR - visL));
-            tiScrollX_ = scrollX = std::min(std::max(0.0f, sx), maxS);
-          }
+        if (wrapped) {
+          // ENG-25: the caret's wrapped line and x in the painted layout.
+          const size_t m8 = toShown(tiCaret_);
+          const size_t Ln = TiLineIndex(lines, Utf8ToUtf16Index(editShown, m8));
+          caretX = x + pad + TiCaretX(paragraph, lines[Ln], editShown, m8);
+          caretY = ty + lines[Ln].top;
+          caretH = lines[Ln].height;
+          // ENG-24: scroll vertically so the caret's line stays in the box.
+          const float visTop = y + (float)insets.top;
+          const float visBot = y + h - (float)insets.bottom;
+          float sy = tiScrollY_;
+          if (caretY + caretH - sy > visBot) sy = caretY + caretH - visBot;
+          if (caretY - sy < visTop) sy = caretY - visTop;
+          tiScrollY_ = scrollY = std::max(0.0f, sy);
+        } else if (focused && !showPlaceholder) {
+          caretX = x + pad + prefixW(toShown(tiCaret_));
+          const float visL = x + pad;
+          const float visR = x + w - pad - 1.0f;  // the 1 pt caret bar fits
+          float sx = tiScrollX_;
+          if (caretX - sx > visR) sx = caretX - visR;
+          if (caretX - sx < visL) sx = caretX - visL;
+          const float textW = ImpellerParagraphGetMaxIntrinsicWidth(paragraph);
+          const float maxS = std::max(0.0f, textW - (visR - visL));
+          tiScrollX_ = scrollX = std::min(std::max(0.0f, sx), maxS);
         }
         ImpellerPoint at = {x + pad - scrollX, ty - scrollY};
         // item 4a: selection highlight, BEHIND the glyphs. Single-line: the
@@ -1982,20 +2147,29 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           ImpellerPaint selPaint = ImpellerPaintNew();
           ImpellerColor sc = impellerColor(node.tiSelectionColor, OwnAlpha(node));
           ImpellerPaintSetColor(selPaint, &sc);
-          if (node.tiMultiline) {
+          if (wrapped) {
+            // ENG-25: one rect per wrapped line the selection touches. A
+            // line whose selection runs past its end is covered to its end.
             const size_t lo16 = Utf8ToUtf16Index(editShown, lo);
             const size_t hi16 = Utf8ToUtf16Index(editShown, hi);
-            for (size_t i = lo16; i < hi16;) {
-              ImpellerGlyphInfo gi =
-                  ImpellerParagraphCreateGlyphInfoAtCodeUnitIndexNew(paragraph, i);
-              if (gi == nullptr) break;
-              const ImpellerRect r = ClusterBounds(gi);
-              const size_t end =
-                  ImpellerGlyphInfoGetGraphemeClusterCodeUnitRangeEnd(gi);
-              ImpellerGlyphInfoRelease(gi);
-              ImpellerRect sr = {at.x + r.x, at.y + r.y, r.width, r.height};
-              ImpellerDisplayListBuilderDrawRect(builder, &sr, selPaint);
-              i = end > i ? end : i + 1;
+            const size_t len16 = Utf8ToUtf16Index(editShown, editShown.size());
+            for (size_t L = 0; L < lines.size(); ++L) {
+              const size_t s = lines[L].start16;
+              const size_t e =
+                  L + 1 < lines.size() ? lines[L + 1].start16 : len16 + 1;
+              const size_t a = std::max(lo16, s);
+              const size_t b = std::min(hi16, e);
+              if (a >= b) continue;
+              const float x0 = TiCaretX(paragraph, lines[L], editShown,
+                                        Utf16ToUtf8Index(editShown, a));
+              const float x1 =
+                  b < e ? TiCaretX(paragraph, lines[L], editShown,
+                                   Utf16ToUtf8Index(editShown, b))
+                        : std::max(lines[L].left + lines[L].width,
+                                   x0 + node.fontSize * 0.3f);
+              ImpellerRect selRect = {at.x + x0, at.y + lines[L].top, x1 - x0,
+                                      lines[L].height};
+              ImpellerDisplayListBuilderDrawRect(builder, &selRect, selPaint);
             }
           } else {
             const float x0 = x + pad + prefixW(lo) - scrollX;
@@ -2008,7 +2182,6 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
         ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
         ImpellerParagraphRelease(paragraph);
       }
-      ImpellerParagraphBuilderRelease(pb);
       ImpellerPaintRelease(tPaint);
       ImpellerParagraphStyleRelease(style);
     }
@@ -2026,7 +2199,14 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::steady_clock::now() - tiCaretResetAt_)
               .count();
-      if (caretVisible(msSinceReset)) {
+      // ENG-25 gate hook: RNI_CARET_BLINK_MS=0 paints a SOLID caret, so a
+      // windowed screenshot of the caret can never land in an off phase.
+      // Unset = the platform half-period (kCaretBlinkPeriodMs).
+      static const int kBlinkMs = [] {
+        const char* e = std::getenv("RNI_CARET_BLINK_MS");
+        return e != nullptr ? std::atoi(e) : kCaretBlinkPeriodMs;
+      }();
+      if (caretVisible(msSinceReset, kBlinkMs)) {
         ImpellerPaint caretPaint = ImpellerPaintNew();
         ImpellerColor cc = impellerColor(node.textColor, OwnAlpha(node));
         ImpellerPaintSetColor(caretPaint, &cc);
@@ -3472,17 +3652,7 @@ bool SceneGraph::absoluteOriginLocked(facebook::react::Tag tag, float* ox,
 ImpellerParagraph SceneGraph::buildTextInputParagraphLocked(
     const SceneNode& node, const std::string& raw, float boxW) {
   const std::string shown = node.tiSecure ? SecureMask(raw) : raw;
-  ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
-  ImpellerParagraphStyleSetFontSize(style, node.fontSize);
-  ApplyFontFamily(style, node.fontFamily);
-  ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
-  ImpellerParagraphBuilderPushStyle(pb, style);
-  ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shown.data(), shown.size());
-  ImpellerParagraph par = ImpellerParagraphBuilderBuildParagraphNew(
-      pb, TextInputWrapWidth(node.tiMultiline, boxW, kTextInputPad));
-  ImpellerParagraphBuilderRelease(pb);
-  ImpellerParagraphStyleRelease(style);
-  return par;
+  return BuildTextInputParagraph(typography_, node, shown, boxW, nullptr);
 }
 
 bool SceneGraph::textInputKeyTraits(facebook::react::Tag tag, bool* multiline,
@@ -3588,47 +3758,27 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
 size_t SceneGraph::caretIndexForClick(facebook::react::Tag tag, float screenX,
                                       float screenY) {
   std::lock_guard<std::mutex> lock(mutex_);
-  // ENG-24: a multiline field maps (x, y) through the wrapped layout, the
-  // same paragraph paintNode draws, so a click on line 2 lands on line 2.
+  // ENG-25: a MULTILINE field maps the click through the wrapped layout the
+  // painter draws: the line under `screenY` first, then the nearest
+  // boundary on that line. A press above the text lands on line 1, below it
+  // on the last line.
   {
     auto it = nodes_.find(tag);
+    float ox = 0.0f, oy = 0.0f;
     if (it != nodes_.end() && it->second.isTextInput && it->second.tiMultiline &&
-        typography_ != nullptr) {
-      const SceneNode& node = it->second;
-      float ox = 0.0f, oy = 0.0f;
-      if (!absoluteOriginLocked(tag, &ox, &oy)) return 0;
-      const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : node.tiValue;
-      if (raw.empty()) return 0;
-      const float w = node.layoutMetrics.frame.size.width;
-      const float h = node.layoutMetrics.frame.size.height;
-      const auto& insets = node.layoutMetrics.contentInsets;
-      ImpellerParagraph par = buildTextInputParagraphLocked(node, raw, w);
-      if (par == nullptr) return 0;
-      const float lineH = node.fontSize * 1.2f;
-      const float blockH =
-          node.tiAlignVertical >= 2 ? std::max(lineH, ImpellerParagraphGetHeight(par))
-                                    : lineH;
-      const float ty = TextInputLineTop(oy, h, blockH, (float)insets.top,
-                                        (float)insets.bottom, true,
-                                        node.tiAlignVertical);
-      const float scrollY = (tiFocused_ == tag) ? tiScrollY_ : 0.0f;
-      const float px = screenX - (ox + kTextInputPad);
-      const float py = screenY - ty + scrollY;
-      size_t off = raw.size();
-      ImpellerGlyphInfo gi =
-          ImpellerParagraphCreateGlyphInfoAtParagraphCoordinatesNew(par, px, py);
-      if (gi != nullptr) {
-        const ImpellerRect r = ClusterBounds(gi);
-        const size_t b = ImpellerGlyphInfoGetGraphemeClusterCodeUnitRangeBegin(gi);
-        const size_t e = ImpellerGlyphInfoGetGraphemeClusterCodeUnitRangeEnd(gi);
-        ImpellerGlyphInfoRelease(gi);
-        const bool after = px > r.x + r.width * 0.5f;
-        off = Utf16ToUtf8Index(raw, after ? e : b);
-        // A click past the end of a line lands BEFORE its newline.
-        if (after && off > 0 && raw[off - 1] == '\n') off -= 1;
+        typography_ != nullptr && absoluteOriginLocked(tag, &ox, &oy)) {
+      const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
+      TiGeom g;
+      TiGeomOf(typography_, it->second, raw, ox, oy,
+               (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
+      size_t L = g.lines.size() - 1;
+      for (size_t i = 0; i < g.lines.size(); ++i) {
+        if (screenY < g.textY + g.lines[i].top + g.lines[i].height) {
+          L = i;
+          break;
+        }
       }
-      ImpellerParagraphRelease(par);
-      return off;
+      return g.offsets[TiNearestOnLine(g, L, screenX)];
     }
   }
   std::vector<size_t> offsets;
@@ -3652,7 +3802,35 @@ std::string SceneGraph::glyphBoundaryReportFor(facebook::react::Tag tag) {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<size_t> offsets;
   std::vector<float> xs;
-  if (!glyphBoundariesLocked(tag, &offsets, &xs)) return std::string();
+  // ENG-25: a multiline field reports its WRAPPED boundaries (the ones a
+  // click maps through), plus a second line naming each boundary's line and
+  // each line's screen top.
+  std::string lineReport;
+  {
+    auto it = nodes_.find(tag);
+    float ox = 0.0f, oy = 0.0f;
+    if (it != nodes_.end() && it->second.isTextInput && it->second.tiMultiline &&
+        typography_ != nullptr && absoluteOriginLocked(tag, &ox, &oy)) {
+      const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
+      TiGeom g;
+      TiGeomOf(typography_, it->second, raw, ox, oy,
+               (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
+      xs = g.xs;
+      lineReport = "\nrn-impeller: ti_glyph_lines tag=" + std::to_string((int)tag) +
+                   " line=";
+      for (size_t i = 0; i < g.line.size(); ++i) {
+        lineReport += (i ? "," : "") + std::to_string(g.line[i]);
+      }
+      lineReport += " tops=";
+      char tb[32];
+      for (size_t i = 0; i < g.lines.size(); ++i) {
+        snprintf(tb, sizeof(tb), "%s%.2f", i ? "," : "", g.textY + g.lines[i].top);
+        lineReport += tb;
+      }
+    } else if (!glyphBoundariesLocked(tag, &offsets, &xs)) {
+      return std::string();
+    }
+  }
   std::string out = "rn-impeller: ti_glyph_x tag=" + std::to_string((int)tag) +
                     " xs=";
   char buf[32];
@@ -3660,7 +3838,44 @@ std::string SceneGraph::glyphBoundaryReportFor(facebook::react::Tag tag) {
     snprintf(buf, sizeof(buf), "%s%.2f", i ? "," : "", xs[i]);
     out += buf;
   }
-  return out;
+  return out + lineReport;
+}
+
+// ENG-25.
+bool SceneGraph::isMultilineTextInput(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  return it != nodes_.end() && it->second.isTextInput && it->second.tiMultiline;
+}
+
+// ENG-25. Up/Down in a multiline field, through the wrapped layout: the
+// boundary on the line above/below nearest the goal x. Up on the first line
+// goes to the start, Down on the last line to the end (NSTextView). `goalX`
+// in: the x to aim at (< 0 = the caret's own x); out: the x aimed at, so a
+// run of Up/Down keeps its column across shorter lines.
+size_t SceneGraph::textInputVerticalMove(facebook::react::Tag tag, size_t caret,
+                                         int dir, float* goalX) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  float ox = 0.0f, oy = 0.0f;
+  if (it == nodes_.end() || !it->second.isTextInput || !it->second.tiMultiline ||
+      typography_ == nullptr || !absoluteOriginLocked(tag, &ox, &oy)) {
+    return caret;
+  }
+  const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
+  TiGeom g;
+  TiGeomOf(typography_, it->second, raw, ox, oy,
+               (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
+  size_t cur = 0;
+  for (size_t i = 0; i < g.offsets.size(); ++i) {
+    if (g.offsets[i] <= caret) cur = i;
+  }
+  const float x = (goalX != nullptr && *goalX >= 0.0f) ? *goalX : g.xs[cur];
+  if (goalX != nullptr) *goalX = x;
+  const size_t L = g.line[cur];
+  if (dir < 0 && L == 0) return 0;
+  if (dir > 0 && L + 1 >= g.lines.size()) return raw.size();
+  return g.offsets[TiNearestOnLine(g, dir < 0 ? L - 1 : L + 1, x)];
 }
 
 bool SceneGraph::isSecureTextInput(facebook::react::Tag tag) {

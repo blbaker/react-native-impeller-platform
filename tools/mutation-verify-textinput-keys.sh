@@ -104,15 +104,20 @@ run_mutant "M6 single-line wraps" "F"
 fi
 
 if want M7; then
-mutate "$SG" "            tiScrollX_ = scrollX = std::min(std::max(0.0f, sx), maxS);" \
-             "            tiScrollX_ = scrollX = 0.0f * std::min(std::max(0.0f, sx), maxS);  // MUTANT M7"
+mutate "$SG" "          tiScrollX_ = scrollX = std::min(std::max(0.0f, sx), maxS);" \
+             "          tiScrollX_ = scrollX = 0.0f * std::min(std::max(0.0f, sx), maxS);  // MUTANT M7"
 run_mutant "M7 no caret-follow scroll" "F|G"
 fi
 
 if want M8; then
-mutate "$SG" "  if (byteOff <= s.size() && s[byteOff - 1] == '\\n') {" \
-             "  if (false && byteOff <= s.size() && s[byteOff - 1] == '\\n') {  // MUTANT M8"
-run_mutant "M8 caret stays on the newline's line" "B"
+# The paint caret reads ENG-25's wrapped line table (TiLinesOf). Skia reports
+# the empty line after a trailing newline one code unit short; without the
+# normalisation the caret lands a line too far (the ENG-24 x ENG-25 merge bug).
+mutate "$SG" "    if (i > 0) {
+      l.start16 = std::max(" \
+"    if (false) {  // MUTANT M8
+      l.start16 = std::max("
+run_mutant "M8 line start after a newline not normalised" "B"
 fi
 
 if want M9; then

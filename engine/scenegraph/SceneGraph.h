@@ -652,6 +652,15 @@ class SceneGraph {
   // click at the midpoint between two boundaries instead of guessing font
   // metrics. Empty string if `tag` is not a text field with displayed text.
   std::string glyphBoundaryReportFor(facebook::react::Tag tag);
+  // ENG-25. True for a <TextInput multiline>.
+  bool isMultilineTextInput(facebook::react::Tag tag);
+  // ENG-25. Up (dir < 0) / Down (dir > 0) from byte offset `caret` in a
+  // MULTILINE field, through the same wrapped layout paint draws. Returns
+  // the new caret. `goalX` in/out: the screen x to aim at (< 0 = the
+  // caret's own), so repeated moves hold their column. Non-multiline fields
+  // return `caret` unchanged.
+  size_t textInputVerticalMove(facebook::react::Tag tag, size_t caret, int dir,
+                               float* goalX);
   // One `paragraph_text tag=<t> "<text>"` line per Paragraph node, for the
   // ENG-01b edit gate: the fixture's controlled label renders `len=N v=...`, so
   // this exposes the JS re-render result to a headless assertion.

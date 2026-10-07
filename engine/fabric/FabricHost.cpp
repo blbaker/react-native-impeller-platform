@@ -1478,7 +1478,8 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
   const bool isMove =
       action == KeyAction::MoveLeft || action == KeyAction::MoveRight ||
       action == KeyAction::MoveWordLeft || action == KeyAction::MoveWordRight ||
-      action == KeyAction::MoveHome || action == KeyAction::MoveEnd;
+      action == KeyAction::MoveHome || action == KeyAction::MoveEnd ||
+      action == KeyAction::MoveUp || action == KeyAction::MoveDown;
   // Editing with a selection first removes the selected range; the edit then
   // happens at its start (typing replaces, Backspace/Delete delete only it).
   bool textChanged = false;
@@ -1608,6 +1609,21 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
     case KeyAction::MoveEnd:
       caret = value.size();
       break;
+    case KeyAction::MoveUp:
+    case KeyAction::MoveDown: {
+      // ENG-25: one wrapped line up/down, at the column the run of vertical
+      // moves started from (kept only while the caret is where the last
+      // vertical move left it).
+      float goal = ((int)tag == vertGoalTag_ && caret == vertGoalCaret_)
+                       ? vertGoalX_
+                       : -1.0f;
+      caret = sceneGraph_->textInputVerticalMove(
+          tag, caret, action == KeyAction::MoveUp ? -1 : 1, &goal);
+      vertGoalTag_ = (int)tag;
+      vertGoalCaret_ = caret;
+      vertGoalX_ = goal;
+      break;
+    }
     case KeyAction::Submit:
     case KeyAction::Newline:
     case KeyAction::SelectAll:
@@ -1762,6 +1778,11 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
       caretAction = KeyAction::MoveHome;
     } else if (key == "End") {
       caretAction = KeyAction::MoveEnd;
+    } else if ((key == "ArrowUp" || key == "ArrowDown") &&
+               sceneGraph_->isMultilineTextInput(sceneGraph_->focusedTextInput())) {
+      // ENG-25: a multiline field moves the caret one WRAPPED line. A
+      // single-line field keeps its old behaviour (no caret move).
+      caretAction = key == "ArrowUp" ? KeyAction::MoveUp : KeyAction::MoveDown;
     } else if ((key == "c" || key == "C") && selectAllMod && !mods.alt) {
       // item 5. Copy = selectAllMod+c (Cmd on darwin, Ctrl elsewhere).
       caretAction = KeyAction::Copy;
