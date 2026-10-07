@@ -55,8 +55,10 @@ mutate "$SG" "    ApplyFontFamily(style, node.fontFamily);  // ENG-22
     ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23" "    ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23 MUTANT M1"
 run_mutant "M1 Paragraph paint drops the family" "A|C"
 
-mutate "$SG" "      ApplyFontFamily(style, node.fontFamily);  // ENG-22
-      ImpellerPaint tPaint" "      ImpellerPaint tPaint  /* MUTANT M2 */"
+# ENG-25: TextInput paint builds its paragraph in BuildTextInputParagraph
+# (shared with the multiline hit test), so M2 drops the family THERE.
+mutate "$SG" "  ApplyFontFamily(style, node.fontFamily);  // ENG-22
+  if (fg != nullptr)" "  if (fg != nullptr)  /* MUTANT M2 */"
 run_mutant "M2 TextInput paint drops the family" "D"
 
 mutate "$SG" "  ApplyFontFamily(style, node.fontFamily);

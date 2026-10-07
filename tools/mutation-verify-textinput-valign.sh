@@ -66,8 +66,8 @@ mutate "$SG" "  if (mode == 1) return y + insetTop;" \
              "  if (mode == 1) return y + 0.0f * insetTop;  // MUTANT M4"
 run_mutant "M4 content insets ignored" "A"
 
-mutate "$SG" "    const float ty = TextInputLineTop(y, h, blockH, (float)insets.top," \
-             "    const float ty = TextInputLineTop(y, h, lineH, (float)insets.top,  // MUTANT M5"
+mutate "$SG" "  return TextInputLineTop(y, h, blockH, (float)insets.top, (float)insets.bottom," \
+             "  return TextInputLineTop(y, h, lineH, (float)insets.top, (float)insets.bottom,  // MUTANT M5"
 run_mutant "M5 bottom places one line, not the block" "C"
 
 mutate "$SG" "  if (mode == 0) mode = multiline ? 1 : 3;" \
