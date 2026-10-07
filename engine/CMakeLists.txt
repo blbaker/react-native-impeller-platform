@@ -222,6 +222,10 @@ add_executable(rn-impeller
   runtime/ReactHost.cpp
   runtime/InspectorHost.cpp
   modules/PlatformModules.cpp
+  # ENG-14: the host's accessibility settings. darwin windowed builds read
+  # NSWorkspace (Cocoa is linked only there); every other build answers false.
+  modules/AccessibilitySettings.cpp
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/modules/AccessibilitySettingsDarwin.mm>
   modules/NetworkingModule.cpp
   modules/WebSocketModule.cpp
   fabric/FabricHost.cpp

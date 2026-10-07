@@ -23,6 +23,7 @@
 
 #include "runtime/FeatureFlags.h"
 #include "modules/ClipboardModule.h"
+#include "modules/AccessibilityManagerModule.h"  // ENG-14
 
 namespace rni {
 
@@ -309,6 +310,14 @@ ReactHost::ReactHost(bool withInspector) {
   // so its absence is SILENT the same way AppStorage's and Networking's are.
   modules_->add("Clipboard", [c = clipboard_](auto inv) {
     return std::make_shared<ClipboardModule>(inv, c);
+  });
+
+  // ENG-14. AccessibilityInfo's non-Android arm reads this module (RN's iOS
+  // name). Its absence is NOT silent: every AccessibilityInfo.is*Enabled()
+  // REJECTED, and apps read a rejection as "reduce motion off". See
+  // AccessibilityManagerModule.h.
+  modules_->add("AccessibilityManager", [](auto inv) {
+    return std::make_shared<rni::AccessibilityManagerModule>(inv);
   });
 
   // ENG-06. RN's own C++ NativeAnimated engine (ReactCommon/react/renderer/

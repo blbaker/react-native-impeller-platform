@@ -205,6 +205,9 @@ const SPEC_FOR = {
   // parity item 12. RN's WebSocket spec; the engine module subclasses
   // NativeWebSocketModuleCxxSpec.
   WebSocketModule:    'src/private/specs_DEPRECATED/modules/NativeWebSocketModule.js',
+  // ENG-14. RN's iOS accessibility spec; AccessibilityInfo's non-Android arm
+  // reads it, and the engine module subclasses NativeAccessibilityManagerCxxSpec.
+  AccessibilityManager: 'src/private/specs_DEPRECATED/modules/NativeAccessibilityManager.js',
 };
 
 // ⛔ SOME MODULES HAVE NO RN CORE SPEC, AND THAT IS NOT AN ESCAPE HATCH.
