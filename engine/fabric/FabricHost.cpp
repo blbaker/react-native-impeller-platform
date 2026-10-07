@@ -13,6 +13,7 @@
 #include <react/renderer/components/text/RawTextComponentDescriptor.h>
 #include <react/renderer/components/text/TextComponentDescriptor.h>
 #include <react/renderer/components/view/ViewComponentDescriptor.h>
+#include "SwitchShadowNode.h"  // ENG-15
 #include <react/renderer/core/EventBeat.h>
 #include <react/renderer/core/LayoutConstraints.h>
 #include <react/renderer/core/LayoutContext.h>
@@ -556,6 +557,11 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
   // read-only surface the Mac gate is currently pinned to.
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::TextInputComponentDescriptor>());
+  // <Switch>. ENG-15. Same floor as above: unregistered, a <Switch> mounts as
+  // a plain View, measures 0 x 0 and paints nothing (audit tile 62). See
+  // fabric/SwitchShadowNode.h.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::ImpellerSwitchComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
   // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --
@@ -862,7 +868,38 @@ int FabricHost::dispatchTouchToTarget(TouchPhase phase, react::Tag target,
             break;
         }
       });
+  // ENG-15: a release INSIDE a <Switch> toggles it, like UISwitch's
+  // touch-up-inside. "Inside" is a fresh hit test at the release point, so a
+  // captured press dragged off the switch and released elsewhere cancels.
+  // Every release path (headless --tap, the windowed capture) comes through
+  // here, so the toggle cannot differ between them.
+  if (phase == TouchPhase::Up && sceneGraph_->isSwitchTag(target) &&
+      sceneGraph_->hitTest(x, y) == target) {
+    toggleSwitch((std::int32_t)target);
+  }
   return (int)target;
+}
+
+// ENG-15. Flip the Switch's painted value, then tell JS through the Switch's
+// own generated emitter: SwitchEventEmitter::onChange({value, target}), the
+// payload Switch.js's handleChange reads (event.nativeEvent.value). JS then
+// re-commits `value` (controlled) or, when it keeps its old value, sends the
+// setValue view command back (runCommand), as on iOS.
+int FabricHost::toggleSwitch(std::int32_t tag) {
+  if (!sceneGraph_ || !runtimeScheduler_) return -1;
+  const int v = sceneGraph_->toggleSwitch((react::Tag)tag);
+  if (v < 0) return -1;
+  auto sw = std::dynamic_pointer_cast<const react::SwitchEventEmitter>(
+      sceneGraph_->eventEmitterFor((react::Tag)tag));
+  printf("rn-impeller: switch_toggle tag=%d value=%d emitter=%d\n", (int)tag, v,
+         sw ? 1 : 0);
+  fflush(stdout);
+  if (sw) {
+    react::SwitchEventEmitter::OnChange ev{v == 1, (int)tag};
+    runtimeScheduler_->scheduleWork(
+        [sw, ev](facebook::jsi::Runtime&) { sw->onChange(ev); });
+  }
+  return v;
 }
 
 // ENG-DRAG (P0). Press-drag-release capture. A real UI toolkit routes every
@@ -1984,6 +2021,17 @@ void FabricHost::runCommand(const ViewCommand& cmd) {
   }
   if (cmd.name == "flashScrollIndicators" || cmd.name == "zoomToRect") {
     return;  // no scroll indicators / zoom on this platform: honest no-op
+  }
+
+  // ENG-15. SwitchNativeComponent's iOS command: Switch.js sends it from a
+  // layout effect when JS keeps a value different from the one native just
+  // toggled to (an uncontrolled or refusing parent), so the switch snaps back.
+  if (cmd.name == "setValue") {
+    if (cmd.bools.empty()) return;
+    const int v = sceneGraph_->setSwitchValue(tag, cmd.bools[0]);
+    printf("rn-impeller: switch_set tag=%d value=%d\n", cmd.tag, v);
+    fflush(stdout);
+    return;
   }
 
   if (cmd.name == "focus") {

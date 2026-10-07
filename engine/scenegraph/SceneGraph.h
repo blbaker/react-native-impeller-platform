@@ -201,6 +201,22 @@ struct SceneNode {
   // paint path (which reads ParagraphState, a state a TextInput does not carry)
   // is never entered for it.
   bool isTextInput{false};
+  // <Switch>. ENG-15. RN iOS UISwitch: a rounded track filled with onTintColor
+  // when ON and tintColor when OFF, and a round thumb at the right (ON) or left
+  // (OFF) end. `swValue` is what PAINTS: a press flips it optimistically
+  // (FabricHost::toggleSwitch) and onChange tells JS. `swPropValue` is the
+  // `value` prop as last committed; like RCTSwitchComponentView, only a CHANGE
+  // of the prop moves the painted value, so an unrelated re-render does not
+  // undo a press. JS's revert path is the setValue command (setSwitchValue).
+  bool isSwitch{false};
+  bool swValue{false};
+  bool swPropValue{false};
+  bool swHasProp{false};
+  bool swDisabled{false};
+  // Defaults are iOS's: systemGreen on, light grey off, white thumb.
+  float swOnColor[4]{0.20392157f, 0.78039216f, 0.34901961f, 1.0f};
+  float swOffColor[4]{0.91372549f, 0.91372549f, 0.92156863f, 1.0f};
+  float swThumbColor[4]{1.0f, 1.0f, 1.0f, 1.0f};
   // item 11: keyboard focus. `focusable` is the View prop (View.js turns
   // tabIndex into it: tabIndex 0 -> true, -1 -> false); TextInput.js always
   // sends it too. `tiEditable` is TextInput's `editable` prop.
@@ -526,6 +542,13 @@ class SceneGraph {
   // is true; any other View when its `focusable` prop is true.
   std::vector<facebook::react::Tag> tabOrder();
   bool isTextInputTag(facebook::react::Tag tag);
+  // ENG-15. True for a mounted <Switch>.
+  bool isSwitchTag(facebook::react::Tag tag);
+  // ENG-15: flip a mounted, enabled <Switch>'s painted value. Returns the NEW
+  // value (1 on / 0 off), or -1 when `tag` is not an enabled Switch.
+  int toggleSwitch(facebook::react::Tag tag);
+  // ENG-15: the setValue view command. Returns the value set, or -1.
+  int setSwitchValue(facebook::react::Tag tag, bool value);
   // item 11. The View (not TextInput) that has keyboard focus: painted with a
   // focus ring. 0 = none.
   void setFocusedView(facebook::react::Tag tag);

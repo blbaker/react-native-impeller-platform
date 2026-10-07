@@ -105,6 +105,10 @@ class FabricHost {
   int dispatchCapturedMove(float x, float y);
   int endTouchCapture(float x, float y);
   bool isTouchCaptured() const;
+  // ENG-15. Flip an enabled <Switch> (UISwitch's optimistic local toggle) and
+  // send SwitchEventEmitter::onChange({value, target}) to JS. Returns the new
+  // value (1/0), or -1 when `tag` is not an enabled Switch.
+  int toggleSwitch(std::int32_t tag);
 
   // <ScrollView>. ENG-02. Applies `dy` POINTS of scroll at (x, y) in points --
   // the same coordinate space dispatchTouch takes -- and returns the tag of the

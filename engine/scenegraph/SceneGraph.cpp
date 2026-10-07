@@ -5,6 +5,7 @@
 #include <react/renderer/core/ConcreteState.h>
 #include <react/renderer/components/textinput/BaseTextInputProps.h>
 #include <react/renderer/components/iostextinput/TextInputProps.h>
+#include <react/renderer/components/FBReactNativeSpec/Props.h>  // SwitchProps, ENG-15
 #include <react/renderer/graphics/BackgroundImage.h>
 #include <react/renderer/graphics/Color.h>
 #include <react/renderer/graphics/LinearGradient.h>
@@ -647,6 +648,22 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     // in one and the transformed case in the other.
     if (fragTransform == 1 || fragTransform == 2 || fragTransform == 3) {
       node.text = applyTextTransform(node.text, fragTransform);
+    }
+  }
+
+  // <Switch>. ENG-15. Switch.js's iOS arm sends value / disabled / onTintColor
+  // (trackColor.true) / tintColor (trackColor.false) / thumbTintColor
+  // (thumbColor). An unset colour keeps the iOS default in SceneNode.
+  if (node.componentName == "Switch") {
+    node.isSwitch = true;
+    if (const auto* sp = dynamic_cast<const react::SwitchProps*>(view.props.get())) {
+      if (!node.swHasProp || sp->value != node.swPropValue) node.swValue = sp->value;
+      node.swPropValue = sp->value;
+      node.swHasProp = true;
+      node.swDisabled = sp->disabled;
+      if (sp->onTintColor) colorToFloats(sp->onTintColor, node.swOnColor);
+      if (sp->tintColor) colorToFloats(sp->tintColor, node.swOffColor);
+      if (sp->thumbTintColor) colorToFloats(sp->thumbTintColor, node.swThumbColor);
     }
   }
 
@@ -2036,6 +2053,42 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     }
   }
 
+  // <Switch>. ENG-15. iOS UISwitch geometry, scaled to the node's frame
+  // (51 x 31 by default, see fabric/SwitchShadowNode.h): a pill track filled
+  // with the ON or OFF colour, and a thumb inset 2 pt, at the right end when ON
+  // and the left end when OFF. A disabled switch is the whole control at half
+  // opacity as a GROUP (UIKit's alpha = 0.5): track and thumb are drawn
+  // opaque into a save-layer composited at 0.5, so the thumb does not show
+  // the track through it.
+  if (node.isSwitch && w > 0.0f && h > 0.0f) {
+    const float a = OwnAlpha(node);
+    if (node.swDisabled) {
+      ImpellerPaint lp = ImpellerPaintNew();
+      const ImpellerColor lc = {1.0f, 1.0f, 1.0f, 0.5f, kImpellerColorSpaceSRGB};
+      ImpellerPaintSetColor(lp, &lc);
+      const ImpellerRect lb = {x - 1.0f, y - 1.0f, w + 2.0f, h + 2.0f};
+      ImpellerDisplayListBuilderSaveLayer(builder, &lb, lp, nullptr);
+      ImpellerPaintRelease(lp);
+    }
+    ImpellerPaint sp = ImpellerPaintNew();
+    ImpellerColor tc = impellerColor(node.swValue ? node.swOnColor : node.swOffColor, a);
+    ImpellerPaintSetColor(sp, &tc);
+    const float r = h * 0.5f;
+    ImpellerRoundingRadii tr = {};
+    tr.top_left = tr.bottom_left = tr.top_right = tr.bottom_right = {r, r};
+    ImpellerRect track = {x, y, w, h};
+    ImpellerDisplayListBuilderDrawRoundedRect(builder, &track, &tr, sp);
+    const float inset = 2.0f;
+    const float d = h - 2.0f * inset;
+    const float tx = node.swValue ? x + w - inset - d : x + inset;
+    ImpellerColor thc = impellerColor(node.swThumbColor, a);
+    ImpellerPaintSetColor(sp, &thc);
+    ImpellerRect thumb = {tx, y + inset, d, d};
+    ImpellerDisplayListBuilderDrawOval(builder, &thumb, sp);
+    ImpellerPaintRelease(sp);
+    if (node.swDisabled) ImpellerDisplayListBuilderRestore(builder);
+  }
+
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
   // field is focused, else its controlled value), or the placeholder when the
   // field is empty, plus a caret when focused. Uses the SAME Impeller paragraph
@@ -3406,6 +3459,33 @@ bool SceneGraph::isTextInputTag(facebook::react::Tag tag) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = nodes_.find(tag);
   return it != nodes_.end() && it->second.isTextInput;
+}
+
+// ENG-15. See the header.
+bool SceneGraph::isSwitchTag(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  return it != nodes_.end() && it->second.isSwitch;
+}
+
+int SceneGraph::toggleSwitch(facebook::react::Tag tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end() || !it->second.isSwitch || it->second.swDisabled) return -1;
+  it->second.swValue = !it->second.swValue;
+  bumpVersion();  // the thumb moves and the track recolours
+  return it->second.swValue ? 1 : 0;
+}
+
+int SceneGraph::setSwitchValue(facebook::react::Tag tag, bool value) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = nodes_.find(tag);
+  if (it == nodes_.end() || !it->second.isSwitch) return -1;
+  if (it->second.swValue != value) {
+    it->second.swValue = value;
+    bumpVersion();
+  }
+  return value ? 1 : 0;
 }
 
 void SceneGraph::setFocusedView(facebook::react::Tag tag) {

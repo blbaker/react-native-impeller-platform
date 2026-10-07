@@ -34,6 +34,14 @@ file(GLOB rr_comp_text_SRC         ${RR}/components/text/*.cpp)
 # surface, which is the ENG-01 disease this closes.
 file(GLOB rr_comp_textinput_SRC    ${RR}/components/textinput/*.cpp)
 file(GLOB rr_comp_iostextinput_SRC ${RR}/components/textinput/platform/ios/react/renderer/components/iostextinput/*.cpp)
+# <Switch>. ENG-15. RN's generated core-component Props + EventEmitters
+# (SwitchProps, SwitchEventEmitter::onChange). Only these two files: they
+# depend on nothing beyond view/core/graphics, which are already here. RN's own
+# Switch ShadowNode is NOT used (it measures through UIKit/AppKit .mm); ours is
+# engine/fabric/SwitchShadowNode.h. The other props classes in these files
+# (Modal, ActivityIndicator, ...) compile but stay unregistered.
+set(rr_fbspec_DIR "${RN_ROOT}/React/FBReactNativeSpec/react/renderer/components/FBReactNativeSpec")
+set(rr_comp_switch_SRC ${rr_fbspec_DIR}/Props.cpp ${rr_fbspec_DIR}/EventEmitters.cpp)
 file(GLOB rr_mounting_SRC          ${RR}/mounting/*.cpp)
 file(GLOB rr_mounting_internal_SRC ${RR}/mounting/internal/*.cpp)
 file(GLOB rr_mounting_stubs_SRC    ${RR}/mounting/stubs/*.cpp)
@@ -93,7 +101,7 @@ set(reactcommon_fabric_SRC
   ${rr_core_SRC} ${rr_graphics_SRC}
   ${rr_componentregistry_SRC} ${rr_componentregistry_native_SRC}
   ${rr_comp_root_SRC} ${rr_comp_view_SRC} ${rr_comp_scrollview_SRC} ${rr_comp_text_SRC}
-  ${rr_comp_textinput_SRC} ${rr_comp_iostextinput_SRC}
+  ${rr_comp_textinput_SRC} ${rr_comp_iostextinput_SRC} ${rr_comp_switch_SRC}
   ${rr_mounting_SRC} ${rr_mounting_internal_SRC} ${rr_mounting_stubs_SRC}
   ${rr_scheduler_SRC} ${rr_uimanager_SRC} ${rr_uimanager_consistency_SRC}
   ${rr_attributedstring_SRC} ${rr_tlm_SRC} ${rr_tlm_cxx_SRC}
