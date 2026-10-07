@@ -2997,13 +2997,21 @@ bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
   const int N = supersample_;
   if (N < 1 || w <= 0.0f || h <= 0.0f) return false;
 
-  // Native (1x) pixel size of the icon's painted box, and the N x offscreen
-  // size. Bounded so a pathological full-screen SVG at N=4 cannot ask for a 16k
+  // Native pixel size of the icon's painted box, and the N x offscreen size.
+  // Bounded so a pathological full-screen SVG at N=4 cannot ask for a 16k
   // texture and OOM the GPU; past the bound we fall back to in-place.
-  const int nativeW = std::max(1, (int)std::ceil(w));
-  const int nativeH = std::max(1, (int)std::ceil(h));
-  const int pxW = (int)std::ceil(w * (float)N);
-  const int pxH = (int)std::ceil(h * (float)N);
+  //
+  // ⛔ ENG-05b: DEVICE PIXELS, NOT POINTS. w/h are points, and the composite
+  // below is drawn under paint()'s root pointScale transform, so the icon
+  // covers w*S x h*S pixels on screen. Sized in points, a Retina (S=2) frame
+  // got only N/S x supersampling: 4 edge levels at N=4 instead of 16. That is
+  // the live case on the Mac, because a Retina window wider than 1024 pt is
+  // too big for the whole-tree offscreen and lands here.
+  const float S = pointScale_ > 0.0f ? pointScale_ : 1.0f;
+  const int nativeW = std::max(1, (int)std::ceil(w * S));
+  const int nativeH = std::max(1, (int)std::ceil(h * S));
+  const int pxW = (int)std::ceil(w * S * (float)N);
+  const int pxH = (int)std::ceil(h * S * (float)N);
   if (pxW <= 0 || pxH <= 0 || pxW > 8192 || pxH > 8192) return false;
 
   const std::string key = svgSubtreeCacheKey(node, pxW, pxH);
