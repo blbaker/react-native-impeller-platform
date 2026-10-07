@@ -56,14 +56,29 @@ namespace jsi = facebook::jsi;
 struct AppearanceState {
   std::mutex mutex;
   std::string colorScheme{"light"};
+  // ENG-17: the host's own scheme (--color-scheme), what 'unspecified' returns
+  // to. An app override never changes it.
+  std::string systemScheme{"light"};
 
   std::string get() {
     std::lock_guard<std::mutex> lock(mutex);
     return colorScheme;
   }
+  // The HOST's scheme (startup flag): sets the system value and the current one.
   void set(std::string scheme) {
     std::lock_guard<std::mutex> lock(mutex);
+    systemScheme = scheme;
     colorScheme = std::move(scheme);
+  }
+  // ENG-17: an app override (Appearance.setColorScheme). 'unspecified' drops
+  // the override and goes back to the system scheme. Returns true when the
+  // EFFECTIVE scheme changed; `effective` gets the new value either way.
+  bool override(const std::string& requested, std::string& effective) {
+    std::lock_guard<std::mutex> lock(mutex);
+    effective = requested == "unspecified" ? systemScheme : requested;
+    if (effective == colorScheme) return false;
+    colorScheme = effective;
+    return true;
   }
 };
 
@@ -82,8 +97,23 @@ class AppearanceModule
     return jsi::String::createFromUtf8(rt, state_->get());
   }
 
+  // ENG-17. iOS: setColorScheme sets overrideUserInterfaceStyle, the trait
+  // change fires, and RCTAppearance emits `appearanceChanged`. Appearance.js
+  // only re-emits its 'change' (what useColorScheme subscribes to) from that
+  // native event, so storing the value alone left every subscriber stale.
+  // Emitted only when the effective scheme changes, like the trait change.
   void setColorScheme(jsi::Runtime& rt, jsi::String scheme) {
-    state_->set(scheme.utf8(rt));
+    std::string effective;
+    if (!state_->override(scheme.utf8(rt), effective)) return;
+    std::printf("rn-impeller: appearance_changed scheme=%s\n", effective.c_str());
+    std::fflush(stdout);
+    emitDeviceEvent("appearanceChanged",
+                    [effective](jsi::Runtime& rt2, std::vector<jsi::Value>& args) {
+                      jsi::Object prefs(rt2);
+                      prefs.setProperty(rt2, "colorScheme",
+                                        jsi::String::createFromUtf8(rt2, effective));
+                      args.emplace_back(std::move(prefs));
+                    });
   }
 
   void addListener(jsi::Runtime&, jsi::String) {}
