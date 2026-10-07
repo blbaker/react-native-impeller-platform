@@ -29,6 +29,7 @@
 # NO-NPM MODE: renders the committed prebuilt bundle with the staged binary.
 #   RNI_BIN=<rn-impeller> bash tools/ci-multiline-caret.sh
 # Needs a display (WSL: xvfb-run -a -s "-screen 0 1280x1024x24").
+# Darwin (vsynced window): RNI_FRAMES=150 bash tools/ci-multiline-caret.sh
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -60,9 +61,11 @@ CLICK_X=50; CLICK_Y=70   # box (30, 50): the Mac's "x=30, y=10+20*2"
 run_win() {  # $1 = tag, rest = input flags. Writes $WORK/$1.{log,ppm} + -first.ppm
   local tag="$1"; shift
   set +e
+  # RNI_FRAMES: the run must outlast the 1.5 s capture. 3000 frames is ~3 s
+  # on linux/xvfb (no vsync); a vsynced darwin window wants ~150.
   RNI_CARET_BLINK_MS=0 "$ENGINE" --window --probe-banner off --bundle "$BUNDLE" \
-    --app-name "$APP" --width 400 --height 300 --supersample-rnsvg 0 \
-    --frames 3000 --screenshot-first "$WORK/$tag-first.ppm" \
+    --app-name "$APP" --width 400 --height 300 --supersample-rnsvg 0 --scale 1 \
+    --frames "${RNI_FRAMES:-3000}" --screenshot-first "$WORK/$tag-first.ppm" \
     --screenshot "$WORK/$tag.ppm" --screenshot-after 1500 "$@" > "$WORK/$tag.log" 2>&1
   local rc=$?
   set -e
