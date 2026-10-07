@@ -679,6 +679,11 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       const auto attrs = tp->getEffectiveTextAttributes(1.0f);
       if (attrs.fontSize > 0) node.fontSize = (float)attrs.fontSize;
       node.fontFamily = attrs.fontFamily;  // ENG-22
+      // ENG-23 (TextInput): lineHeight in points; NaN/0 = unset. The measure
+      // side (ImpellerTextLayoutManager) already applies it, so paint must too.
+      node.lineHeight = (attrs.lineHeight > 0 && std::isfinite(attrs.lineHeight))
+                            ? (float)attrs.lineHeight
+                            : 0.0f;
       if (attrs.foregroundColor) {
         colorToFloats(attrs.foregroundColor, node.textColor);
       }
@@ -1309,6 +1314,7 @@ ImpellerParagraph BuildTextInputParagraph(ImpellerTypographyContext typo,
   ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
   ImpellerParagraphStyleSetFontSize(style, node.fontSize);
   ApplyFontFamily(style, node.fontFamily);  // ENG-22
+  ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23 TextInput
   if (fg != nullptr) ImpellerParagraphStyleSetForeground(style, fg);
   ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typo);
   ImpellerParagraphBuilderPushStyle(pb, style);
@@ -1320,11 +1326,18 @@ ImpellerParagraph BuildTextInputParagraph(ImpellerTypographyContext typo,
   return par;
 }
 
+// ENG-23 (TextInput): one line's height with no paragraph to read it from
+// (empty field, single-line centring, the caret line). lineHeight when set,
+// else the face's ~1.2 em that every TextInput path used before.
+float TextInputLineH(const SceneNode& node) {
+  return node.lineHeight > 0.0f ? node.lineHeight : node.fontSize * 1.2f;
+}
+
 // ENG-16 + ENG-25: y of a TextInput's first line, for paint AND hit test.
 // `drawStr` is what paints (the placeholder when the field is empty).
 float TextInputTextTop(ImpellerTypographyContext typo, const SceneNode& node,
                        float y, float w, float h, const std::string& drawStr) {
-  const float lineH = node.fontSize * 1.2f;
+  const float lineH = TextInputLineH(node);  // ENG-23 TextInput
   // A multiline value can wrap or hold newlines: bottom/center must place
   // the WHOLE text block, so measure it (same face, same wrap width).
   float blockH = lineH;
@@ -1437,7 +1450,7 @@ bool TiGeomOf(ImpellerTypographyContext typo, const SceneNode& node,
   g->textY = TextInputTextTop(typo, node, oy, w, h,
                               showPlaceholder ? node.tiPlaceholder : shown) -
              scrollY;
-  const float lineH = node.fontSize * 1.2f;
+  const float lineH = TextInputLineH(node);  // ENG-23 TextInput
   ImpellerParagraph par =
       shown.empty() ? nullptr : BuildTextInputParagraph(typo, node, shown, w, nullptr);
   if (par != nullptr) {
@@ -2044,7 +2057,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // ENG-16: where the first line sits. Single-line fields centre it (the
     // pre-ENG-16 rule, unchanged); multiline fields default to the TOP of the
     // content box, and textAlignVertical overrides either.
-    const float lineH = node.fontSize * 1.2f;
+    const float lineH = TextInputLineH(node);  // ENG-23 TextInput
     // ENG-25: the same helper the multiline hit test uses (TiGeomOf).
     const float ty = TextInputTextTop(typography_, node, y, w, h, drawStr);
     const auto& insets = node.layoutMetrics.contentInsets;
@@ -3675,7 +3688,7 @@ bool SceneGraph::textInputContentSize(facebook::react::Tag tag, float* outW,
   const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : node.tiValue;
   const float boxW = node.layoutMetrics.frame.size.width;
   const auto& insets = node.layoutMetrics.contentInsets;
-  const float lineH = node.fontSize * 1.2f;
+  const float lineH = TextInputLineH(node);  // ENG-23 TextInput
   // A multiline field's content is as wide as its wrap width, empty or not.
   float textW = node.tiMultiline ? TextInputWrapWidth(true, boxW, kTextInputPad)
                                  : 0.0f;
