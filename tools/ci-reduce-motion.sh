@@ -15,9 +15,9 @@
 #   A. RNI_REDUCE_MOTION=1: JS reads true, the engine logs reduce_motion=1,
 #      the box paints GREEN.
 #   B. RNI_REDUCE_MOTION=0: JS reads false, the box paints RED.
-#   C. No override: JS reads the SYSTEM value. darwin: what
-#      `defaults read com.apple.universalaccess reduceMotion` says (System
-#      Settings > Accessibility > Display > Reduce motion). Elsewhere: false.
+#   C. No override: JS reads the SYSTEM value. darwin: what NSWorkspace
+#      reports, read outside the engine via osascript (System Settings >
+#      Accessibility > Display > Reduce motion). Elsewhere: false.
 #      RNI_EXPECT_SYSTEM_RM=true|false overrides the expectation.
 #   D. Every arm: all six queries RESOLVE (no REJECTED line). Once the module
 #      exists AccessibilityInfo calls each getter directly, so a missing or
@@ -136,8 +136,15 @@ echo "== C. no override reads the system setting =="
 WANT="${RNI_EXPECT_SYSTEM_RM:-}"
 if [ -z "$WANT" ]; then
   if [ "$(uname)" = "Darwin" ]; then
-    v="$(defaults read com.apple.universalaccess reduceMotion 2>/dev/null || echo 0)"
-    [ "$v" = "1" ] && WANT=true || WANT=false
+    # The OS's own answer, read outside the engine: the same NSWorkspace
+    # property the module reads. `defaults` is the fallback; its key is
+    # absent until the switch is first flipped, which means off.
+    v="$(osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion' 2>/dev/null || true)"
+    case "$v" in
+      true|false) WANT="$v" ;;
+      *) v="$(defaults read com.apple.universalaccess reduceMotion 2>/dev/null || echo 0)"
+         [ "$v" = "1" ] && WANT=true || WANT=false ;;
+    esac
   else
     WANT=false
   fi

@@ -71,7 +71,11 @@ mutate "$AM" '  void getCurrentGrayscaleState(jsi::Runtime& rt, jsi::Function on
     (void)rt; (void)onSuccess;  // MUTANT M4'
 run_mutant "M4 grayscale getter never calls back" "D\(on\): query grayscale"
 
-if [ "$(uname)" = "Darwin" ] && [ "$(defaults read com.apple.universalaccess reduceMotion 2>/dev/null || echo 0)" = "1" ] || [ "${RNI_M5:-0}" = "1" ]; then
+sys_rm_on() {
+  [ "$(uname)" = "Darwin" ] || return 1
+  [ "$(osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion' 2>/dev/null)" = "true" ]
+}
+if sys_rm_on || [ "${RNI_M5:-0}" = "1" ]; then
   mutate "$AM" '    return ReadAccessibilitySettings().reduceMotion;' \
                '    return false;  // MUTANT M5'
   run_mutant "M5 system read skipped" "C: "
