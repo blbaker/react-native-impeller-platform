@@ -2078,7 +2078,11 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
 #endif
 
   if (node.isParagraph && !node.runs.empty() && typography_ != nullptr) {
-    ImpellerParagraph paragraph = buildRunParagraph(node, w);
+    // B1: glyphs live in the content box (border + padding), not the frame.
+    const auto& pins = node.layoutMetrics.contentInsets;
+    const float px = x + (float)pins.left, py = y + (float)pins.top;
+    ImpellerParagraph paragraph =
+        buildRunParagraph(node, std::max(0.0f, w - (float)(pins.left + pins.right)));
     if (paragraph != nullptr) {
       // P1 item 15: a selectable paragraph's selection highlight, UNDER the
       // glyphs (drawn first), one rect per selected grapheme cluster as laid
@@ -2101,13 +2105,13 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           const ImpellerRect r = ClusterBounds(gi);
           const size_t end = ImpellerGlyphInfoGetGraphemeClusterCodeUnitRangeEnd(gi);
           ImpellerGlyphInfoRelease(gi);
-          ImpellerRect at = {x + r.x, y + r.y, r.width, r.height};
+          ImpellerRect at = {px + r.x, py + r.y, r.width, r.height};
           ImpellerDisplayListBuilderDrawRect(builder, &at, selPaint);
           i = end > i ? end : i + 1;
         }
         ImpellerPaintRelease(selPaint);
       }
-      ImpellerPoint at = {x, y};
+      ImpellerPoint at = {px, py};
       ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
       ImpellerParagraphRelease(paragraph);
     }
@@ -4112,8 +4116,12 @@ size_t SceneGraph::textOffsetAt(facebook::react::Tag tag, float x, float y) {
   float ox = 0.0f, oy = 0.0f;
   if (!absoluteOriginLocked(tag, &ox, &oy)) return 0;
   const std::string shown = JoinRuns(node);
-  ImpellerParagraph par =
-      buildRunParagraph(node, (float)node.layoutMetrics.frame.size.width);
+  const auto& cin = node.layoutMetrics.contentInsets;
+  ox += (float)cin.left;
+  oy += (float)cin.top;
+  ImpellerParagraph par = buildRunParagraph(
+      node, std::max(0.0f, (float)node.layoutMetrics.frame.size.width -
+                               (float)(cin.left + cin.right)));
   if (par == nullptr) return 0;
   size_t off = 0;
   ImpellerGlyphInfo gi = ImpellerParagraphCreateGlyphInfoAtParagraphCoordinatesNew(

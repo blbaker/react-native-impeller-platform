@@ -100,7 +100,36 @@ def _border_alpha_over_bg(ctl, feat):
     return True, f"mix={f}"
 
 
+def _text_box_style(ctl, feat):
+    # Feature: border 2 + padding 6 around 'AB'. Glyph ink must start >= 7 px
+    # inside the red border's outer edge, and no black ink may break the ring.
+    # Control: bare text, so its ink starts at the element origin.
+    ci = bbox(ctl.points(is_dark))
+    if ci is None or ci[0] > 3 or ci[1] > 8:
+        return False, f"control ink not at the origin {ci}"
+    red = bbox(feat.points(is_red))
+    if red is None:
+        return False, "no red border"
+    ink = bbox(feat.points(is_dark, red[0] - 2, red[2] + 3, red[1] - 2, red[3] + 3))
+    if ink is None:
+        return False, "no glyph ink"
+    dx, dy = ink[0] - red[0], ink[1] - red[1]
+    if dx < 7 or dy < 7:
+        return False, f"ink starts {dx},{dy} inside the border (need >= 7) ink={ink} red={red}"
+    for x in range(red[0] + 10, red[2] - 9):
+        for y in (red[1], red[1] + 1, red[3] - 1, red[3]):
+            if is_dark(feat.px(x, y)):
+                return False, f"black ink on the top/bottom ring at {x},{y}"
+    for y in range(red[1] + 10, red[3] - 9):
+        for x in (red[0], red[0] + 1, red[2] - 1, red[2]):
+            if is_dark(feat.px(x, y)):
+                return False, f"black ink on the side ring at {x},{y}"
+    return True, f"ink inset={dx},{dy}"
+
+
 RULES = {
+    # SC-01
+    'g2:textBoxStyle': _text_box_style,
     # SC-00 (harness example; already correct on bf7be0f)
     'g2:borderAlphaOverBg': _border_alpha_over_bg,
 }

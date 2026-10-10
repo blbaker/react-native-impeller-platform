@@ -9,6 +9,7 @@
 #
 # Mutant index (keep in step with the blocks below):
 #   SC00a  border colour alpha dropped (opaque border)   -> g2:borderAlphaOverBg
+#   SC01a  Text paints at the frame origin (insets dropped) -> g2:textBoxStyle
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -84,6 +85,12 @@ if want SC00a; then
 echo "== SC00a: border colour alpha dropped =="
 mutate engine/scenegraph/SceneGraph.cpp "      if (colors[i]) colorToFloats(colors[i], node.borderColors[i]);" "      if (colors[i]) { colorToFloats(colors[i], node.borderColors[i]); node.borderColors[i][3] = 1.0f; }"
 check SC00a g2:borderAlphaOverBg; N=$((N + 1))
+fi
+
+if want SC01a; then
+echo "== SC01a: Text paints at the frame origin =="
+mutate engine/scenegraph/SceneGraph.cpp "const float px = x + (float)pins.left, py = y + (float)pins.top;" "const float px = x, py = y;"
+check SC01a g2:textBoxStyle; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
