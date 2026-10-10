@@ -75,7 +75,7 @@ const TESTS = [
   {id: 'lineClamp', e: 'same', c: () => <View style={{width: 80}}>{T('AAAA BBBB CCCC DDDD EEEE', {fontSize: 14}, {numberOfLines: 2})}</View>, f: () => <View style={{width: 80}}><Text className="line-clamp-2 text-sm" style={{color: 'black'}}>AAAA BBBB CCCC DDDD EEEE</Text></View>},
   {id: 'fontMono', e: 'diff', c: () => T('iiMM'), f: () => NT('iiMM', 'font-mono')},
   {id: 'tabularNums', e: 'same', c: () => T('1111', {fontVariant: ['tabular-nums']}), f: () => NT('1111', 'tabular-nums')},
-  {id: 'textShadow', e: 'same', c: () => T('Ab', {fontSize: 32, color: RED, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: {width: 2, height: 2}, textShadowRadius: 2}), f: () => <Text className="text-shadow-lg text-[32px] text-red-500">Ab</Text>},
+  {id: 'textShadow', e: 'same', c: () => T('Ab', {fontSize: 32, color: RED, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: {width: 2, height: 2}, textShadowRadius: 2}), f: () => <Text className="text-shadow-[2px_2px_2px_rgba(0,0,0,0.5)] text-[32px] text-red-500">Ab</Text>},
   {id: 'textColor', e: 'same', c: () => T('Ab', {color: RED}), f: () => <Text className="text-red-500 text-[20px]">Ab</Text>},
   {id: 'placeholderColor', e: 'same', c: () => <TextInput placeholder="Ph" placeholderTextColor={RED} style={{width: 80, height: 40, fontSize: 16}} />, f: () => <TextInput placeholder="Ph" className="placeholder:text-red-500" style={{width: 80, height: 40, fontSize: 16}} />},
   {id: 'calc', e: 'same', c: () => <View style={{width: 60, height: 60, backgroundColor: GREY}}><View style={{width: 40, height: 20, backgroundColor: BLUE}} /></View>, f: () => <View style={{width: 60, height: 60, backgroundColor: GREY}}><View className="w-[calc(50%+10px)] h-5" style={{backgroundColor: BLUE}} /></View>},

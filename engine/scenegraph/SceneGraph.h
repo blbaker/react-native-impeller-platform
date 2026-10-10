@@ -44,6 +44,10 @@ struct TextRun {
   int fontWeight{0};
   bool italic{false};
   float opacity{1.0f};  // nested <Text style={{opacity}}>, multiplies the colour alpha
+  // textShadow*: a blurred, offset copy of this run's glyphs under the text (SC-15).
+  bool hasShadow{false};
+  float shadowOffX{0}, shadowOffY{0}, shadowSigma{0};
+  float shadowColor[4]{0, 0, 0, 1};
   int decoLine{0};
   int decoStyle{0};
   bool hasDecoColor{false};
@@ -964,7 +968,11 @@ class SceneGraph {
   size_t textSelCaret_{0};
   // Builds `node`'s paragraph exactly as paintNode draws it (one style per
   // run) at layout width `w`. Caller owns the result. Caller holds mutex_.
-  ImpellerParagraph buildRunParagraph(const SceneNode& node, float w);
+  // shadow >= 0 builds the silhouette for that run's shadow group (SC-15): runs of
+  // other groups keep their advance but paint nothing.
+  ImpellerParagraph buildRunParagraph(const SceneNode& node, float w, int shadow = -1);
+  void paintTextShadows(ImpellerDisplayListBuilder builder, const SceneNode& node, float w,
+                        float px, float py);
   // item 11: focused non-TextInput View (focus ring). 0 = none.
   facebook::react::Tag focusedView_{0};
   // <TextInput>. ENG-01b item 5: caret blink. The steady_clock instant the

@@ -632,6 +632,16 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
           if (fa.fontWeight.has_value()) run.fontWeight = (int)*fa.fontWeight;
           run.italic = fa.fontStyle.has_value() && *fa.fontStyle != react::FontStyle::Normal;
           if (std::isfinite(fa.opacity)) run.opacity = std::clamp((float)fa.opacity, 0.0f, 1.0f);
+          const float sOffX = fa.textShadowOffset ? (float)fa.textShadowOffset->width : 0.0f;
+          const float sOffY = fa.textShadowOffset ? (float)fa.textShadowOffset->height : 0.0f;
+          const float sRad = std::isfinite(fa.textShadowRadius) ? std::max(0.0f, (float)fa.textShadowRadius) : 0.0f;
+          if (sOffX != 0.0f || sOffY != 0.0f || sRad > 0.0f) {
+            run.hasShadow = true;
+            run.shadowOffX = sOffX;
+            run.shadowOffY = sOffY;
+            run.shadowSigma = sRad * 0.5f;  // as boxShadow: CSS blur B is sigma B/2
+            if (fa.textShadowColor) colorToFloats(fa.textShadowColor, run.shadowColor);
+          }
           if (fa.textDecorationLineType.has_value()) {
             run.decoLine = (int)*fa.textDecorationLineType;
           }
@@ -1580,7 +1590,12 @@ static float ParagraphVOffset(const SceneNode& node, ImpellerParagraph paragraph
   return 0.0f;
 }
 
-ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) {
+static bool SameShadow(const TextRun& a, const TextRun& b) {
+  return a.hasShadow && b.hasShadow && a.shadowOffX == b.shadowOffX && a.shadowOffY == b.shadowOffY &&
+         a.shadowSigma == b.shadowSigma && std::equal(a.shadowColor, a.shadowColor + 4, b.shadowColor);
+}
+
+ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w, int shadow) {
   if (typography_ == nullptr) return nullptr;
   std::vector<ImpellerPaint> runPaints;
   ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
@@ -1611,12 +1626,15 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) 
     }
     ImpellerPaint textPaint = ImpellerPaintNew();
     ImpellerColor tc = impellerColor(run.color, OwnAlpha(node) * run.opacity);
+    // Shadow silhouette: opaque for this group's runs, invisible for the rest.
+    const bool shadowRun = shadow >= 0 && SameShadow(run, node.runs[shadow]);
+    if (shadow >= 0) tc.alpha = shadowRun ? 1.0f : 0.0f;
     ImpellerPaintSetColor(textPaint, &tc);
     ImpellerParagraphStyleSetForeground(style, textPaint);
     runPaints.push_back(textPaint);
     // A nested <Text style={{backgroundColor}}> fills behind its own glyphs
     // only (RN iOS NSBackgroundColorAttributeName), not the whole line box.
-    if (run.hasBackground) {
+    if (run.hasBackground && shadow < 0) {
       ImpellerPaint bgPaint = ImpellerPaintNew();
       ImpellerColor bc = impellerColor(run.background, OwnAlpha(node) * run.opacity);
       ImpellerPaintSetColor(bgPaint, &bc);
@@ -1624,10 +1642,10 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) 
       runPaints.push_back(bgPaint);
     }
     // Style audit item 9: decoration colour defaults to the run's colour.
-    ApplyTextDecoration(style, run.decoLine, run.decoStyle,
-                        impellerColor(run.hasDecoColor ? run.decoColor
-                                                       : run.color,
-                                      OwnAlpha(node) * run.opacity));
+    ImpellerColor decoC = impellerColor(run.hasDecoColor ? run.decoColor : run.color,
+                                        OwnAlpha(node) * run.opacity);
+    if (shadow >= 0) decoC.alpha = shadowRun ? 1.0f : 0.0f;
+    ApplyTextDecoration(style, run.decoLine, run.decoStyle, decoC);
     ImpellerParagraphBuilderPushStyle(pb, style);
     ImpellerParagraphBuilderAddText(pb, (const uint8_t*)run.text.c_str(),
                                     run.text.size());
@@ -1639,6 +1657,34 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) 
   ImpellerParagraphBuilderRelease(pb);
   for (ImpellerPaint p : runPaints) ImpellerPaintRelease(p);
   return paragraph;
+}
+
+// SC-15: one silhouette paragraph per distinct textShadow among the runs, drawn
+// under the real glyphs through the same tinted/blurred layer as content shadows.
+void SceneGraph::paintTextShadows(ImpellerDisplayListBuilder builder, const SceneNode& node, float w,
+                                  float px, float py) {
+  std::vector<size_t> done;
+  for (size_t i = 0; i < node.runs.size(); ++i) {
+    const TextRun& r = node.runs[i];
+    if (!r.hasShadow || r.text.empty()) continue;
+    bool seen = false;
+    for (size_t d : done) seen = seen || SameShadow(node.runs[d], r);
+    if (seen) continue;
+    done.push_back(i);
+    ImpellerParagraph sp = buildRunParagraph(node, w, (int)i);
+    if (sp == nullptr) continue;
+    rni::ShadowSpec spec;
+    spec.offsetX = r.shadowOffX;
+    spec.offsetY = r.shadowOffY;
+    spec.sigma = r.shadowSigma;
+    std::copy(r.shadowColor, r.shadowColor + 3, spec.color);
+    spec.color[3] = r.shadowColor[3] * OwnAlpha(node) * r.opacity;
+    rni::BeginContentShadow(builder, spec);
+    ImpellerPoint at = {px, py};
+    ImpellerDisplayListBuilderDrawParagraph(builder, sp, &at);
+    rni::EndContentShadow(builder);
+    ImpellerParagraphRelease(sp);
+  }
 }
 
 // B11: RCTViewComponentView gives the layer a shadowPath only over a
@@ -2186,6 +2232,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
         }
         ImpellerPaintRelease(selPaint);
       }
+      paintTextShadows(builder, node, std::max(0.0f, w - (float)(pins.left + pins.right)), px,
+                       py + vOff);
       ImpellerPoint at = {px, py + vOff};
       ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
       ImpellerParagraphRelease(paragraph);

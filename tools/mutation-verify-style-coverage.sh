@@ -48,6 +48,9 @@
 #   SC14c  writingDirection ignored -> writingDirection (grid 1)
 #   SC14d  justify painted as left -> textAlignJustify (grid 1)
 #   SC14e  vertical centring ignored -> g2:textAlignVertical (also verticalAlign)
+#   SC15a  shadow offset ignored -> g2:textShadowNested
+#   SC15b  shadow blur ignored -> g2:textShadowNested
+#   SC15c  shadow x offset mirrored to -x -> g2:textShadowNested
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -365,6 +368,26 @@ if want SC14e; then
 echo "== SC14e: vertical centring ignored =="
 mutate engine/scenegraph/SceneGraph.cpp "  if (node.textVAlign == 3) return spare * 0.5f;" "  if (node.textVAlign == 3) return 0.0f;"
 check SC14e g2:textAlignVertical; N=$((N + 1))
+fi
+
+if want SC15a; then
+echo "== SC15a: textShadow offset ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "    spec.offsetX = r.shadowOffX;
+    spec.offsetY = r.shadowOffY;" "    spec.offsetX = 0.0f;
+    spec.offsetY = 0.0f;"
+check SC15a g2:textShadowNested; N=$((N + 1))
+fi
+
+if want SC15b; then
+echo "== SC15b: textShadow blur ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "    spec.sigma = r.shadowSigma;" "    spec.sigma = 0.0f;"
+check SC15b g2:textShadowNested; N=$((N + 1))
+fi
+
+if want SC15c; then
+echo "== SC15c: textShadow x offset mirrored =="
+mutate engine/scenegraph/SceneGraph.cpp "    spec.offsetX = r.shadowOffX;" "    spec.offsetX = -r.shadowOffX;"
+check SC15c g2:textShadowNested; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
