@@ -1359,9 +1359,18 @@ TiCaret TextInputCaretAt(ImpellerParagraph par, const std::string& s,
 
 // ENG-24. The width a TextInput's text lays out in: a multiline field wraps
 // inside its box; a single-line field never wraps (it scrolls sideways).
-float TextInputWrapWidth(bool multiline, float boxW, float pad) {
+float TextInputWrapWidth(bool multiline, float boxW, float padL, float padR) {
   if (!multiline) return 1e6f;
-  return boxW > 2.0f * pad + 1.0f ? boxW - 2.0f * pad : 1.0f;
+  return boxW > padL + padR + 1.0f ? boxW - padL - padR : 1.0f;
+}
+
+// SC-02: a TextInput's text inset: the default pad plus padding + border
+// (contentInsets). One source for paint, caret, click, selection and wrap.
+float TextInputPadL(const SceneNode& node) {
+  return kTextInputPad + (float)node.layoutMetrics.contentInsets.left;
+}
+float TextInputPadR(const SceneNode& node) {
+  return kTextInputPad + (float)node.layoutMetrics.contentInsets.right;
 }
 
 // ENG-25. ONE paragraph for a TextInput's text: what paint draws, and (for a
@@ -1386,7 +1395,8 @@ ImpellerParagraph BuildTextInputParagraph(ImpellerTypographyContext typo,
   ImpellerParagraphBuilderPushStyle(pb, style);
   ImpellerParagraphBuilderAddText(pb, (const uint8_t*)text.data(), text.size());
   ImpellerParagraph par = ImpellerParagraphBuilderBuildParagraphNew(
-      pb, TextInputWrapWidth(node.tiMultiline, w, kTextInputPad));  // ENG-24
+      pb, TextInputWrapWidth(node.tiMultiline, w, TextInputPadL(node),
+                         TextInputPadR(node)));  // ENG-24
   ImpellerParagraphBuilderRelease(pb);
   ImpellerParagraphStyleRelease(style);
   return par;
@@ -1511,7 +1521,7 @@ bool TiGeomOf(ImpellerTypographyContext typo, const SceneNode& node,
   const bool showPlaceholder = shown.empty() && !node.tiPlaceholder.empty();
   const float w = (float)node.layoutMetrics.frame.size.width;
   const float h = (float)node.layoutMetrics.frame.size.height;
-  g->textX = ox + kTextInputPad;
+  g->textX = ox + TextInputPadL(node);
   // ENG-24: a focused multiline field may be scrolled vertically.
   g->textY = TextInputTextTop(typo, node, oy, w, h,
                               showPlaceholder ? node.tiPlaceholder : shown) -
@@ -2181,7 +2191,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // A small left inset so the glyphs (and caret) do not sit on the border.
     // Shared with glyphBoundariesLocked (item 3 click-to-caret): a click and
     // the painted text must agree on where the text starts.
-    const float pad = kTextInputPad;
+    const float pad = TextInputPadL(node);
+    const float padR = TextInputPadR(node);
     // ENG-24: a single-line field lays its text out on ONE line (it used to
     // wrap at the box and spill below it) and scrolls sideways to keep the
     // caret in view; a multiline field wraps inside the box and scrolls
@@ -2256,7 +2267,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
         } else if (focused && !showPlaceholder) {
           caretX = x + pad + prefixW(toShown(tiCaret_));
           const float visL = x + pad;
-          const float visR = x + w - pad - 1.0f;  // the 1 pt caret bar fits
+          const float visR = x + w - padR - 1.0f;  // the 1 pt caret bar fits
           float sx = tiScrollX_;
           if (caretX - sx > visR) sx = caretX - visR;
           if (caretX - sx < visL) sx = caretX - visL;
@@ -3851,7 +3862,8 @@ bool SceneGraph::textInputContentSize(facebook::react::Tag tag, float* outW,
   const auto& insets = node.layoutMetrics.contentInsets;
   const float lineH = TextInputLineH(node);  // ENG-23 TextInput
   // A multiline field's content is as wide as its wrap width, empty or not.
-  float textW = node.tiMultiline ? TextInputWrapWidth(true, boxW, kTextInputPad)
+  float textW = node.tiMultiline ? TextInputWrapWidth(true, boxW, TextInputPadL(node),
+                                            TextInputPadR(node))
                                  : 0.0f;
   float textH = lineH;
   {
@@ -3899,7 +3911,7 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   // byte offsets (one bullet per source codepoint), which the caret uses.
   const std::string shown = node.tiSecure ? SecureMask(raw) : raw;
   // ENG-24: a focused single-line field may be scrolled sideways.
-  const float textX = ox + kTextInputPad -
+  const float textX = ox + TextInputPadL(node) -
                       ((tiFocused_ == tag && !node.tiMultiline) ? tiScrollX_ : 0.0f);
   // Boundary 0 is the text start. Then one boundary after every codepoint
   // (a UTF-8 lead byte is any byte that is not 10xxxxxx).

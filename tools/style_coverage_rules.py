@@ -127,7 +127,20 @@ def _text_box_style(ctl, feat):
     return True, f"ink inset={dx},{dy}"
 
 
+def _ti_padding(ctl, feat):
+    # Feature: paddingLeft 30. Glyph ink starts 30 +/- 3 px right of the control's.
+    ci, fi = bbox(ctl.points(is_dark)), bbox(feat.points(is_dark))
+    if ci is None or fi is None:
+        return False, f"no glyph ink ctl={ci} feat={fi}"
+    dx = fi[0] - ci[0]
+    if abs(dx - 30) > 3:
+        return False, f"ink shifted {dx} px (need 30 +/- 3) ctl={ci} feat={fi}"
+    return True, f"ink shift={dx}"
+
+
 RULES = {
+    # SC-02
+    'g2:tiPadding': _ti_padding,
     # SC-01
     'g2:textBoxStyle': _text_box_style,
     # SC-00 (harness example; already correct on bf7be0f)

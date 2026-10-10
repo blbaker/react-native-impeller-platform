@@ -1,3 +1,4 @@
 # Landed style-coverage tiles: "<scene>:<tile id> <pass id>". Every line must PASS in ci-style-coverage.sh.
 g2:borderAlphaOverBg SC-00
 g2:textBoxStyle SC-01
+g2:tiPadding SC-02

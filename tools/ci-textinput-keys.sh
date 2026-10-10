@@ -91,9 +91,8 @@ echo "   OK"
 echo "== B. NL: a, Shift+Enter -> caret on line 2 =="
 run_win b '60,40:a<S-CR>'
 [ "$(value_of "$WORK/b.log")" = 'a\n' ] || fail "B: value is '$(value_of "$WORK/b.log")', want 'a\\n'"
-# NL content box starts at y 19 (top 10 + border 1 + padding 8); a line is
-# ~18 pt. Line 2's first columns hold only the caret when it moved down.
-B_L1="$(ink "$WORK/b.ppm" 22 19 318 37)"; B_L2="$(ink "$WORK/b.ppm" 22 38 30 56)"
+# NL content box: x 22 + border 1 + padding 8 + pad 4 = 35 (SC-02), y 19. A line is ~18 pt; line 2's first columns hold only the caret when it moved down.
+B_L1="$(ink "$WORK/b.ppm" 22 19 318 37)"; B_L2="$(ink "$WORK/b.ppm" 22 38 40 56)"
 echo "   line 1: $B_L1"; echo "   line 2 start: $B_L2"
 [ "$(field ink "$B_L1")" -ge 10 ] || fail "B: no 'a' ink on line 1"
 [ "$(field ink "$B_L2")" -ge 8 ] || fail "B: no caret at the start of line 2 (the caret stayed on line 1)"

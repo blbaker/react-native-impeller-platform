@@ -10,6 +10,7 @@
 # Mutant index (keep in step with the blocks below):
 #   SC00a  border colour alpha dropped (opaque border)   -> g2:borderAlphaOverBg
 #   SC01a  Text paints at the frame origin (insets dropped) -> g2:textBoxStyle
+#   SC02a  TextInput paint ignores contentInsets.left -> g2:tiPadding
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -91,6 +92,12 @@ if want SC01a; then
 echo "== SC01a: Text paints at the frame origin =="
 mutate engine/scenegraph/SceneGraph.cpp "const float px = x + (float)pins.left, py = y + (float)pins.top;" "const float px = x, py = y;"
 check SC01a g2:textBoxStyle; N=$((N + 1))
+fi
+
+if want SC02a; then
+echo "== SC02a: TextInput paints at the default pad only =="
+mutate engine/scenegraph/SceneGraph.cpp "return kTextInputPad + (float)node.layoutMetrics.contentInsets.left;" "return kTextInputPad;"
+check SC02a g2:tiPadding; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
