@@ -627,10 +627,17 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       bool tookTransform = false;
       node.runs.clear();
       for (const auto& fragment : stateData.attributedString.getFragments()) {
-        // P1 item 14: an inline-view attachment is a U+FFFC placeholder that
-        // measure skips (ImpellerTextLayoutManager), so paint skips it too
-        // instead of drawing a replacement glyph in a box sized without it.
-        if (!fragment.isAttachment()) {
+        // SC-34: an inline-view attachment is a placeholder box, as in measure
+        // (ImpellerTextLayoutManager); the child View paints itself into it.
+        if (fragment.isAttachment()) {
+          TextRun run;
+          run.attachment = true;
+          run.attachW = (float)fragment.parentShadowView.layoutMetrics.frame.size.width;
+          run.attachH = (float)fragment.parentShadowView.layoutMetrics.frame.size.height;
+          node.runs.push_back(std::move(run));
+          continue;
+        }
+        {
           const auto& fa = fragment.textAttributes;
           TextRun run;
           run.text = applyTextTransform(
@@ -1778,6 +1785,10 @@ ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const
   ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
   if (pb == nullptr) return nullptr;
   for (const TextRun& run : runs) {
+    if (run.attachment) {
+      AddAttachmentPlaceholder(pb, run.attachW, run.attachH);  // SC-34, measured too
+      continue;
+    }
     if (run.text.empty()) continue;
     ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
     ImpellerParagraphStyleSetFontSize(style, run.fontSize);

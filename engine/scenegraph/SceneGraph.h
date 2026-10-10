@@ -63,6 +63,10 @@ struct TextRun {
   // the Paragraph's own View background paints it.
   bool hasBackground{false};
   float background[4]{0, 0, 0, 0};
+  // SC-34: an inline <View> attachment; text is empty, the size is the box
+  // RN measured for the child (same source as measure's placeholder).
+  bool attachment{false};
+  float attachW{0}, attachH{0};
 };
 
 // Everything we need to paint one node, snapshotted from its ShadowView. We

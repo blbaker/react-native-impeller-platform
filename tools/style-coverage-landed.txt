@@ -62,3 +62,4 @@ g2:imageRadius SC-30
 g2:smallCaps SC-33
 g2:tiLetterSpacing SC-33
 nw:tracking SC-33
+risky:inlineView SC-34

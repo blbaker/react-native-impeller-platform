@@ -87,6 +87,7 @@
 #   SC32a..g  custom Impeller SDK: no tile, judged by tools/ci-impeller-sdk-custom.sh
 #   SC33a..e  letterSpacing (Text paint/measure, TextInput) and fontVariant (smcp, pnum)
 #             (tools/mutation-verify-impeller-sdk-custom.sh has the per-mutant rules)
+#   SC34a..c  inline View: no paint placeholder, frames not read back, box hung below the baseline
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -706,6 +707,24 @@ if want SC33e; then
 echo "== SC33e: letterSpacing not measured =="
 mutate engine/text/ImpellerTextLayoutManager.cpp "      ApplyLetterSpacing(style, (float)attrs.letterSpacing * scale);" ""
 check SC33e nw:tracking; N=$((N + 1))
+fi
+
+if want SC34a; then
+echo "== SC34a: paint skips the inline-View placeholder =="
+mutate engine/scenegraph/SceneGraph.cpp "      AddAttachmentPlaceholder(pb, run.attachW, run.attachH);  // SC-34, measured too" ""
+check SC34a risky:inlineView; N=$((N + 1))
+fi
+
+if want SC34b; then
+echo "== SC34b: measured attachment frames not returned to Fabric =="
+mutate engine/text/ImpellerTextLayoutManager.cpp "  ReadAttachmentFrames(paragraph, attachments);" ""
+check SC34b risky:inlineView; N=$((N + 1))
+fi
+
+if want SC34c; then
+echo "== SC34c: placeholder baseline offset 0 (box hangs below the baseline) =="
+mutate engine/text/TextStyle.h "kImpellerPlaceholderAlignmentBaseline, h);" "kImpellerPlaceholderAlignmentBaseline, 0.0f);"
+check SC34c risky:inlineView; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

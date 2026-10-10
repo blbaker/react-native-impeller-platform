@@ -131,4 +131,22 @@ inline bool ApplyFontVariant(ImpellerParagraphStyle style, int variant) {
 #endif
 }
 
+// SC-34: an inline <View> inside <Text> is a placeholder box sized from the
+// child's layout, bottom on the alphabetic baseline (RN iOS NSTextAttachment).
+// Measure and paint both add it so the glyphs after it shift by its width.
+inline bool AddAttachmentPlaceholder(ImpellerParagraphBuilder builder, float w, float h) {
+#ifdef IMPELLER_RNI_TEXT_EXTENSIONS
+  if (!(w == w) || !(h == h)) return false;
+  w = w > 0 ? w : 0.0f;
+  h = h > 0 ? h : 0.0f;
+  ImpellerParagraphBuilderAddPlaceholder(builder, w, h, kImpellerPlaceholderAlignmentBaseline, h);
+  return true;
+#else
+  (void)builder;
+  (void)w;
+  (void)h;
+  return false;
+#endif
+}
+
 }  // namespace rni

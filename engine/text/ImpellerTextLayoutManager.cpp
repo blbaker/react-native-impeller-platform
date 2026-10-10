@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "text/FitScale.h"
 #include "text/FontFamily.h"
@@ -15,6 +16,29 @@
 namespace rni {
 
 namespace react = facebook::react;
+
+namespace {
+
+// SC-34: placeholder boxes come back in insertion order = attachment order.
+void ReadAttachmentFrames(ImpellerParagraph paragraph,
+                          react::TextMeasurement::Attachments& attachments) {
+#ifdef IMPELLER_RNI_TEXT_EXTENSIONS
+  if (attachments.empty()) return;
+  std::vector<ImpellerRect> rects(attachments.size());
+  const uint32_t n =
+      ImpellerParagraphGetPlaceholderRects(paragraph, rects.data(), (uint32_t)rects.size());
+  for (uint32_t i = 0; i < n && i < attachments.size(); ++i) {
+    attachments[i].frame = {.origin = {.x = rects[i].x, .y = rects[i].y},
+                            .size = {.width = rects[i].width, .height = rects[i].height}};
+    attachments[i].isClipped = false;
+  }
+#else
+  (void)paragraph;
+  (void)attachments;
+#endif
+}
+
+}  // namespace
 
 ImpellerTextLayoutManager::ImpellerTextLayoutManager(
     const std::shared_ptr<const react::ContextContainer>& contextContainer,
@@ -31,11 +55,11 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
 
   for (const auto& fragment : attributedString.getFragments()) {
     if (fragment.isAttachment()) {
-      // Inline views: reported at zero for now. Their own shadow nodes still
-      // lay out; only their in-line placement is unimplemented.
+      // SC-34: frames are filled from the paragraph's placeholder boxes below;
+      // one that never got a box (clamped away) is reported clipped.
       attachments.push_back(react::TextMeasurement::Attachment{
           .frame = {.origin = {.x = 0, .y = 0}, .size = {.width = 0, .height = 0}},
-          .isClipped = false});
+          .isClipped = true});
     }
   }
 
@@ -57,7 +81,12 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
     // One style push per fragment, so per-fragment font size/weight is honoured
     // rather than the whole string being measured at the first fragment's size.
     for (const auto& fragment : attributedString.getFragments()) {
-      if (fragment.isAttachment()) continue;
+      if (fragment.isAttachment()) {
+        // SC-34: RN measured the child into parentShadowView before this call.
+        const auto& sz = fragment.parentShadowView.layoutMetrics.frame.size;
+        AddAttachmentPlaceholder(builder, (float)sz.width, (float)sz.height);
+        continue;
+      }
       ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
       const auto& attrs = fragment.textAttributes;
       float fontSize = (attrs.fontSize > 0 ? (float)attrs.fontSize : 14.0f) * scale;
@@ -135,6 +164,7 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
   // error would be invisible on a full-width label.
   float width = ImpellerParagraphGetLongestLineWidth(paragraph);
   float height = ImpellerParagraphGetHeight(paragraph);
+  ReadAttachmentFrames(paragraph, attachments);
   ImpellerParagraphRelease(paragraph);
 
   width = std::clamp(width, (float)layoutConstraints.minimumSize.width,
