@@ -48,6 +48,7 @@ LANDED=(
   textShadow:SC-15
   ellipsizeHead:SC-16 ellipsizeMiddle:SC-16
   scrollContentOffset:SC-27 scrollHorizontal:SC-27
+  activityIndicator:SC-28
 )
 # Features the audit measured working on 02cf8ea7; must stay PASS.
 # (aspectRatio and nestedTextSize are font/bundle sensitive across the Mac and

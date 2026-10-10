@@ -6,7 +6,7 @@
 #include <react/renderer/core/ConcreteState.h>
 #include <react/renderer/components/textinput/BaseTextInputProps.h>
 #include <react/renderer/components/iostextinput/TextInputProps.h>
-#include <react/renderer/components/FBReactNativeSpec/Props.h>  // SwitchProps, ENG-15
+#include <react/renderer/components/FBReactNativeSpec/Props.h>  // SwitchProps, ENG-15, ActivityIndicatorViewProps
 #include <react/renderer/graphics/BackgroundImage.h>
 #include <react/renderer/graphics/Color.h>
 #include <react/renderer/graphics/LinearGradient.h>
@@ -25,6 +25,7 @@
 #include "scenegraph/BorderRounded.h"
 #include "scenegraph/Outline.h"
 #include "scenegraph/ScrollIndicators.h"
+#include "scenegraph/ActivityIndicator.h"
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
 #include "scenegraph/EllipsizeText.h"
@@ -725,6 +726,17 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       if (sp->onTintColor) colorToFloats(sp->onTintColor, node.swOnColor);
       if (sp->tintColor) colorToFloats(sp->tintColor, node.swOffColor);
       if (sp->thumbTintColor) colorToFloats(sp->thumbTintColor, node.swThumbColor);
+    }
+  }
+
+  // <ActivityIndicator>. A20: codegen props animating / color / hidesWhenStopped.
+  if (node.componentName == "ActivityIndicatorView") {
+    node.isSpinner = true;
+    if (const auto* ap =
+            dynamic_cast<const react::ActivityIndicatorViewProps*>(view.props.get())) {
+      node.spAnimating = ap->animating;
+      node.spHidesWhenStopped = ap->hidesWhenStopped;
+      if (ap->color) colorToFloats(ap->color, node.spColor);
     }
   }
 
@@ -2379,6 +2391,17 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     if (node.swDisabled) ImpellerDisplayListBuilderRestore(builder);
   }
 
+  // <ActivityIndicator>. A20: 12 fading spokes; the head advances with the wall
+  // clock since the scene was created, and spinnerAnimating_ tells the
+  // idle-skip loop to keep repainting.
+  if (node.isSpinner && w > 0.0f && h > 0.0f && (node.spAnimating || !node.spHidesWhenStopped)) {
+    const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - spinnerEpoch_).count();
+    rni::PaintActivityIndicator(builder, x, y, w, h, impellerColor(node.spColor, OwnAlpha(node)),
+                                node.spAnimating ? rni::SpinnerStep(ms) : 0);
+    if (node.spAnimating) spinnerAnimating_.store(true, std::memory_order_relaxed);
+  }
+
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
   // field is focused, else its controlled value), or the placeholder when the
   // field is empty, plus a caret when focused. Uses the SAME Impeller paragraph
@@ -3730,6 +3753,7 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder,
     }
   }
   svgUseDepth_ = 0;
+  spinnerAnimating_.store(false, std::memory_order_relaxed);
 #if RNI_SUPERSAMPLE_GL
   // ENG item 2b — ROOT SUPERSAMPLE HOOK. At N>=2 with a wired context and known
   // surface size, render the WHOLE tree into one N x offscreen and composite it

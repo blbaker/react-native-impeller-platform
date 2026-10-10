@@ -14,6 +14,7 @@
 #include <react/renderer/components/text/TextComponentDescriptor.h>
 #include <react/renderer/components/view/ViewComponentDescriptor.h>
 #include "SwitchShadowNode.h"  // ENG-15
+#include "ActivityIndicatorShadowNode.h"  // A20
 #include <react/renderer/core/EventBeat.h>
 #include <react/renderer/core/LayoutConstraints.h>
 #include <react/renderer/core/LayoutContext.h>
@@ -562,6 +563,8 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
   // fabric/SwitchShadowNode.h.
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::ImpellerSwitchComponentDescriptor>());
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::ImpellerActivityIndicatorComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
   // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --

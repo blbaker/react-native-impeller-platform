@@ -1205,7 +1205,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       // A caret blink is a time-based clock nothing marks dirty: refuse the skip
       // while a field is focused or the cached frame would freeze mid-blink.
       const bool clockLive =
-          animatedThisFrame || sceneGraph.focusedTextInput() != 0;
+          animatedThisFrame || sceneGraph.focusedTextInput() != 0 ||
+          sceneGraph.spinnerAnimating();
       // First frame ALWAYS paints (lastPresentedVersion starts at 0 == the
       // initial version). M1 forces dirty every frame so the CPU gate fails,
       // proving the skip is load-bearing.

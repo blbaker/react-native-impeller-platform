@@ -244,6 +244,11 @@ struct SceneNode {
   // of the prop moves the painted value, so an unrelated re-render does not
   // undo a press. JS's revert path is the setValue command (setSwitchValue).
   bool isSwitch{false};
+  // A20: <ActivityIndicator>. Colour defaults to iOS gray (#999) when unset.
+  bool isSpinner{false};
+  bool spAnimating{true};
+  bool spHidesWhenStopped{true};
+  float spColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
   bool swValue{false};
   bool swPropValue{false};
   bool swHasProp{false};
@@ -662,6 +667,9 @@ class SceneGraph {
                              size_t caret);
   void clearTextInputFocus();
   facebook::react::Tag focusedTextInput();
+  // A20: true when the last paint drew a spinner that is animating, so the
+  // idle-skip loop keeps repainting.
+  bool spinnerAnimating() const { return spinnerAnimating_.load(std::memory_order_relaxed); }
   // The value a field should display: the live edit buffer if it is focused,
   // else its controlled tiValue prop. Used by the paint and returned to
   // FabricHost so a click that focuses an already-populated field seeds its
@@ -947,6 +955,8 @@ class SceneGraph {
   // off-thread producer (JS applyMutations / updateViewProps) can bump it while
   // the GLFW loop reads it on the main thread with no scene lock held.
   std::atomic<uint64_t> version_{0};
+  std::atomic<bool> spinnerAnimating_{false};
+  std::chrono::steady_clock::time_point spinnerEpoch_{std::chrono::steady_clock::now()};
   // P12-01: the wake fired by bumpVersion(). Guarded by its OWN mutex (never
   // mutex_) so applyMutations — which bumps while holding mutex_ — cannot invert
   // the lock order. Null until a windowed idle-skip loop installs it.

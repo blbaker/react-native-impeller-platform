@@ -74,6 +74,8 @@
 #   SC27b  indicator length ignores viewport/content -> g2:scrollIndicator
 #   SC27c  contentOffset.y ignored -> scrollContentOffset (grid 1)
 #   SC27d  contentOffset.x ignored -> scrollHorizontal (grid 1)
+#   SC28a  spokes do not fade -> activityIndicator (grid 1)
+#   SC28b  colour prop ignored (iOS gray) -> activityIndicator (grid 1)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -559,6 +561,18 @@ if want SC27d; then
 echo "== SC27d: contentOffset.x ignored =="
 mutate engine/scenegraph/SceneGraph.cpp "          node.scrollX = std::max(0.0f, cox);" "          node.scrollX = 0.0f;"
 check SC27d scrollHorizontal; N=$((N + 1))
+fi
+
+if want SC28a; then
+echo "== SC28a: spokes do not fade =="
+mutate engine/scenegraph/ActivityIndicator.cpp "static_cast<float>(k) / (kSpinnerSpokes - 1) * (1.0f - kMinAlpha);" "static_cast<float>(k) / (kSpinnerSpokes - 1) * 0.0f;"
+check SC28a activityIndicator; N=$((N + 1))
+fi
+
+if want SC28b; then
+echo "== SC28b: colour prop ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "      if (ap->color) colorToFloats(ap->color, node.spColor);" ""
+check SC28b activityIndicator; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
