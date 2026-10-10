@@ -39,6 +39,7 @@ LANDED=(
   borderDashed:10 borderDotted:25
   nestedText:P1-14 nestedTextSize:P1-14 textBackground:P1-14
   roundedMixedBorder:SC-04
+  outline:SC-09
   gradientRadial:SC-07
 )
 # Features the audit measured working on 02cf8ea7; must stay PASS.

@@ -22,6 +22,7 @@
 #include "scenegraph/BorderCurve.h"
 #include "scenegraph/BorderDashRounded.h"
 #include "scenegraph/BorderRounded.h"
+#include "scenegraph/Outline.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
@@ -380,6 +381,12 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     // Items 10 + 25. RN iOS takes the TOP edge's style for the whole border
     // (RCTViewComponentView: borderMetrics.borderStyles.top) -- same here.
     node.borderStyle = (int)metrics.borderStyles.top;
+    node.outlineWidth = (float)props->outlineWidth;
+    node.outlineOffset = (float)props->outlineOffset;
+    node.outlineStyle = (int)props->outlineStyle;
+    if (props->outlineColor) colorToFloats(props->outlineColor, node.outlineColor);
+    else node.outlineColor[0] = node.outlineColor[1] = node.outlineColor[2] = 0.0f,
+         node.outlineColor[3] = 1.0f;
     for (int i = 0; i < 4; ++i) {
       node.borderWidths[i] = (float)widths[i];
       // SC-03: a width with no resolved colour paints opaque black (RN default).
@@ -1879,6 +1886,10 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
 
   paintBorders(builder, node, x, y, w, h, radii, rounded);
+  if (node.outlineWidth > 0.0f) {
+    rni::PaintOutline(builder, x, y, w, h, radii, node.outlineWidth, node.outlineOffset,
+                      node.outlineStyle, impellerColor(node.outlineColor, OwnAlpha(node)));
+  }
 
 #if RNI_SUPERSAMPLE_GL
   // ENG-10: a <world> with a sprite list but NO setPixels buffer still

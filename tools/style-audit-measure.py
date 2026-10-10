@@ -155,6 +155,24 @@ def tabular(c, f, d):
     return len(wf) == 2 and abs(wf[0] - wf[1]) <= 2
 
 
+def outline_ok(px):
+    # SC-09: box (30,31)-(89,90), outlineWidth 4 offset 4 red. The ring fills
+    # 4 px starting 4 px outside each edge; the gap and the area beyond stay white.
+    def col(xs, ys, want):
+        return all(cls(at(px, x, y)) == want for x in xs for y in ys)
+    mx, my = range(50, 70), range(50, 70)
+    sides = (
+        (mx, range(23, 27), mx, range(27, 31), mx, range(15, 23)),
+        (mx, range(95, 99), mx, range(91, 95), mx, range(99, 107)),
+        (range(22, 26), my, range(26, 30), my, range(14, 22), my),
+        (range(94, 98), my, range(90, 94), my, range(98, 106), my),
+    )
+    for rx, ry, gx, gy, bx, by in sides:
+        if not (col(rx, ry, "red") and col(gx, gy, "white") and col(bx, by, "white")):
+            return False
+    return cls(at(px, 22, 23)) == "red" and cls(at(px, 97, 98)) == "red"
+
+
 def outside_split(px, box=(30, 31, 89, 90)):
     """(ink right/below the box, ink left/above it), corners counted once."""
     x0, y0, x1, y1 = box
@@ -483,7 +501,7 @@ RULES = {
     "roundedMixedBorder": lambda c, f, d: not ink(at(f, 30, 31)) and cls(at(f, 60, 33)) == "red" and cls(at(f, 32, 61)) == "blue" and cls(at(f, 88, 61)) == "blue" and cls(at(f, 60, 88)) == "blue",
     "overflowRounded": lambda c, f, d: not ink(at(f, 30, 31)),
     "overflowRect": lambda c, f, d: stats(f)["n"] == 3600,
-    "outline": lambda c, f, d: outside(f) > 100,
+    "outline": lambda c, f, d: outline_ok(f),
     "gradientLinear": lambda c, f, d: stats(f)["colors"] > 20,
     "gradientRadial": lambda c, f, d: radial_grid1_ok(f),
     "filterBlur": lambda c, f, d: outside(f) > 50 or stats(f)["colors"] > 5,

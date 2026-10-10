@@ -328,3 +328,5 @@ from style_coverage_rules_sc07 import RULES as _SC07  # noqa: E402
 RULES.update(_SC07)
 from style_coverage_rules_sc08 import RULES as _SC08  # noqa: E402
 RULES.update(_SC08)
+from style_coverage_rules_sc09 import RULES as _SC09  # noqa: E402
+RULES.update(_SC09)

@@ -25,6 +25,9 @@
 #   SC08a  backgroundSize ignored (tile = box) -> g2:backgroundSize
 #   SC08b  backgroundPosition ignored (offset 0) -> g2:backgroundPosition
 #   SC08c  backgroundRepeat ignored (one tile) -> g2:backgroundSize
+#   SC09a  outlineOffset ignored -> grid1 outline
+#   SC09b  dashed outline painted solid -> g2:outlineDashed
+#   SC09c  solid outline stroke twice as wide -> nw:outline
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -203,6 +206,24 @@ if want SC08c; then
 echo "== SC08c: backgroundRepeat ignored =="
 mutate engine/scenegraph/BackgroundTiles.cpp "  if (style == S::NoRepeat) {" "  if (style == S::NoRepeat || style == S::Repeat) {"
 check SC08c g2:backgroundSize; N=$((N + 1))
+fi
+
+if want SC09a; then
+echo "== SC09a: outlineOffset ignored =="
+mutate engine/scenegraph/Outline.cpp "  const float grow = offset + width;" "  const float grow = 0.0f * offset + width;"
+check SC09a outline; N=$((N + 1))
+fi
+
+if want SC09b; then
+echo "== SC09b: dashed outline painted solid =="
+mutate engine/scenegraph/Outline.cpp "  if (style != 0) {" "  if (style != 0 && style > 5) {"
+check SC09b g2:outlineDashed; N=$((N + 1))
+fi
+
+if want SC09c; then
+echo "== SC09c: solid outline stroke twice as wide =="
+mutate engine/scenegraph/Outline.cpp "  ImpellerPaintSetStrokeWidth(paint, width);" "  ImpellerPaintSetStrokeWidth(paint, width * 2.0f);"
+check SC09c nw:outline; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

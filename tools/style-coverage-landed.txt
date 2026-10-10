@@ -15,3 +15,5 @@ g2:gradientColorHint SC-07
 nw:gradientRadial SC-07
 g2:backgroundSize SC-08
 g2:backgroundPosition SC-08
+g2:outlineDashed SC-09
+nw:outline SC-09

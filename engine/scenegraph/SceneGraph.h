@@ -79,6 +79,10 @@ struct SceneNode {
   // Style audit items 10 + 25: react::BorderStyle of the whole border
   // (0 Solid, 1 Dotted, 2 Dashed). RN iOS draws one style for all edges.
   int borderStyle{0};
+  // A3 outline: react::OutlineStyle (0 solid, 1 dotted, 2 dashed).
+  float outlineWidth{0}, outlineOffset{0};
+  int outlineStyle{0};
+  float outlineColor[4]{0, 0, 0, 1};
   bool hasBorderColors[4]{false, false, false, false};
   float borderColors[4][4]{};
 
