@@ -62,6 +62,8 @@ const SHIM_TARGETS = {
   // SC-18. Adds a fontFamily processor (array -> CSS stack); see the shim.
   'react-native/Libraries/Components/View/ReactNativeStyleAttributes.js':
     'ReactNativeStyleAttributes.impeller.js',
+  // SC-24. Button branches on Platform.OS ios/android, both false here.
+  'react-native/Libraries/Components/Button.js': 'Button.impeller.js',
 };
 
 // ---------------------------------------------------------------------------

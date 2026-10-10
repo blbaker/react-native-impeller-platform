@@ -67,6 +67,8 @@
 #   SC20f  TextInput textTransform not applied -> g2:tiTextTransform
 #   SC22a  PlatformColor names resolve to transparent -> risky:platformColor
 #   SC22b  systemBlue table entry wrong -> risky:platformColor
+#   SC24a  Button shim fills the block with `color` (android look) -> g2:button
+#   SC24b  Button shim ignores `color` for the title -> g2:button
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -503,6 +505,22 @@ if want SC22b; then
 echo "== SC22b: systemBlue uses the dark value in light mode =="
 mutate engine/fabric/platform/impeller/PlatformColorTable.cpp '{"systemBlue", {0, 122, 255, 1}' '{"systemBlue", {10, 132, 255, 1}'
 check SC22b risky:platformColor; N=$((N + 1))
+fi
+
+if want SC24a; then
+echo "== SC24a: Button fills the block with its colour =="
+mutate package/src/metro-shims/shims/Button.impeller.js "      View,
+      null," "      View,
+      {style: {backgroundColor: color}},"
+rebundle
+check SC24a g2:button; N=$((N + 1))
+fi
+
+if want SC24b; then
+echo "== SC24b: Button ignores color for the title =="
+mutate package/src/metro-shims/shims/Button.impeller.js "    textStyles.push({color});" "    textStyles.push({color: '#007AFF'});"
+rebundle
+check SC24b g2:button; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
