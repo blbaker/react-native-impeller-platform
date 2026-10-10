@@ -65,7 +65,7 @@ const TESTS = [
   {id: 'italic', e: 'same', c: () => T('Ab', {fontStyle: 'italic'}), f: () => NT('Ab', 'italic')},
   {id: 'underline', e: 'same', c: () => T('AAAA', {textDecorationLine: 'underline'}), f: () => NT('AAAA', 'underline')},
   {id: 'decoColor', e: 'same', c: () => T('AAAA', {textDecorationLine: 'underline', textDecorationColor: RED, textDecorationStyle: 'dashed'}), f: () => NT('AAAA', 'underline decoration-red-500 decoration-dashed')},
-  {id: 'tracking', e: 'same', c: () => T('IIII', {letterSpacing: 2}), f: () => NT('IIII', 'tracking-widest')},
+  {id: 'tracking', e: 'same', c: () => T('IIII', {letterSpacing: 2}), f: () => NT('IIII', 'text-[20px] tracking-widest')},
   {id: 'leading', e: 'same', c: () => T('A\nA', {fontSize: 16, lineHeight: 32}), f: () => <Text className="text-base leading-8" style={{color: 'black'}}>{'A\nA'}</Text>},
   {id: 'textCenter', e: 'same', c: () => <View style={{width: 80}}>{T('AB', {textAlign: 'center'})}</View>, f: () => <View style={{width: 80}}>{NT('AB', 'text-center')}</View>},
   {id: 'uppercase', e: 'same', c: () => T('ABC'), f: () => NT('abc', 'uppercase')},

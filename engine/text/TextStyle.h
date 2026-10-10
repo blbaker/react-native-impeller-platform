@@ -85,4 +85,50 @@ inline bool ApplyTextDecoration(ImpellerParagraphStyle style, int decoLine,
   return true;
 }
 
+// SC-33: letterSpacing (px, added after every glyph, so measure and paint
+// must both apply it). NaN or 0 = unset.
+inline bool ApplyLetterSpacing(ImpellerParagraphStyle style, float spacing) {
+#ifdef IMPELLER_RNI_TEXT_EXTENSIONS
+  if (!(spacing == spacing) || spacing == 0.0f) return false;
+  ImpellerParagraphStyleSetLetterSpacing(style, spacing);
+  return true;
+#else
+  (void)style;
+  (void)spacing;
+  return false;
+#endif
+}
+
+// SC-33: fontVariant as react::FontVariant bits (SmallCaps 1<<1, OldstyleNums
+// 1<<2, LiningNums 1<<3, TabularNums 1<<4, ProportionalNums 1<<5,
+// StylisticOne..Twenty 1<<6..1<<25). As iOS (RCTFontUtils adds them in this
+// order and the later one of a feature type wins): proportional beats
+// tabular, lining beats oldstyle. Features change advances: measured too.
+inline bool ApplyFontVariant(ImpellerParagraphStyle style, int variant) {
+#ifdef IMPELLER_RNI_TEXT_EXTENSIONS
+  if (variant == 0) return false;
+  if (variant & (1 << 1)) ImpellerParagraphStyleSetFontFeature(style, "smcp", 1);
+  if (variant & (1 << 3)) {
+    ImpellerParagraphStyleSetFontFeature(style, "lnum", 1);
+  } else if (variant & (1 << 2)) {
+    ImpellerParagraphStyleSetFontFeature(style, "onum", 1);
+  }
+  if (variant & (1 << 5)) {
+    ImpellerParagraphStyleSetFontFeature(style, "pnum", 1);
+  } else if (variant & (1 << 4)) {
+    ImpellerParagraphStyleSetFontFeature(style, "tnum", 1);
+  }
+  for (int i = 1; i <= 20; ++i) {
+    if (!(variant & (1 << (i + 5)))) continue;
+    const char tag[5] = {'s', 's', (char)('0' + i / 10), (char)('0' + i % 10), 0};
+    ImpellerParagraphStyleSetFontFeature(style, tag, 1);
+  }
+  return true;
+#else
+  (void)style;
+  (void)variant;
+  return false;
+#endif
+}
+
 }  // namespace rni

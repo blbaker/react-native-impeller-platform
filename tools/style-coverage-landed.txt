@@ -59,3 +59,6 @@ g2:imageCover SC-30
 g2:imageCenter SC-30
 g2:imageRepeat SC-30
 g2:imageRadius SC-30
+g2:smallCaps SC-33
+g2:tiLetterSpacing SC-33
+nw:tracking SC-33

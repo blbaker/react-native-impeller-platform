@@ -641,6 +641,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
           if (fa.lineHeight > 0) run.lineHeight = (float)fa.lineHeight;
           if (fa.fontWeight.has_value()) run.fontWeight = (int)*fa.fontWeight;
           run.italic = fa.fontStyle.has_value() && *fa.fontStyle != react::FontStyle::Normal;
+          if (std::isfinite(fa.letterSpacing)) run.letterSpacing = (float)fa.letterSpacing;
+          if (fa.fontVariant.has_value()) run.fontVariant = (int)*fa.fontVariant;
           if (std::isfinite(fa.opacity)) run.opacity = std::clamp((float)fa.opacity, 0.0f, 1.0f);
           const float sOffX = fa.textShadowOffset ? (float)fa.textShadowOffset->width : 0.0f;
           const float sOffY = fa.textShadowOffset ? (float)fa.textShadowOffset->height : 0.0f;
@@ -827,6 +829,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       face.align = attrs.alignment.has_value() ? (int)*attrs.alignment : 0;
       face.weight = attrs.fontWeight.has_value() ? (int)*attrs.fontWeight : 0;
       face.italic = attrs.fontStyle.has_value() && *attrs.fontStyle != react::FontStyle::Normal;
+      face.letterSpacing = std::isfinite(attrs.letterSpacing) ? (float)attrs.letterSpacing : 0.0f;
+      face.fontVariant = attrs.fontVariant.has_value() ? (int)*attrs.fontVariant : 0;
       face.decoLine = attrs.textDecorationLineType.has_value() ? (int)*attrs.textDecorationLineType : 0;
       face.decoStyle = attrs.textDecorationStyle.has_value() ? (int)*attrs.textDecorationStyle : 0;
       face.transform = attrs.textTransform.has_value() ? (int)*attrs.textTransform : 0;
@@ -1723,6 +1727,7 @@ static std::vector<TextRun> ScaleRuns(const std::vector<TextRun>& runs, float s)
   for (TextRun& r : out) {
     r.fontSize *= s;
     r.lineHeight *= s;
+    r.letterSpacing *= s;  // SC-33: measure scales it too
   }
   return out;
 }
@@ -1782,6 +1787,8 @@ ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const
     ApplyFontWeight(style, run.fontWeight);
     ApplyTextAlign(style, node.textAlign);
     ApplyFontStyle(style, run.italic);
+    ApplyLetterSpacing(style, run.letterSpacing);  // SC-33, measured too
+    ApplyFontVariant(style, run.fontVariant);
     ApplyTextDirection(style, node.writingDirection);
     if (node.maxLines > 0) {
       // Painting must honour the same clamp measurement did, or a

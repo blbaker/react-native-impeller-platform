@@ -25,6 +25,7 @@ from style_audit_rules_sc16 import head_ok, middle_ok  # noqa: E402
 from style_audit_rules_sc27 import offset_x_ok, offset_y_ok  # noqa: E402
 from style_audit_rules_sc28 import spinner_ok  # noqa: E402
 from style_audit_rules_sc30 import image_ok, image_tint_ok  # noqa: E402
+from style_audit_rules_sc33 import letter_spacing_ok, tabular_ok  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 PPM = Path(sys.argv[1])
@@ -512,6 +513,7 @@ STRICT = {
     "activityIndicator": spinner_ok,
     "image": image_ok,
     "imageTint": image_tint_ok,
+    "letterSpacing": letter_spacing_ok,
 }
 
 # Mac RULES that the RN source itself cannot meet, REPLACED (not ANDed) here
@@ -528,6 +530,7 @@ STRICT = {
 #   baseline bbox height 56). Kept: the Mac's "black < 450" half. Replaced:
 #   the height half, by per-glyph heights on one baseline (nested_size_ok).
 CORRECTED = {
+    "tabularNums": tabular_ok,  # SC-33: glyph pitch, not ink width
     "borderDashed": lambda c, f, d: edge_runs(f, 32) >= 4,
     "nestedTextSize": lambda c, f, d: stats(f)["counts"].get("black", 0) < 450
     and nested_size_ok(c, f, d),

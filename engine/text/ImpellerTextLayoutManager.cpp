@@ -73,6 +73,9 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
       ApplyFontWeight(style, attrs.fontWeight.has_value() ? (int)*attrs.fontWeight : 0);
       ApplyFontStyle(style, attrs.fontStyle.has_value() &&
                                 *attrs.fontStyle != react::FontStyle::Normal);
+      // SC-33: the same spacing/feature setters paint uses.
+      ApplyLetterSpacing(style, (float)attrs.letterSpacing * scale);
+      ApplyFontVariant(style, attrs.fontVariant.has_value() ? (int)*attrs.fontVariant : 0);
       if (clamp && paragraphAttributes.maximumNumberOfLines > 0) {
         ImpellerParagraphStyleSetMaxLines(
             style, (uint32_t)paragraphAttributes.maximumNumberOfLines);

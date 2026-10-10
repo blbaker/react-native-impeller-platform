@@ -114,7 +114,8 @@ const TESTS = [
   { id: 'lineThrough', c: () => txt('AAAA'), f: () => txt('AAAA', { textDecorationLine: 'line-through' }) },
   { id: 'decorationColor', c: () => txt('AAAA', { textDecorationLine: 'underline' }), f: () => txt('AAAA', { textDecorationLine: 'underline', textDecorationColor: RED, textDecorationStyle: 'dashed' }) },
   { id: 'textTransform', c: () => txt('ABC'), f: () => txt('abc', { textTransform: 'uppercase' }) },
-  { id: 'tabularNums', c: () => h(View, null, txt('1111'), txt('0000')), f: () => h(View, null, txt('1111', { fontVariant: ['tabular-nums'] }), txt('0000', { fontVariant: ['tabular-nums'] })) },
+  // SC-33: the control is proportional-nums because the linux default face's digits are already tabular.
+  { id: 'tabularNums', c: () => h(View, null, txt('1111', { fontVariant: ['proportional-nums'] }), txt('0000', { fontVariant: ['proportional-nums'] })), f: () => h(View, null, txt('1111', { fontVariant: ['tabular-nums'] }), txt('0000', { fontVariant: ['tabular-nums'] })) },
   { id: 'fontWeight', c: () => txt('Ab', { fontSize: 32, fontWeight: '100' }), f: () => txt('Ab', { fontSize: 32, fontWeight: '900' }) },
   { id: 'fontWeightBold', c: () => txt('Ab', { fontSize: 32 }), f: () => txt('Ab', { fontSize: 32, fontWeight: 'bold' }) },
   { id: 'italic', c: () => txt('IIII', { fontSize: 32 }), f: () => txt('IIII', { fontSize: 32, fontStyle: 'italic' }) },

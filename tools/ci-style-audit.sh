@@ -50,6 +50,7 @@ LANDED=(
   scrollContentOffset:SC-27 scrollHorizontal:SC-27
   activityIndicator:SC-28
   image:SC-30 imageTint:SC-30
+  letterSpacing:SC-33 tabularNums:SC-33
 )
 # Features the audit measured working on 02cf8ea7; must stay PASS.
 # (aspectRatio and nestedTextSize are font/bundle sensitive across the Mac and

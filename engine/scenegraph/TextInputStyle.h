@@ -11,6 +11,8 @@ struct TextInputFace {
   int align = 0;  // react::TextAlignment: 0 Natural 1 Left 2 Center 3 Right 4 Justified
   int weight = 0;
   bool italic = false;
+  float letterSpacing = 0.0f;  // SC-33
+  int fontVariant = 0;         // SC-33, react::FontVariant bits
   int decoLine = 0;
   int decoStyle = 0;
   int transform = 0;  // react::TextTransform

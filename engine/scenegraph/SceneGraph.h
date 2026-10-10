@@ -46,6 +46,8 @@ struct TextRun {
   float lineHeight{0.0f};
   int fontWeight{0};
   bool italic{false};
+  float letterSpacing{0.0f};  // SC-33, px
+  int fontVariant{0};         // SC-33, react::FontVariant bits
   float opacity{1.0f};  // nested <Text style={{opacity}}>, multiplies the colour alpha
   // textShadow*: a blurred, offset copy of this run's glyphs under the text (SC-15).
   bool hasShadow{false};

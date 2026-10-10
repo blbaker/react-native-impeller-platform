@@ -85,6 +85,7 @@
 #   SC30g  center scales up like contain -> g2:imageCenter
 #   SC30h  repeat stretched -> g2:imageRepeat
 #   SC32a..g  custom Impeller SDK: no tile, judged by tools/ci-impeller-sdk-custom.sh
+#   SC33a..e  letterSpacing (Text paint/measure, TextInput) and fontVariant (smcp, pnum)
 #             (tools/mutation-verify-impeller-sdk-custom.sh has the per-mutant rules)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -675,6 +676,36 @@ if want SC32g; then
 echo "== SC32g: custom SDK, CMake keeps the stock SDK (tools/mutation-verify-impeller-sdk-custom.sh) =="
 ONLY=SC32g bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32g (custom SDK gate)"
 N=$((N + 1))
+fi
+
+if want SC33a; then
+echo "== SC33a: Text letterSpacing not painted =="
+mutate engine/scenegraph/SceneGraph.cpp "    ApplyLetterSpacing(style, run.letterSpacing);  // SC-33, measured too" ""
+check SC33a nw:tracking; N=$((N + 1))
+fi
+
+if want SC33b; then
+echo "== SC33b: TextInput letterSpacing ignored =="
+mutate engine/scenegraph/TextInputStyle.cpp "  ApplyLetterSpacing(style, f.letterSpacing);  // SC-33" ""
+check SC33b g2:tiLetterSpacing; N=$((N + 1))
+fi
+
+if want SC33c; then
+echo "== SC33c: small-caps feature not set =="
+mutate engine/text/TextStyle.h "  if (variant & (1 << 1)) ImpellerParagraphStyleSetFontFeature(style, \"smcp\", 1);" ""
+check SC33c g2:smallCaps; N=$((N + 1))
+fi
+
+if want SC33d; then
+echo "== SC33d: proportional-nums sets tnum =="
+mutate engine/text/TextStyle.h "    ImpellerParagraphStyleSetFontFeature(style, \"pnum\", 1);" "    ImpellerParagraphStyleSetFontFeature(style, \"tnum\", 1);"
+check SC33d tabularNums; N=$((N + 1))
+fi
+
+if want SC33e; then
+echo "== SC33e: letterSpacing not measured =="
+mutate engine/text/ImpellerTextLayoutManager.cpp "      ApplyLetterSpacing(style, (float)attrs.letterSpacing * scale);" ""
+check SC33e nw:tracking; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
