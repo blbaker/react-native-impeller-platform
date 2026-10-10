@@ -66,6 +66,7 @@
 #else
 #include <process.h>
 #endif
+#include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
@@ -429,6 +430,7 @@ static std::string gWindowedTypeSpec;
 // foreclosed. See docs/STATE.md "Open questions" if that changes.
 // parity item 14: defined below main()'s argv capture.
 [[noreturn]] static void ReexecForReload(const std::string& reason);
+static bool gFollowOsAppearance = false;  // SC-23
 
 int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                 std::string bundle, size_t nodeReportOnly, size_t bundleSize,
@@ -512,6 +514,21 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                              (float)pxHeight / pointScale, pointScale);
   host.appearance()->set(colorScheme);
   *host.initialUrl() = initialUrl;
+  // SC-23: report OS theme changes to JS. Declared after `host`, so it is
+  // joined before the host (and its device-event sink) is destroyed.
+  std::unique_ptr<rni::OsAppearanceWatcher> osWatcher;
+  if (gFollowOsAppearance) {
+    auto* hostPtr = &host;
+    osWatcher = std::make_unique<rni::OsAppearanceWatcher>(
+        colorScheme, true,
+        [hostPtr](const std::string& scheme) {
+          if (!hostPtr->appearance()->setSystem(scheme)) return;
+          printf("rn-impeller: appearance_changed scheme=%s source=os\n", scheme.c_str());
+          fflush(stdout);
+          hostPtr->deviceEvents()->emit(
+              "appearanceChanged", folly::dynamic::object("colorScheme", scheme));
+        });
+  }
 
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          logMutations, host.displayMetrics());
@@ -1659,6 +1676,7 @@ int main(int argc, char** argv) {
 
   std::string bundlePath, appName, screenshot;
   std::string colorScheme = "light";
+  bool colorSchemeGiven = false;
   std::string initialUrl;
   bool headless = false;
   bool probeBanner = true;
@@ -2258,7 +2276,7 @@ int main(int argc, char** argv) {
     else if (a == "--title") gWindowTitle = next("--title");
     else if (a == "--test-urlparse") testUrlParse = true;
     else if (a == "--test-http") testHttp = true;
-    else if (a == "--color-scheme") colorScheme = next("--color-scheme");
+    else if (a == "--color-scheme") { colorScheme = next("--color-scheme"); colorSchemeGiven = true; }
     else if (a == "--initial-url") initialUrl = next("--initial-url");
     else if (a == "--probe-banner") probeBanner = (next("--probe-banner") != "off");
     else if (a == "--width") { width = atoi(next("--width").c_str()); widthGiven = true; }
@@ -2394,6 +2412,15 @@ int main(int argc, char** argv) {
       bundleIsUrl ? bundlePath : "file://" + bundlePath;
   const bool shimOk = bundle.find(kShimMarker) != std::string::npos;
   const size_t bundleSize = bundle.size();  // captured before the move below
+  // SC-23: with no --color-scheme the host follows the OS (windowed) or the
+  // test hook (any mode); the flag and Appearance.setColorScheme override it.
+  if (!colorSchemeGiven) {
+    const std::string os = rni::ResolveSystemScheme(windowMode);
+    if (!os.empty()) colorScheme = os;
+    gFollowOsAppearance = windowMode;
+  }
+  printf("rn-impeller: color_scheme=%s source=%s\n", colorScheme.c_str(),
+         colorSchemeGiven ? "flag" : (rni::OsAppearanceHookActive() ? "hook" : (windowMode ? "os" : "default")));
   printf("rn-impeller: app=%s\n", appName.c_str());
   printf("rn-impeller: bundle=%s (%zu bytes)\n", bundlePath.c_str(), bundle.size());
   printf("rn-impeller: shim_marker=%s\n", shimOk ? "PRESENT" : "MISSING");

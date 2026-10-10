@@ -60,6 +60,7 @@ struct AppearanceState {
   // ENG-17: the host's own scheme (--color-scheme), what 'unspecified' returns
   // to. An app override never changes it.
   std::string systemScheme{"light"};
+  bool appOverride{false};  // Appearance.setColorScheme('light'|'dark') is active
 
   std::string get() {
     std::lock_guard<std::mutex> lock(mutex);
@@ -70,7 +71,18 @@ struct AppearanceState {
     std::lock_guard<std::mutex> lock(mutex);
     systemScheme = scheme;
     colorScheme = std::move(scheme);
+    appOverride = false;
     publishScheme();
+  }
+  // SC-23: the OS changed. An app override keeps winning; returns true when
+  // the EFFECTIVE scheme changed (the caller then emits appearanceChanged).
+  bool setSystem(const std::string& scheme) {
+    std::lock_guard<std::mutex> lock(mutex);
+    systemScheme = scheme;
+    if (appOverride || colorScheme == scheme) return false;
+    colorScheme = scheme;
+    publishScheme();
+    return true;
   }
   // ENG-17: an app override (Appearance.setColorScheme). 'unspecified' drops
   // the override and goes back to the system scheme. Returns true when the
@@ -78,6 +90,7 @@ struct AppearanceState {
   bool override(const std::string& requested, std::string& effective) {
     std::lock_guard<std::mutex> lock(mutex);
     effective = requested == "unspecified" ? systemScheme : requested;
+    appOverride = requested != "unspecified";
     if (effective == colorScheme) return false;
     colorScheme = effective;
     publishScheme();
