@@ -971,6 +971,8 @@ class SceneGraph {
   // shadow >= 0 builds the silhouette for that run's shadow group (SC-15): runs of
   // other groups keep their advance but paint nothing.
   ImpellerParagraph buildRunParagraph(const SceneNode& node, float w, int shadow = -1);
+  ImpellerParagraph buildRunParagraphFrom(const SceneNode& node, const std::vector<TextRun>& runs,
+                                          float w, int shadow);
   void paintTextShadows(ImpellerDisplayListBuilder builder, const SceneNode& node, float w,
                         float px, float py);
   // item 11: focused non-TextInput View (focus ring). 0 = none.

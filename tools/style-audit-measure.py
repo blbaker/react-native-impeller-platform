@@ -21,6 +21,7 @@ from pathlib import Path
 
 from style_audit_rules_sc14 import italic_ok, rtl_ok, justify_ok  # noqa: E402
 from style_audit_rules_sc15 import text_shadow_ok  # noqa: E402
+from style_audit_rules_sc16 import head_ok, middle_ok  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 PPM = Path(sys.argv[1])
@@ -571,8 +572,8 @@ RULES = {
     "fontWeightBold": lambda c, f, d: stats(f)["n"] > stats(c)["n"] * 1.2,
     "italic": lambda c, f, d: d > 0,
     "numberOfLines": lambda c, f, d: stats(f)["bbox"][3] < stats(c)["bbox"][3],
-    "ellipsizeHead": lambda c, f, d: d > 0,
-    "ellipsizeMiddle": lambda c, f, d: d > 0,
+    "ellipsizeHead": head_ok,
+    "ellipsizeMiddle": middle_ok,
     "writingDirection": lambda c, f, d: stats(f)["bbox"][0] > stats(c)["bbox"][0] + 20,
     "textAlignCenter": lambda c, f, d: stats(f)["bbox"][0] > stats(c)["bbox"][0] + 10,
     "textAlignRight": lambda c, f, d: stats(f)["bbox"][2] >= 105,

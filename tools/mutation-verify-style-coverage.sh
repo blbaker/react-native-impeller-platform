@@ -51,6 +51,8 @@
 #   SC15a  shadow offset ignored -> g2:textShadowNested
 #   SC15b  shadow blur ignored -> g2:textShadowNested
 #   SC15c  shadow x offset mirrored to -x -> g2:textShadowNested
+#   SC16a  head ellipsis cut at the tail -> ellipsizeHead (grid 1)
+#   SC16b  middle ellipsis cut at the tail -> ellipsizeMiddle (grid 1)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -388,6 +390,18 @@ if want SC15c; then
 echo "== SC15c: textShadow x offset mirrored =="
 mutate engine/scenegraph/SceneGraph.cpp "    spec.offsetX = r.shadowOffX;" "    spec.offsetX = -r.shadowOffX;"
 check SC15c g2:textShadowNested; N=$((N + 1))
+fi
+
+if want SC16a; then
+echo "== SC16a: head ellipsis cut at the tail =="
+mutate engine/scenegraph/EllipsizeText.cpp "const size_t head = mode == 1 ? 0 : (keep + 1) / 2;" "const size_t head = mode == 1 ? keep : (keep + 1) / 2;"
+check SC16a ellipsizeHead; N=$((N + 1))
+fi
+
+if want SC16b; then
+echo "== SC16b: middle ellipsis cut at the tail =="
+mutate engine/scenegraph/EllipsizeText.cpp "const size_t head = mode == 1 ? 0 : (keep + 1) / 2;" "const size_t head = mode == 1 ? 0 : keep;"
+check SC16b ellipsizeMiddle; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

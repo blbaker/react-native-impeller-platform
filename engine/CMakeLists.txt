@@ -238,6 +238,7 @@ add_executable(rn-impeller
   scenegraph/ColorMatrixFilter.cpp
   scenegraph/ContentFilters.cpp
   scenegraph/BlendGroup.cpp
+  scenegraph/EllipsizeText.cpp
   scenegraph/BorderCurve.cpp
   scenegraph/BorderDashRounded.cpp
   text/ImpellerTextLayoutManager.cpp

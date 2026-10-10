@@ -46,6 +46,7 @@ LANDED=(
   filterBlur:SC-12 filterDropShadow:SC-12 mixBlendMode:SC-13 isolation:SC-13
   italic:SC-14 writingDirection:SC-14 textAlignJustify:SC-14
   textShadow:SC-15
+  ellipsizeHead:SC-16 ellipsizeMiddle:SC-16
 )
 # Features the audit measured working on 02cf8ea7; must stay PASS.
 # (aspectRatio and nestedTextSize are font/bundle sensitive across the Mac and

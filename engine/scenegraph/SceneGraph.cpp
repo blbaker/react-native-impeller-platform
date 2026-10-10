@@ -25,6 +25,7 @@
 #include "scenegraph/Outline.h"
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
+#include "scenegraph/EllipsizeText.h"
 #include "scenegraph/ContentFilters.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
@@ -1596,11 +1597,27 @@ static bool SameShadow(const TextRun& a, const TextRun& b) {
 }
 
 ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w, int shadow) {
+  // SC-16: Impeller only truncates at the tail, so head/middle are cut by hand.
+  if (node.maxLines == 1 && (node.ellipsizeMode == 1 || node.ellipsizeMode == 3)) {
+    const auto widthOf = [&](const std::vector<TextRun>& r) {
+      ImpellerParagraph p = buildRunParagraphFrom(node, r, 1e6f, -1);
+      const float lw = p ? ImpellerParagraphGetLongestLineWidth(p) : 0.0f;
+      if (p) ImpellerParagraphRelease(p);
+      return lw;
+    };
+    const std::vector<TextRun> cut = rni::EllipsizeRuns(node.runs, node.ellipsizeMode, w, widthOf);
+    return buildRunParagraphFrom(node, cut, w, shadow);
+  }
+  return buildRunParagraphFrom(node, node.runs, w, shadow);
+}
+
+ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const std::vector<TextRun>& runs,
+                                                    float w, int shadow) {
   if (typography_ == nullptr) return nullptr;
   std::vector<ImpellerPaint> runPaints;
   ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
   if (pb == nullptr) return nullptr;
-  for (const TextRun& run : node.runs) {
+  for (const TextRun& run : runs) {
     if (run.text.empty()) continue;
     ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
     ImpellerParagraphStyleSetFontSize(style, run.fontSize);
@@ -1627,7 +1644,7 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w, 
     ImpellerPaint textPaint = ImpellerPaintNew();
     ImpellerColor tc = impellerColor(run.color, OwnAlpha(node) * run.opacity);
     // Shadow silhouette: opaque for this group's runs, invisible for the rest.
-    const bool shadowRun = shadow >= 0 && SameShadow(run, node.runs[shadow]);
+    const bool shadowRun = shadow >= 0 && SameShadow(run, runs[shadow]);
     if (shadow >= 0) tc.alpha = shadowRun ? 1.0f : 0.0f;
     ImpellerPaintSetColor(textPaint, &tc);
     ImpellerParagraphStyleSetForeground(style, textPaint);
