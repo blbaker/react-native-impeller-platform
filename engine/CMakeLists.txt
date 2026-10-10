@@ -246,6 +246,7 @@ add_executable(rn-impeller
   text/FontRegistry.cpp
   text/FontFamily.cpp
   text/FontFallback.cpp
+  fabric/platform/impeller/PlatformColorTable.cpp
 )
 
 target_include_directories(rn-impeller PRIVATE

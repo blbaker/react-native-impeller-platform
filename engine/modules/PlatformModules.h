@@ -36,6 +36,7 @@
 #include <functional>
 
 #include <FBReactNativeSpecJSI.h>
+#include <react/renderer/graphics/PlatformColorTable.h>
 
 #include <cstdio>
 #include <memory>
@@ -69,6 +70,7 @@ struct AppearanceState {
     std::lock_guard<std::mutex> lock(mutex);
     systemScheme = scheme;
     colorScheme = std::move(scheme);
+    publishScheme();
   }
   // ENG-17: an app override (Appearance.setColorScheme). 'unspecified' drops
   // the override and goes back to the system scheme. Returns true when the
@@ -78,7 +80,13 @@ struct AppearanceState {
     effective = requested == "unspecified" ? systemScheme : requested;
     if (effective == colorScheme) return false;
     colorScheme = effective;
+    publishScheme();
     return true;
+  }
+
+  // PlatformColor props resolve against this when they are parsed.
+  void publishScheme() {
+    facebook::react::impeller_platform_color::darkScheme().store(colorScheme == "dark");
   }
 };
 

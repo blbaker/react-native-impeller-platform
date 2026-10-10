@@ -48,3 +48,4 @@ g2:tiBold SC-20
 g2:tiItalic SC-20
 g2:tiDecoration SC-20
 g2:tiTextTransform SC-20
+risky:platformColor SC-22

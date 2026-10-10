@@ -65,10 +65,12 @@
 #   SC20d  textAlign centre never shifts the line -> g2:tiAlignCenter
 #   SC20e  TextInput decoration line dropped -> g2:tiDecoration
 #   SC20f  TextInput textTransform not applied -> g2:tiTextTransform
+#   SC22a  PlatformColor names resolve to transparent -> risky:platformColor
+#   SC22b  systemBlue table entry wrong -> risky:platformColor
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
-FILES=(engine/scenegraph/SceneGraph.cpp engine/scenegraph/Shadows.cpp
+FILES=(engine/fabric/platform/impeller/PlatformColorTable.cpp engine/scenegraph/SceneGraph.cpp engine/scenegraph/Shadows.cpp
        engine/text/TextStyle.h engine/text/ImpellerTextLayoutManager.cpp
        engine/fabric/FabricHost.cpp engine/scenegraph/BorderDash.h)
 for f in engine/scenegraph/*.cpp engine/scenegraph/*.h engine/text/*.h engine/text/*.cpp \
@@ -489,6 +491,18 @@ if want SC20f; then
 echo "== SC20f: TextInput textTransform not applied =="
 mutate engine/scenegraph/SceneGraph.cpp "const std::string shownText = rni::applyTextTransform(text, node.tiFace.transform);" "const std::string shownText = text;"
 check SC20f g2:tiTextTransform; N=$((N + 1))
+fi
+
+if want SC22a; then
+echo "== SC22a: PlatformColor names never resolve =="
+mutate engine/fabric/platform/impeller/PlatformColorTable.cpp "      if (name == entries[i].name) return &entries[i];" "      if (name == entries[i].name) return nullptr;"
+check SC22a risky:platformColor; N=$((N + 1))
+fi
+
+if want SC22b; then
+echo "== SC22b: systemBlue uses the dark value in light mode =="
+mutate engine/fabric/platform/impeller/PlatformColorTable.cpp '{"systemBlue", {0, 122, 255, 1}' '{"systemBlue", {10, 132, 255, 1}'
+check SC22b risky:platformColor; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
