@@ -16,6 +16,8 @@
 #   SC04b  mixed rounded border drops the inner cutout -> g2:radiusUnevenWidth
 #   SC05a  rounded dashed border falls back to solid -> g2:dashedRounded
 #   SC05b  dashed border paints every dash in the top colour -> g2:dashedPerSideColor
+#   SC06a  vertical corner radius takes the horizontal one -> g2:ellipticalRadius
+#   SC06b  continuous corners fall back to circular -> g2:borderCurve
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -134,6 +136,21 @@ if want SC05b; then
 echo "== SC05b: dashed border paints every dash in the top colour =="
 mutate engine/scenegraph/BorderDashRounded.cpp "ImpellerColor c = colors[side];" "ImpellerColor c = colors[0];"
 check SC05b g2:dashedPerSideColor; N=$((N + 1))
+fi
+
+if want SC06a; then
+echo "== SC06a: vertical corner radius takes the horizontal one =="
+mutate engine/scenegraph/SceneGraph.cpp "radii.top_left = {node.borderRadii[0], node.borderRadiiV[0]};" "radii.top_left = {node.borderRadii[0], node.borderRadii[0]};"
+mutate engine/scenegraph/SceneGraph.cpp "radii.bottom_left = {node.borderRadii[1], node.borderRadiiV[1]};" "radii.bottom_left = {node.borderRadii[1], node.borderRadii[1]};"
+mutate engine/scenegraph/SceneGraph.cpp "radii.top_right = {node.borderRadii[2], node.borderRadiiV[2]};" "radii.top_right = {node.borderRadii[2], node.borderRadii[2]};"
+mutate engine/scenegraph/SceneGraph.cpp "radii.bottom_right = {node.borderRadii[3], node.borderRadiiV[3]};" "radii.bottom_right = {node.borderRadii[3], node.borderRadii[3]};"
+check SC06a g2:ellipticalRadius; N=$((N + 1))
+fi
+
+if want SC06b; then
+echo "== SC06b: continuous corners fall back to circular =="
+mutate engine/scenegraph/SceneGraph.cpp "const bool continuous = rounded && node.borderContinuous;" "const bool continuous = false && rounded && node.borderContinuous;"
+check SC06b g2:borderCurve; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

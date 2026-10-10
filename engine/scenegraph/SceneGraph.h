@@ -85,6 +85,9 @@ struct SceneNode {
   // clockwise). P2 collapsed these to a single `all` value, so one rounded
   // corner drew as four.
   float borderRadii[4]{0, 0, 0, 0};
+  // Vertical radius per corner, same order; differs from borderRadii for '50%' etc.
+  float borderRadiiV[4]{0, 0, 0, 0};
+  bool borderContinuous{false};  // borderCurve 'continuous' on any corner
 
   // Linear gradient (`experimental_backgroundImage`). Painted UNDER the
   // background colour rule: when a gradient is present it replaces the flat

@@ -252,7 +252,59 @@ def _dashed_per_side_color(ctl, feat):
     return True, why
 
 
+def _elliptical_radius(ctl, feat):
+    # 90x45 blue box. Control: square. Feature: borderRadius '50%' = a 45 x 22.5 ellipse.
+    import math
+    if not is_blue(ctl.px(0, 0)) or not is_blue(ctl.px(89, 44)):
+        return False, "control is not a square box"
+    for cx, cy in ((0, 0), (89, 0), (0, 44), (89, 44)):
+        if not is_white(feat.px(cx, cy)):
+            return False, f"bbox corner {cx},{cy} not background {feat.px(cx, cy)}"
+    for deg in range(0, 360, 15):
+        a = math.radians(deg)
+        x, y = round(44.5 + 44 * math.cos(a)), round(22 + 21 * math.sin(a))
+        if not is_blue(feat.px(x, y)):
+            return False, f"ellipse point {x},{y} (deg {deg}) not blue {feat.px(x, y)}"
+    # A capsule (both radii clamped to 22.5) passes the inside checks, so also demand
+    # background just outside the ellipse where the capsule would still be filled.
+    for deg in (30, 45, 60, 120, 135, 150, 210, 225, 240, 300, 315, 330):
+        a = math.radians(deg)
+        x, y = round(44.5 + 48 * math.cos(a)), round(22 + 23 * math.sin(a))
+        if 0 <= x < 90 and 0 <= y < 45 and not is_white(feat.px(x, y)):
+            return False, f"point {x},{y} outside the ellipse (deg {deg}) is painted {feat.px(x, y)}"
+    for x in (0, 89):
+        if not is_blue(feat.px(x, 22)):
+            return False, f"extreme {x},22 not blue: ellipse does not reach the box side"
+        for y in (6, 38):
+            if is_blue(feat.px(x, y)):
+                return False, f"{x},{y} blue: radii are not elliptical"
+    return True, "ellipse ok"
+
+
+def _border_curve(ctl, feat):
+    # 60x60 radius 24. Control circular; feature continuous. They may differ only in the corner bands.
+    def in_corner(x, y):
+        return (x < 24 or x >= 36) and (y < 24 or y >= 36)
+    out = [(x, y) for y in range(Y0, Y1) for x in range(X0, X1)
+           if sum(abs(a - b) for a, b in zip(ctl.px(x, y), feat.px(x, y))) > 30 and not in_corner(x, y)]
+    if out:
+        return False, f"{len(out)} differing pixels outside the corner bands, first {out[0]}"
+    if not is_white(ctl.px(0, 0)) or not is_white(feat.px(0, 0)):
+        return False, "corner pixel 0,0 is not background"
+    per = [sum(1 for y in range(ys, ys + 24) for x in range(xs, xs + 24)
+               if sum(abs(a - b) for a, b in zip(ctl.px(x, y), feat.px(x, y))) > 30)
+           for xs, ys in ((0, 0), (36, 0), (0, 36), (36, 36))]
+    if min(per) < 6:
+        return False, f"corner diffs {per}: every corner must differ from the circular control"
+    if not (is_blue(feat.px(30, 1)) and is_blue(feat.px(1, 30)) and is_blue(feat.px(30, 58))):
+        return False, "edge midpoints not blue"
+    return True, f"corner diffs {per}"
+
+
 RULES = {
+    # SC-06
+    'g2:ellipticalRadius': _elliptical_radius,
+    'g2:borderCurve': _border_curve,
     # SC-05
     'g2:dashedRounded': _dashed_rounded,
     'g2:dashedPerSideColor': _dashed_per_side_color,

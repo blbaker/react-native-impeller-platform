@@ -18,6 +18,7 @@
 #endif
 
 #include "scenegraph/BorderDash.h"
+#include "scenegraph/BorderCurve.h"
 #include "scenegraph/BorderDashRounded.h"
 #include "scenegraph/BorderRounded.h"
 #include "text/LineHeight.h"
@@ -394,6 +395,14 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     node.borderRadii[1] = (float)metrics.borderRadii.bottomLeft.horizontal;
     node.borderRadii[2] = (float)metrics.borderRadii.topRight.horizontal;
     node.borderRadii[3] = (float)metrics.borderRadii.bottomRight.horizontal;
+    node.borderRadiiV[0] = (float)metrics.borderRadii.topLeft.vertical;
+    node.borderRadiiV[1] = (float)metrics.borderRadii.bottomLeft.vertical;
+    node.borderRadiiV[2] = (float)metrics.borderRadii.topRight.vertical;
+    node.borderRadiiV[3] = (float)metrics.borderRadii.bottomRight.vertical;
+    node.borderContinuous = metrics.borderCurves.topLeft == react::BorderCurve::Continuous ||
+                            metrics.borderCurves.topRight == react::BorderCurve::Continuous ||
+                            metrics.borderCurves.bottomLeft == react::BorderCurve::Continuous ||
+                            metrics.borderCurves.bottomRight == react::BorderCurve::Continuous;
 
     node.overflowHidden = props->getClipsContentToBounds();
 
@@ -1862,14 +1871,24 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   ImpellerRoundingRadii radii = {};
   // Field order is TL, BL, TR, BR — not clockwise. node.borderRadii is stored
   // in that same order so the two cannot drift.
-  radii.top_left = {node.borderRadii[0], node.borderRadii[0]};
-  radii.bottom_left = {node.borderRadii[1], node.borderRadii[1]};
-  radii.top_right = {node.borderRadii[2], node.borderRadii[2]};
-  radii.bottom_right = {node.borderRadii[3], node.borderRadii[3]};
+  radii.top_left = {node.borderRadii[0], node.borderRadiiV[0]};
+  radii.bottom_left = {node.borderRadii[1], node.borderRadiiV[1]};
+  radii.top_right = {node.borderRadii[2], node.borderRadiiV[2]};
+  radii.bottom_right = {node.borderRadii[3], node.borderRadiiV[3]};
   const bool rounded = node.borderRadii[0] > 0.0f || node.borderRadii[1] > 0.0f ||
                        node.borderRadii[2] > 0.0f || node.borderRadii[3] > 0.0f;
 
+  // A7: continuous corners fill and clip as the squircle path; borders stay circular.
+  const bool continuous = rounded && node.borderContinuous;
+  auto drawBoxWith = [&](ImpellerPaint p) {
+    ImpellerPath sq = rni::MakeContinuousRRectPath(x, y, w, h, radii);
+    if (sq == nullptr) return false;
+    ImpellerDisplayListBuilderDrawPath(builder, sq, p);
+    ImpellerPathRelease(sq);
+    return true;
+  };
   auto fillBox = [&]() {
+    if (continuous && drawBoxWith(paint)) return;
     if (rounded) {
       ImpellerDisplayListBuilderDrawRoundedRect(builder, &rect, &radii, paint);
     } else {
@@ -1911,7 +1930,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       // it with that gradient, so the gradient gets a paint that is discarded.
       ImpellerPaint gp = ImpellerPaintNew();
       ImpellerPaintSetColorSource(gp, src);
-      if (rounded) {
+      if (continuous && drawBoxWith(gp)) {
+      } else if (rounded) {
         ImpellerDisplayListBuilderDrawRoundedRect(builder, &rect, &radii, gp);
       } else {
         ImpellerDisplayListBuilderDrawRect(builder, &rect, gp);
@@ -2373,7 +2393,11 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerDisplayListBuilderSave(builder);
     // Style audit item 13: a rounded box clips its children to the ROUNDED
     // outline (iOS masksToBounds + cornerRadius), not to its square frame.
-    if (rounded) {
+    ImpellerPath sqClip = continuous ? rni::MakeContinuousRRectPath(x, y, w, h, radii) : nullptr;
+    if (sqClip != nullptr) {
+      ImpellerDisplayListBuilderClipPath(builder, sqClip, kImpellerClipOperationIntersect);
+      ImpellerPathRelease(sqClip);
+    } else if (rounded) {
       ImpellerDisplayListBuilderClipRoundedRect(builder, &rect, &radii,
                                                 kImpellerClipOperationIntersect);
     } else {
