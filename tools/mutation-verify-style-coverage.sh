@@ -59,6 +59,12 @@
 #   SC18b  stack takes its first entry without checking it resolves -> g2:fontStack
 #   SC19a  no per-glyph fallback (missing glyphs paint tofu) -> risky:cjk
 #   SC19b  Arabic block skipped by the fallback lookup (tofu) -> risky:arabic
+#   SC20a  TextInput fontWeight ignored -> g2:tiBold
+#   SC20b  TextInput fontStyle ignored -> g2:tiItalic
+#   SC20c  right alignment shifted like centre -> g2:tiAlignRight
+#   SC20d  textAlign centre never shifts the line -> g2:tiAlignCenter
+#   SC20e  TextInput decoration line dropped -> g2:tiDecoration
+#   SC20f  TextInput textTransform not applied -> g2:tiTextTransform
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -447,6 +453,42 @@ mutate engine/text/FontFallback.cpp "  std::string family;
   if (cp >= 0x600 && cp <= 0x6FF) return byCp[cp] = family;
   void* cs = fc.csCreate();"
 check SC19b risky:arabic; N=$((N + 1))
+fi
+
+if want SC20a; then
+echo "== SC20a: TextInput fontWeight ignored =="
+mutate engine/scenegraph/TextInputStyle.cpp "ApplyFontWeight(style, f.weight);" "ApplyFontWeight(style, 0);"
+check SC20a g2:tiBold; N=$((N + 1))
+fi
+
+if want SC20b; then
+echo "== SC20b: TextInput fontStyle ignored =="
+mutate engine/scenegraph/TextInputStyle.cpp "ApplyFontStyle(style, f.italic);" "ApplyFontStyle(style, false);"
+check SC20b g2:tiItalic; N=$((N + 1))
+fi
+
+if want SC20c; then
+echo "== SC20c: right alignment shifted like centre =="
+mutate engine/scenegraph/SceneGraph.cpp "  return a == 2 ? extra * 0.5f : extra;" "  return extra * 0.5f;"
+check SC20c g2:tiAlignRight; N=$((N + 1))
+fi
+
+if want SC20d; then
+echo "== SC20d: centre alignment never shifts the line =="
+mutate engine/scenegraph/SceneGraph.cpp "(a != 2 && a != 3) || text.empty()) return 0.0f;" "a != 3 || text.empty()) return 0.0f;"
+check SC20d g2:tiAlignCenter; N=$((N + 1))
+fi
+
+if want SC20e; then
+echo "== SC20e: TextInput decoration line dropped =="
+mutate engine/scenegraph/SceneGraph.cpp "rni::ApplyTextDecoration(style, node.tiFace.decoLine, node.tiFace.decoStyle," "rni::ApplyTextDecoration(style, 0, node.tiFace.decoStyle,"
+check SC20e g2:tiDecoration; N=$((N + 1))
+fi
+
+if want SC20f; then
+echo "== SC20f: TextInput textTransform not applied =="
+mutate engine/scenegraph/SceneGraph.cpp "const std::string shownText = rni::applyTextTransform(text, node.tiFace.transform);" "const std::string shownText = text;"
+check SC20f g2:tiTextTransform; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

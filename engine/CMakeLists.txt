@@ -235,6 +235,7 @@ add_executable(rn-impeller
   scenegraph/BackgroundTiles.cpp
   scenegraph/BorderRounded.cpp
   scenegraph/Outline.cpp
+  scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
   scenegraph/ContentFilters.cpp
   scenegraph/BlendGroup.cpp

@@ -773,6 +773,26 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       if (tp->placeholderTextColor) {
         colorToFloats(tp->placeholderTextColor, node.tiPlaceholderColor);
       }
+      // SC-20: the Text attributes a field honours, plus the caret props.
+      rni::TextInputFace& face = node.tiFace;
+      face = rni::TextInputFace{};
+      face.align = attrs.alignment.has_value() ? (int)*attrs.alignment : 0;
+      face.weight = attrs.fontWeight.has_value() ? (int)*attrs.fontWeight : 0;
+      face.italic = attrs.fontStyle.has_value() && *attrs.fontStyle != react::FontStyle::Normal;
+      face.decoLine = attrs.textDecorationLineType.has_value() ? (int)*attrs.textDecorationLineType : 0;
+      face.decoStyle = attrs.textDecorationStyle.has_value() ? (int)*attrs.textDecorationStyle : 0;
+      face.transform = attrs.textTransform.has_value() ? (int)*attrs.textTransform : 0;
+      if (attrs.textDecorationColor) {
+        colorToFloats(attrs.textDecorationColor, face.decoColor);
+        face.hasDecoColor = true;
+      }
+      if (tp->cursorColor) {
+        colorToFloats(tp->cursorColor, face.cursorColor);
+        face.hasCursorColor = true;
+      }
+      if (const auto* itp2 = dynamic_cast<const react::TextInputProps*>(tp)) {
+        face.caretHidden = itp2->traits.caretHidden;
+      }
       // item 4a: the field's own selectionColor prop, when the fork exposes
       // one -- BaseTextInputProps carries it unconditionally (RN core, not
       // an iOS/Android-only extension). Falls through to the struct's own
@@ -1407,16 +1427,41 @@ ImpellerParagraph BuildTextInputParagraph(ImpellerTypographyContext typo,
   ImpellerParagraphStyleSetFontSize(style, node.fontSize);
   ApplyFontFamily(style, node.fontFamily);  // ENG-22
   ApplyLineHeight(style, node.lineHeight, node.fontSize);  // ENG-23 TextInput
-  if (fg != nullptr) ImpellerParagraphStyleSetForeground(style, fg);
+  rni::ApplyTextInputFace(style, node.tiFace, node.tiMultiline);  // SC-20
+  if (fg != nullptr) {
+    ImpellerParagraphStyleSetForeground(style, fg);
+    const float* dc = node.tiFace.hasDecoColor ? node.tiFace.decoColor : node.textColor;
+    rni::ApplyTextDecoration(style, node.tiFace.decoLine, node.tiFace.decoStyle,
+                             impellerColor(dc, OwnAlpha(node)));
+  }
+  const std::string shownText = rni::applyTextTransform(text, node.tiFace.transform);
   ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typo);
   ImpellerParagraphBuilderPushStyle(pb, style);
-  ImpellerParagraphBuilderAddText(pb, (const uint8_t*)text.data(), text.size());
+  ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shownText.data(), shownText.size());
   ImpellerParagraph par = ImpellerParagraphBuilderBuildParagraphNew(
       pb, TextInputWrapWidth(node.tiMultiline, w, TextInputPadL(node),
                          TextInputPadR(node)));  // ENG-24
   ImpellerParagraphBuilderRelease(pb);
   ImpellerParagraphStyleRelease(style);
   return par;
+}
+
+// SC-20: a single-line field is laid out unwrapped (width 1e6), so textAlign
+// centre/right becomes a shift of the whole line inside the content box. Text
+// wider than the box gets 0 (it scrolls). Multiline fields align per line in
+// the paragraph itself. `text` is what paints (the placeholder when empty).
+float TextInputAlignDx(ImpellerTypographyContext typo, const SceneNode& node,
+                       const std::string& text, float w) {
+  const int a = node.tiFace.align;
+  if (node.tiMultiline || (a != 2 && a != 3) || text.empty()) return 0.0f;
+  ImpellerParagraph par = BuildTextInputParagraph(typo, node, text, w, nullptr);
+  if (par == nullptr) return 0.0f;
+  const float tw = ImpellerParagraphGetMaxIntrinsicWidth(par);
+  ImpellerParagraphRelease(par);
+  // The 1 pt caret bar must fit after right-aligned text.
+  const float extra = w - TextInputPadL(node) - TextInputPadR(node) - 1.0f - tw;
+  if (extra <= 0.0f) return 0.0f;
+  return a == 2 ? extra * 0.5f : extra;
 }
 
 // ENG-23 (TextInput): one line's height with no paragraph to read it from
@@ -2367,7 +2412,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // A small left inset so the glyphs (and caret) do not sit on the border.
     // Shared with glyphBoundariesLocked (item 3 click-to-caret): a click and
     // the painted text must agree on where the text starts.
-    const float pad = TextInputPadL(node);
+    const float pad = TextInputPadL(node) + TextInputAlignDx(typography_, node, drawStr, w);
     const float padR = TextInputPadR(node);
     // ENG-24: a single-line field lays its text out on ONE line (it used to
     // wrap at the box and spill below it) and scrolls sideways to keep the
@@ -2390,6 +2435,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerParagraphStyle style = ImpellerParagraphStyleNew();
       ImpellerParagraphStyleSetFontSize(style, node.fontSize);
       ApplyFontFamily(style, node.fontFamily);  // ENG-22
+      rni::ApplyTextInputFace(style, node.tiFace, false);  // SC-20: advances for prefixW
+      const std::string editMeasured = rni::applyTextTransform(editShown, node.tiFace.transform);
       ImpellerPaint tPaint = ImpellerPaintNew();
       const float* col = showPlaceholder ? node.tiPlaceholderColor : node.textColor;
       ImpellerColor tc = impellerColor(col, OwnAlpha(node));
@@ -2403,7 +2450,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           if (n == 0) return 0.0f;
           ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(typography_);
           ImpellerParagraphBuilderPushStyle(sb, style);
-          ImpellerParagraphBuilderAddText(sb, (const uint8_t*)editShown.data(), n);
+          ImpellerParagraphBuilderAddText(sb, (const uint8_t*)editMeasured.data(), n);
           ImpellerParagraph sp = ImpellerParagraphBuilderBuildParagraphNew(sb, 1e6f);
           float wv = 0.0f;
           if (sp != nullptr) {
@@ -2511,7 +2558,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // real off phase, not a missing caret.
     // item 4a: no caret while a non-empty selection is shown (macOS and
     // Windows both hide it; the highlight marks the insertion range).
-    if (focused && tiSelAnchor_ == tiCaret_) {
+    if (focused && tiSelAnchor_ == tiCaret_ && !node.tiFace.caretHidden) {
       const long long msSinceReset =
           std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::steady_clock::now() - tiCaretResetAt_)
@@ -2525,7 +2572,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       }();
       if (caretVisible(msSinceReset, kBlinkMs)) {
         ImpellerPaint caretPaint = ImpellerPaintNew();
-        ImpellerColor cc = impellerColor(node.textColor, OwnAlpha(node));
+        // SC-20: cursorColor tints the caret; without it the caret follows the text.
+        ImpellerColor cc = impellerColor(
+            node.tiFace.hasCursorColor ? node.tiFace.cursorColor : node.textColor, OwnAlpha(node));
         ImpellerPaintSetColor(caretPaint, &cc);
         ImpellerRect caretRect = {caretX - scrollX, caretY - scrollY, 1.0f,
                                   caretH};
@@ -4121,9 +4170,13 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   // Style audit item 11: a secure field's glyphs are bullets, so its click
   // boundaries are measured over the mask. Boundaries are reported in SOURCE
   // byte offsets (one bullet per source codepoint), which the caret uses.
-  const std::string shown = node.tiSecure ? SecureMask(raw) : raw;
+  const std::string shown = rni::applyTextTransform(
+      node.tiSecure ? SecureMask(raw) : raw, node.tiFace.transform);  // SC-20
   // ENG-24: a focused single-line field may be scrolled sideways.
-  const float textX = ox + TextInputPadL(node) -
+  const float alignDx = TextInputAlignDx(
+      typography_, node, shown.empty() ? node.tiPlaceholder : shown,
+      (float)node.layoutMetrics.frame.size.width);
+  const float textX = ox + TextInputPadL(node) + alignDx -
                       ((tiFocused_ == tag && !node.tiMultiline) ? tiScrollX_ : 0.0f);
   // Boundary 0 is the text start. Then one boundary after every codepoint
   // (a UTF-8 lead byte is any byte that is not 10xxxxxx).
@@ -4133,6 +4186,7 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   ImpellerParagraphStyleSetFontSize(style, node.fontSize);
   // ENG-22: a click must map through the SAME face the glyphs painted in.
   ApplyFontFamily(style, node.fontFamily);
+  rni::ApplyTextInputFace(style, node.tiFace, false);  // SC-20
   for (size_t i = 1; i <= raw.size(); ++i) {
     if (i < raw.size() && (((unsigned char)raw[i]) & 0xC0) == 0x80) continue;
     const size_t mi = node.tiSecure ? SecureMaskOffset(raw, i) : i;

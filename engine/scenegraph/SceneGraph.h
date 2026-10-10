@@ -28,6 +28,7 @@
 #include "impeller.h"
 #include "modules/WorldRasterStore.h"
 #include "scenegraph/Shadows.h"
+#include "scenegraph/TextInputStyle.h"
 
 namespace rni {
 
@@ -270,6 +271,9 @@ struct SceneNode {
   // common desktop selection blue) when the field sets no `selectionColor`
   // prop, overwritten at mutation time exactly like tiPlaceholderColor above.
   float tiSelectionColor[4]{0.2f, 0.56470588f, 1.0f, 0.35f};
+  // SC-20: textAlign, fontWeight, fontStyle, decoration, textTransform,
+  // cursorColor, caretHidden.
+  rni::TextInputFace tiFace;
 
   // RNSVGPath (P9-B2). `d` is re-parsed into geometry only when it changes —
   // see SvgPath.h. fillOpacity is kept SEPARATE from node.opacity (which

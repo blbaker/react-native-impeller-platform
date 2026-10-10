@@ -42,3 +42,9 @@ nw:fontMono SC-18
 risky:emoji SC-19
 risky:cjk SC-19
 risky:arabic SC-19
+g2:tiAlignCenter SC-20
+g2:tiAlignRight SC-20
+g2:tiBold SC-20
+g2:tiItalic SC-20
+g2:tiDecoration SC-20
+g2:tiTextTransform SC-20
