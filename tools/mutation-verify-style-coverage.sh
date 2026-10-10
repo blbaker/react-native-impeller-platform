@@ -57,6 +57,8 @@
 #   SC17b  fit search always returns the minimum scale -> g2:adjustsFontSize (measure-only height is invisible to ink rules)
 #   SC18a  generic family names not mapped (monospace passes through) -> g2:fontMonospace
 #   SC18b  stack takes its first entry without checking it resolves -> g2:fontStack
+#   SC19a  no per-glyph fallback (missing glyphs paint tofu) -> risky:cjk
+#   SC19b  Arabic block skipped by the fallback lookup (tofu) -> risky:arabic
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -430,6 +432,21 @@ if want SC18b; then
 echo "== SC18b: stack entry not checked for existence =="
 mutate engine/text/FontFamily.cpp "names.size() == 1 || Exists(names[i])" "true"
 check SC18b g2:fontStack; N=$((N + 1))
+fi
+
+if want SC19a; then
+echo "== SC19a: no font fallback =="
+mutate engine/text/FontFallback.cpp "  if (!ascii && fc.ok && typography != nullptr) {" "  if (false && !ascii && fc.ok && typography != nullptr) {"
+check SC19a risky:cjk; N=$((N + 1))
+fi
+
+if want SC19b; then
+echo "== SC19b: Arabic block skipped by the fallback lookup =="
+mutate engine/text/FontFallback.cpp "  std::string family;
+  void* cs = fc.csCreate();" "  std::string family;
+  if (cp >= 0x600 && cp <= 0x6FF) return byCp[cp] = family;
+  void* cs = fc.csCreate();"
+check SC19b risky:arabic; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

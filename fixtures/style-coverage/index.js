@@ -202,7 +202,8 @@ const RISKY = [
   { id: 'inlineView', e: 'diff', c: () => txt('ABCD'), f: () => txt(['AB', h(View, { key: 'v', style: { width: 14, height: 14, backgroundColor: RED } }), 'CD']) },
   { id: 'emoji', e: 'diff', c: () => txt('AB'), f: () => txt('A\u{1F642}\u2605') },
   { id: 'cjk', e: 'diff', c: () => txt('AB'), f: () => txt('\u4F60\u597D') },
-  { id: 'arabic', e: 'diff', c: () => txt('AB'), f: () => txt('\u0645\u0631\u062D\u0628\u0627') },
+  { id: 'arabic', e: 'diff', c: () => txt('AB'), f: () => txt('\u0645\u0631\u062D\u0628\u0627') },  // SC-19 instrument: a private-use codepoint no installed font covers, so it paints the missing-glyph box.
+  { id: 'tofuRef', e: 'diff', c: () => txt('AB'), f: () => txt('\uE000\uE000') },
 ];
 
 const CELL_W = 240, CELL_H = 150, PER_ROW = 5;

@@ -39,3 +39,6 @@ g2:nestedFamily SC-18
 g2:tiMonospace SC-18
 g2:fontStack SC-18
 nw:fontMono SC-18
+risky:emoji SC-19
+risky:cjk SC-19
+risky:arabic SC-19

@@ -7,6 +7,7 @@
 
 #include "text/FitScale.h"
 #include "text/FontFamily.h"
+#include "text/FontFallback.h"
 #include "text/LineHeight.h"
 #include "text/TextStyle.h"
 #include "text/TextTransform.h"
@@ -82,7 +83,6 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
           ImpellerParagraphStyleSetEllipsis(style, "\xE2\x80\xA6");  // U+2026 …
         }
       }
-      ImpellerParagraphBuilderPushStyle(builder, style);
       // textTransform is applied to the SAME string the painter draws (see
       // text/TextTransform.h). Measuring the raw case while painting the
       // transformed case would let an uppercased label clip its last glyphs.
@@ -90,9 +90,17 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
                           ? (int)fragment.textAttributes.textTransform.value()
                           : 0;
       const std::string measured = applyTextTransform(fragment.string, transform);
-      ImpellerParagraphBuilderAddText(
-          builder, (const uint8_t*)measured.c_str(), measured.size());
-      ImpellerParagraphBuilderPopStyle(builder);
+      // SC-19: the same fallback split the painter runs (text/FontFallback.h).
+      const std::string primary =
+          attrs.fontFamily.empty() ? "" : rni::ResolveFontFamily(attrs.fontFamily);
+      const auto segs = rni::SplitFontFallback(typography_, primary, measured);
+      for (const auto& seg : segs) {
+        rni::ApplySegmentFamily(style, primary, seg, segs.size() == 1);
+        ImpellerParagraphBuilderPushStyle(builder, style);
+        ImpellerParagraphBuilderAddText(builder, (const uint8_t*)seg.text.c_str(),
+                                        seg.text.size());
+        ImpellerParagraphBuilderPopStyle(builder);
+      }
       ImpellerParagraphStyleRelease(style);
     }
 

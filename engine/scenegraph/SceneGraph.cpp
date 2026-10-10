@@ -29,6 +29,7 @@
 #include "scenegraph/ContentFilters.h"
 #include "text/FitScale.h"
 #include "text/FontFamily.h"
+#include "text/FontFallback.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
@@ -1703,10 +1704,15 @@ ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const
                                         OwnAlpha(node) * run.opacity);
     if (shadow >= 0) decoC.alpha = shadowRun ? 1.0f : 0.0f;
     ApplyTextDecoration(style, run.decoLine, run.decoStyle, decoC);
-    ImpellerParagraphBuilderPushStyle(pb, style);
-    ImpellerParagraphBuilderAddText(pb, (const uint8_t*)run.text.c_str(),
-                                    run.text.size());
-    ImpellerParagraphBuilderPopStyle(pb);
+    // SC-19: one push per fallback segment (text/FontFallback.h); same split in measure.
+    const std::string primary = run.fontFamily.empty() ? "" : rni::ResolveFontFamily(run.fontFamily);
+    const std::vector<rni::FontSegment> segs = rni::SplitFontFallback(typography_, primary, run.text);
+    for (const rni::FontSegment& seg : segs) {
+      rni::ApplySegmentFamily(style, primary, seg, segs.size() == 1);
+      ImpellerParagraphBuilderPushStyle(pb, style);
+      ImpellerParagraphBuilderAddText(pb, (const uint8_t*)seg.text.c_str(), seg.text.size());
+      ImpellerParagraphBuilderPopStyle(pb);
+    }
     ImpellerParagraphStyleRelease(style);
   }
   ImpellerParagraph paragraph =

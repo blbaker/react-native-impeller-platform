@@ -244,6 +244,7 @@ add_executable(rn-impeller
   text/ImpellerTextLayoutManager.cpp
   text/FontRegistry.cpp
   text/FontFamily.cpp
+  text/FontFallback.cpp
 )
 
 target_include_directories(rn-impeller PRIVATE
