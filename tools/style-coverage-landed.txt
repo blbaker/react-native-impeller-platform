@@ -18,3 +18,9 @@ g2:backgroundPosition SC-08
 g2:outlineDashed SC-09
 nw:outline SC-09
 nw:backface SC-10
+g2:filterInvert SC-11
+g2:filterHueRotate SC-11
+g2:filterOpacity SC-11
+g2:filterSaturate SC-11
+g2:filterChain SC-11
+nw:grayscale SC-11

@@ -23,6 +23,7 @@
 #include "scenegraph/BorderDashRounded.h"
 #include "scenegraph/BorderRounded.h"
 #include "scenegraph/Outline.h"
+#include "scenegraph/ColorMatrixFilter.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
@@ -539,6 +540,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       case react::PointerEventsMode::BoxOnly: node.pointerEvents = 3; break;
       default: node.pointerEvents = 0; break;
     }
+    node.hasFilterMatrix = rni::BuildFilterMatrix(props->filter, node.filterMatrix);
     node.hasTransform = false;
     node.backfaceHidden = false;
     if (!props->transform.operations.empty()) {
@@ -1718,6 +1720,18 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerPaintRelease(layerPaint);
   }
 
+  // CSS filter colour matrix: a layer inside the opacity layer (filter, then opacity).
+  const bool filterLayer = node.hasFilterMatrix;
+  if (filterLayer) {
+    ImpellerColorFilter cf = rni::MakeMatrixColorFilter(node.filterMatrix);
+    ImpellerPaint fp = ImpellerPaintNew();
+    ImpellerPaintSetColorFilter(fp, cf);
+    const ImpellerRect fb = {-100000.0f, -100000.0f, 200000.0f, 200000.0f};
+    ImpellerDisplayListBuilderSaveLayer(builder, &fb, fp, nullptr);
+    ImpellerPaintRelease(fp);
+    ImpellerColorFilterRelease(cf);
+  }
+
   // ⛔ THE SVG MATRIX MUST WRAP THIS NODE *AND ITS CHILDREN*.
   //
   // <G transform> means "transform everything inside me" -- a group paints no
@@ -2444,6 +2458,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // transform applies to its subtree.
   if (svgTransformed) {
     ImpellerDisplayListBuilderRestore(builder);
+  }
+  if (filterLayer) {
+    ImpellerDisplayListBuilderRestore(builder);  // A1: colour-matrix filter
   }
   if (opacityLayer) {
     ImpellerDisplayListBuilderRestore(builder);  // item 8: group opacity

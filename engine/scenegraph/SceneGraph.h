@@ -102,6 +102,9 @@ struct SceneNode {
   bool hasTransform{false};
   // backfaceVisibility 'hidden' and the transform turns the node away.
   bool backfaceHidden{false};
+  // CSS `filter` colour-matrix functions composed into one 4x5 matrix (ColorMatrixFilter.h).
+  bool hasFilterMatrix{false};
+  std::array<float, 20> filterMatrix{};
   std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
 
   bool overflowHidden{false};

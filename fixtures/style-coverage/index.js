@@ -193,6 +193,7 @@ const TESTS = [
   { id: 'scrollIndicator', e: 'diff',
     c: () => h(ScrollView, { style: { width: 60, height: 60, backgroundColor: GREY }, showsVerticalScrollIndicator: false }, chip(BLUE, { height: 200 })),
     f: () => h(ScrollView, { style: { width: 60, height: 60, backgroundColor: GREY }, showsVerticalScrollIndicator: true, persistentScrollbar: true, indicatorStyle: 'black' }, chip(BLUE, { height: 200 })) },
+  { id: 'filterChain', e: 'diff', c: () => box(), f: () => box({ filter: 'brightness(0.5) invert(1)' }) },
 ];
 
 const RISKY = [

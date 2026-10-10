@@ -30,6 +30,12 @@
 #   SC09c  solid outline stroke twice as wide -> nw:outline
 #   SC10a  back-facing test never fires -> nw:backface
 #   SC10b  back-facing test inverted -> nw:backface
+#   SC11a  filter chain applied in reverse order -> g2:filterChain
+#   SC11b  grayscale luma row wrong -> nw:grayscale
+#   SC11c  invert drops its offset -> g2:filterInvert
+#   SC11d  hue-rotate degrees used as radians -> g2:filterHueRotate
+#   SC11e  brightness ignored -> g2:filterChain (grid1 filterBrightness fails too, but the coverage gate reports first)
+#   SC11f  filter opacity ignored -> g2:filterOpacity
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -238,6 +244,42 @@ if want SC10b; then
 echo "== SC10b: back-facing test inverted =="
 mutate engine/scenegraph/SceneGraph.cpp "        node.backfaceHidden = det < 0;" "        node.backfaceHidden = det > 0;"
 check SC10b nw:backface; N=$((N + 1))
+fi
+
+if want SC11a; then
+echo "== SC11a: filter chain applied in reverse order =="
+mutate engine/scenegraph/ColorMatrixFilter.cpp "    total = Then(total, m);" "    total = Then(m, total);"
+check SC11a g2:filterChain; N=$((N + 1))
+fi
+
+if want SC11b; then
+echo "== SC11b: grayscale luma row wrong =="
+mutate engine/scenegraph/ColorMatrixFilter.cpp "  return RgbMatrix(0.2126f + 0.7874f * s," "  return RgbMatrix(0.2126f + 0.7874f * s + 0.3f,"
+check SC11b nw:grayscale; N=$((N + 1))
+fi
+
+if want SC11c; then
+echo "== SC11c: invert drops its offset =="
+mutate engine/scenegraph/ColorMatrixFilter.cpp "      m = Scale(1.0f - 2.0f * a, a);" "      m = Scale(1.0f - 2.0f * a, 0.0f);"
+check SC11c g2:filterInvert; N=$((N + 1))
+fi
+
+if want SC11d; then
+echo "== SC11d: hue-rotate degrees used as radians =="
+mutate engine/scenegraph/ColorMatrixFilter.cpp "  const float r = degrees * 3.14159265358979f / 180.0f;" "  const float r = degrees;"
+check SC11d g2:filterHueRotate; N=$((N + 1))
+fi
+
+if want SC11e; then
+echo "== SC11e: brightness ignored =="
+mutate engine/scenegraph/ColorMatrixFilter.cpp "    case FilterType::Brightness: m = Scale(std::max(v, 0.0f), 0.0f); return true;" "    case FilterType::Brightness: m = Scale(1.0f, 0.0f); return true;"
+check SC11e g2:filterChain; N=$((N + 1))
+fi
+
+if want SC11f; then
+echo "== SC11f: filter opacity ignored =="
+mutate engine/scenegraph/ColorMatrixFilter.cpp "m[18] = std::clamp(v, 0.0f, 1.0f); return true;" "m[18] = 1.0f; return true;"
+check SC11f g2:filterOpacity; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
