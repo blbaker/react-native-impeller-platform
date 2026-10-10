@@ -186,7 +186,76 @@ def _rounded_per_side(ctl, feat):
     return _rounded_edges(ctl, feat, is_red, is_green, is_dark, is_blue, 8, 4)
 
 
+def _ring(w, h, r, inset):
+    # Integer points along the centre line of a w x h rounded rect, clockwise.
+    x0, y0, x1, y1, c = inset, inset, w - 1 - inset, h - 1 - inset, max(r - inset, 0)
+    import math
+    pts = [(x, y0) for x in range(x0 + c, x1 - c + 1)]
+    n = max(int(math.pi / 2 * c), 1) if c else 0
+    arcs = ((x1 - c, y0 + c, -90), (x1 - c, y1 - c, 0), (x0 + c, y1 - c, 90), (x0 + c, y0 + c, 180))
+    sides = (((x1, y) for y in range(y0 + c, y1 - c + 1)), ((x, y1) for x in range(x1 - c, x0 + c - 1, -1)),
+             ((x0, y) for y in range(y1 - c, y0 + c - 1, -1)), iter(()))
+    for (cx, cy, a0), side in zip(arcs, sides):
+        pts += [(round(cx + c * math.cos(math.radians(a0 + 90 * i / n))),
+                 round(cy + c * math.sin(math.radians(a0 + 90 * i / n)))) for i in range(1, n)] if n else []
+        pts += list(side)
+    return pts
+
+
+def _runs(slot, pts, pred):
+    # Lengths of the consecutive runs of ring points whose pixel satisfies pred.
+    runs, cur = [], 0
+    for x, y in pts:
+        if pred(slot.px(x, y)):
+            cur += 1
+        elif cur:
+            runs.append(cur); cur = 0
+    if cur:
+        runs.append(cur)
+    return [n for n in runs if n >= 3]
+
+
+def _dashed_ring(ctl, feat, r, top_pred, top_label, ctl_solid=True):
+    ring = _ring(60, 60, r, 2)
+    if ctl_solid and _runs(ctl, ring, is_white):
+        return False, f"control ring has a gap {_runs(ctl, ring, is_white)}"
+    if not ctl_solid and top_pred(ctl.px(30, 2)):
+        return False, f"control top edge already {top_label}"
+    gaps, inks = _runs(feat, ring, is_white), _runs(feat, ring, is_ink)
+    if len(gaps) < 6 or len(inks) < 6:
+        return False, f"ring gaps={len(gaps)} dashes={len(inks)} (need >= 6 each)"
+    for name, s in (('control', ctl), ('feature', feat)):
+        for cx, cy in (((0, 0), (59, 0), (0, 59), (59, 59)) if r else ()):
+            if not is_white(s.px(cx, cy)):
+                return False, f"{name} corner {cx},{cy} not background {s.px(cx, cy)}"
+    row = [(x, 2) for x in range(r, 60 - r)]
+    if not _runs(feat, row, is_white):
+        return False, "top edge has no gap"
+    if not _runs(feat, row, top_pred):
+        return False, f"top edge dashes are not {top_label}"
+    return True, f"gaps={len(gaps)} dashes={len(inks)}"
+
+
+def _dashed_rounded(ctl, feat):
+    # Feature: dashed black 4 px border, radius 16. Control: the same border solid.
+    return _dashed_ring(ctl, feat, 16, is_dark, 'black')
+
+
+def _dashed_per_side_color(ctl, feat):
+    # Feature: square dashed border, black except a red top. Control: all black dashed.
+    ok, why = _dashed_ring(ctl, feat, 0, is_red, 'red', ctl_solid=False)
+    if not ok:
+        return ok, why
+    col = [(57, y) for y in range(6, 54)]
+    if not _runs(feat, col, is_dark) or _runs(feat, col, is_red):
+        return False, "right edge dashes are not black"
+    return True, why
+
+
 RULES = {
+    # SC-05
+    'g2:dashedRounded': _dashed_rounded,
+    'g2:dashedPerSideColor': _dashed_per_side_color,
     # SC-04
     'g2:radiusUnevenWidth': _radius_uneven_width,
     'g2:roundedPerSideWidthColor': _rounded_per_side,

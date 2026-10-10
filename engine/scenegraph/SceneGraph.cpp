@@ -18,6 +18,7 @@
 #endif
 
 #include "scenegraph/BorderDash.h"
+#include "scenegraph/BorderDashRounded.h"
 #include "scenegraph/BorderRounded.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
@@ -3299,6 +3300,19 @@ void SceneGraph::paintBorders(ImpellerDisplayListBuilder builder,
       if (node.borderColors[i][c] != node.borderColors[0][c]) { uniformColor = false; break; }
     }
     if (!uniformColor) break;
+  }
+
+  // B5: dashed / dotted on a rounded box or with per-side colours (uniform width).
+  if (node.borderStyle != 0 && uniformWidth && (rounded || !uniformColor)) {
+    ImpellerColor dc[4];
+    bool dv[4];
+    for (int e = 0; e < 4; ++e) {
+      dc[e] = impellerColor(node.borderColors[e], OwnAlpha(node));
+      dv[e] = node.hasBorderColors[e] && node.borderColors[e][3] > 0.0f;
+    }
+    if (PaintDashedRoundedBorder(builder, node.borderStyle, x, y, w, h, t, dc, dv, radii)) {
+      return;
+    }
   }
 
   // Items 10 + 25: dashed / dotted, uniform width + colour on a square box

@@ -14,6 +14,8 @@
 #   SC03a  width without colour paints nothing -> g2:borderNoColor
 #   SC04a  mixed rounded border drops the outer radius clip -> g2:roundedPerSideWidthColor
 #   SC04b  mixed rounded border drops the inner cutout -> g2:radiusUnevenWidth
+#   SC05a  rounded dashed border falls back to solid -> g2:dashedRounded
+#   SC05b  dashed border paints every dash in the top colour -> g2:dashedPerSideColor
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -120,6 +122,18 @@ if want SC04b; then
 echo "== SC04b: mixed rounded border thickness ignores the per-edge width =="
 mutate engine/scenegraph/BorderRounded.cpp "const float t = widths[0], r = widths[1], b = widths[2], l = widths[3];" "const float t = widths[3], r = widths[3], b = widths[3], l = widths[3];"
 check SC04b g2:radiusUnevenWidth; N=$((N + 1))
+fi
+
+if want SC05a; then
+echo "== SC05a: rounded dashed border falls back to solid =="
+mutate engine/scenegraph/SceneGraph.cpp "(rounded || !uniformColor)) {" "(!uniformColor)) {"
+check SC05a g2:dashedRounded; N=$((N + 1))
+fi
+
+if want SC05b; then
+echo "== SC05b: dashed border paints every dash in the top colour =="
+mutate engine/scenegraph/BorderDashRounded.cpp "ImpellerColor c = colors[side];" "ImpellerColor c = colors[0];"
+check SC05b g2:dashedPerSideColor; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

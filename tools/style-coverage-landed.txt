@@ -5,3 +5,5 @@ g2:tiPadding SC-02
 g2:borderNoColor SC-03
 g2:radiusUnevenWidth SC-04
 g2:roundedPerSideWidthColor SC-04
+g2:dashedRounded SC-05
+g2:dashedPerSideColor SC-05
