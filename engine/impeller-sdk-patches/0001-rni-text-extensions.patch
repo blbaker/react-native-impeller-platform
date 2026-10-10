@@ -1,0 +1,367 @@
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.cc b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+index 601df5cd..c320d8e2 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+@@ -1231,6 +1231,37 @@ void ImpellerParagraphStyleSetEllipsis(ImpellerParagraphStyle paragraph_style,
+   GetPeer(paragraph_style)->SetEllipsis(ReadString(ellipsis));
+ }
+ 
++IMPELLER_EXTERN_C
++void ImpellerParagraphStyleSetLetterSpacing(
++    ImpellerParagraphStyle paragraph_style,
++    float spacing) {
++  GetPeer(paragraph_style)->SetLetterSpacing(spacing);
++}
++
++IMPELLER_EXTERN_C
++void ImpellerParagraphStyleSetWordSpacing(ImpellerParagraphStyle paragraph_style,
++                                          float spacing) {
++  GetPeer(paragraph_style)->SetWordSpacing(spacing);
++}
++
++IMPELLER_EXTERN_C
++void ImpellerParagraphStyleSetFontFeature(ImpellerParagraphStyle paragraph_style,
++                                          const char* tag,
++                                          int32_t value) {
++  auto tag_string = ReadString(tag);
++  if (tag_string.size() != 4u) {
++    VALIDATION_LOG << "Font feature tags must be four characters.";
++    return;
++  }
++  GetPeer(paragraph_style)->SetFontFeature(tag_string, value);
++}
++
++IMPELLER_EXTERN_C
++void ImpellerParagraphStyleClearFontFeatures(
++    ImpellerParagraphStyle paragraph_style) {
++  GetPeer(paragraph_style)->ClearFontFeatures();
++}
++
+ IMPELLER_EXTERN_C
+ void ImpellerDisplayListBuilderDrawParagraph(ImpellerDisplayListBuilder builder,
+                                              ImpellerParagraph paragraph,
+@@ -1303,6 +1334,50 @@ void ImpellerParagraphBuilderAddText(ImpellerParagraphBuilder paragraph_builder,
+   GetPeer(paragraph_builder)->AddText(data, length);
+ }
+ 
++static txt::PlaceholderAlignment ToTxtType(
++    ImpellerPlaceholderAlignment alignment) {
++  switch (alignment) {
++    case kImpellerPlaceholderAlignmentBaseline:
++      return txt::PlaceholderAlignment::kBaseline;
++    case kImpellerPlaceholderAlignmentAboveBaseline:
++      return txt::PlaceholderAlignment::kAboveBaseline;
++    case kImpellerPlaceholderAlignmentBelowBaseline:
++      return txt::PlaceholderAlignment::kBelowBaseline;
++    case kImpellerPlaceholderAlignmentTop:
++      return txt::PlaceholderAlignment::kTop;
++    case kImpellerPlaceholderAlignmentBottom:
++      return txt::PlaceholderAlignment::kBottom;
++    case kImpellerPlaceholderAlignmentMiddle:
++      return txt::PlaceholderAlignment::kMiddle;
++  }
++  return txt::PlaceholderAlignment::kBaseline;
++}
++
++IMPELLER_EXTERN_C
++void ImpellerParagraphBuilderAddPlaceholder(
++    ImpellerParagraphBuilder paragraph_builder,
++    float width,
++    float height,
++    ImpellerPlaceholderAlignment alignment,
++    float baseline_offset) {
++  GetPeer(paragraph_builder)
++      ->AddPlaceholder(width, height, ToTxtType(alignment), baseline_offset);
++}
++
++IMPELLER_EXTERN_C
++uint32_t ImpellerParagraphGetPlaceholderRects(ImpellerParagraph paragraph,
++                                              ImpellerRect* out_rects,
++                                              uint32_t capacity) {
++  const auto boxes = GetPeer(paragraph)->GetPlaceholderRects();
++  if (out_rects != nullptr) {
++    for (size_t i = 0; i < boxes.size() && i < capacity; i++) {
++      const auto& r = boxes[i].rect;
++      out_rects[i] = ImpellerRect{r.left(), r.top(), r.width(), r.height()};
++    }
++  }
++  return static_cast<uint32_t>(boxes.size());
++}
++
+ IMPELLER_EXTERN_C
+ ImpellerParagraph ImpellerParagraphBuilderBuildParagraphNew(
+     ImpellerParagraphBuilder paragraph_builder,
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.h b/engine/src/flutter/impeller/toolkit/interop/impeller.h
+index 440f83aa..b665c219 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.h
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.h
+@@ -85,6 +85,10 @@ IMPELLER_EXTERN_C_BEGIN
+ #define IMPELLER_VERSION_MINOR 4
+ #define IMPELLER_VERSION_PATCH 0
+ 
++// react-native-impeller extensions (letter/word spacing, font features,
++// placeholders). Not part of upstream Impeller; test with #ifdef.
++#define IMPELLER_RNI_TEXT_EXTENSIONS 1
++
+ //------------------------------------------------------------------------------
+ /// The current Impeller API version.
+ ///
+@@ -496,6 +500,15 @@ typedef enum ImpellerTextDecorationStyle {
+   kImpellerTextDecorationStyleWavy,
+ } ImpellerTextDecorationStyle;
+ 
++typedef enum ImpellerPlaceholderAlignment {
++  kImpellerPlaceholderAlignmentBaseline,
++  kImpellerPlaceholderAlignmentAboveBaseline,
++  kImpellerPlaceholderAlignmentBelowBaseline,
++  kImpellerPlaceholderAlignmentTop,
++  kImpellerPlaceholderAlignmentBottom,
++  kImpellerPlaceholderAlignmentMiddle,
++} ImpellerPlaceholderAlignment;
++
+ //------------------------------------------------------------------------------
+ // Non-opaque structs
+ // -----------------------------------------------------------------------------
+@@ -2586,6 +2599,42 @@ void ImpellerParagraphStyleSetEllipsis(ImpellerParagraphStyle IMPELLER_NONNULL
+                                            paragraph_style,
+                                        const char* IMPELLER_NULLABLE ellipsis);
+ 
++//------------------------------------------------------------------------------
++/// @brief      Set the extra space added after each glyph, in logical pixels.
++///             (react-native-impeller extension.)
++///
++IMPELLER_EXPORT
++void ImpellerParagraphStyleSetLetterSpacing(
++    ImpellerParagraphStyle IMPELLER_NONNULL paragraph_style,
++    float spacing);
++
++//------------------------------------------------------------------------------
++/// @brief      Set the extra space added at each word boundary, in logical
++///             pixels. (react-native-impeller extension.)
++///
++IMPELLER_EXPORT
++void ImpellerParagraphStyleSetWordSpacing(
++    ImpellerParagraphStyle IMPELLER_NONNULL paragraph_style,
++    float spacing);
++
++//------------------------------------------------------------------------------
++/// @brief      Set an OpenType feature (4 character tag such as "tnum" or
++///             "smcp") to the given value. (react-native-impeller extension.)
++///
++IMPELLER_EXPORT
++void ImpellerParagraphStyleSetFontFeature(
++    ImpellerParagraphStyle IMPELLER_NONNULL paragraph_style,
++    const char* IMPELLER_NONNULL tag,
++    int32_t value);
++
++//------------------------------------------------------------------------------
++/// @brief      Remove every font feature set on the style.
++///             (react-native-impeller extension.)
++///
++IMPELLER_EXPORT
++void ImpellerParagraphStyleClearFontFeatures(
++    ImpellerParagraphStyle IMPELLER_NONNULL paragraph_style);
++
+ //------------------------------------------------------------------------------
+ // Paragraph Builder
+ //------------------------------------------------------------------------------
+@@ -2669,6 +2718,22 @@ void ImpellerParagraphBuilderAddText(ImpellerParagraphBuilder IMPELLER_NONNULL
+                                      const uint8_t* IMPELLER_NULLABLE data,
+                                      uint32_t length);
+ 
++//------------------------------------------------------------------------------
++/// @brief      Add an inline placeholder box of the given size. The baseline
++///             offset is measured from the top of the box to the alphabetic
++///             baseline and is used by kImpellerPlaceholderAlignmentBaseline.
++///             Read the laid out boxes back with
++///             ImpellerParagraphGetPlaceholderRects.
++///             (react-native-impeller extension.)
++///
++IMPELLER_EXPORT
++void ImpellerParagraphBuilderAddPlaceholder(
++    ImpellerParagraphBuilder IMPELLER_NONNULL paragraph_builder,
++    float width,
++    float height,
++    ImpellerPlaceholderAlignment alignment,
++    float baseline_offset);
++
+ //------------------------------------------------------------------------------
+ /// @brief      Layout and build a new paragraph using the specified width. The
+ ///             resulting paragraph is immutable. The paragraph builder must be
+@@ -2814,6 +2879,19 @@ void ImpellerParagraphGetWordBoundary(
+     size_t code_unit_index,
+     ImpellerRange* IMPELLER_NONNULL out_range);
+ 
++//------------------------------------------------------------------------------
++/// @brief      Get the laid out boxes of the paragraph's placeholders, in the
++///             order they were added. Writes at most `capacity` rects.
++///             (react-native-impeller extension.)
++///
++/// @return     The number of placeholders in the paragraph.
++///
++IMPELLER_EXPORT
++uint32_t ImpellerParagraphGetPlaceholderRects(
++    ImpellerParagraph IMPELLER_NONNULL paragraph,
++    ImpellerRect* IMPELLER_NULLABLE out_rects,
++    uint32_t capacity);
++
+ //------------------------------------------------------------------------------
+ /// @brief      Get the line metrics of this laid out paragraph. Calculating the
+ ///             line metrics is expensive. The first time line metrics are
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.hpp b/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
+index 5be036cf..30e42257 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
+@@ -150,6 +150,7 @@ struct Proc {
+   PROC(ImpellerPaintSetStrokeMiter)                               \
+   PROC(ImpellerPaintSetStrokeWidth)                               \
+   PROC(ImpellerParagraphBuilderAddText)                           \
++  PROC(ImpellerParagraphBuilderAddPlaceholder)                    \
+   PROC(ImpellerParagraphBuilderBuildParagraphNew)                 \
+   PROC(ImpellerParagraphBuilderNew)                               \
+   PROC(ImpellerParagraphBuilderPopStyle)                          \
+@@ -168,6 +169,7 @@ struct Proc {
+   PROC(ImpellerParagraphGetMaxWidth)                              \
+   PROC(ImpellerParagraphGetMinIntrinsicWidth)                     \
+   PROC(ImpellerParagraphGetWordBoundary)                          \
++  PROC(ImpellerParagraphGetPlaceholderRects)                      \
+   PROC(ImpellerParagraphRelease)                                  \
+   PROC(ImpellerParagraphRetain)                                   \
+   PROC(ImpellerParagraphStyleNew)                                 \
+@@ -175,6 +177,10 @@ struct Proc {
+   PROC(ImpellerParagraphStyleRetain)                              \
+   PROC(ImpellerParagraphStyleSetBackground)                       \
+   PROC(ImpellerParagraphStyleSetEllipsis)                         \
++  PROC(ImpellerParagraphStyleSetLetterSpacing)                    \
++  PROC(ImpellerParagraphStyleSetWordSpacing)                      \
++  PROC(ImpellerParagraphStyleSetFontFeature)                      \
++  PROC(ImpellerParagraphStyleClearFontFeatures)                   \
+   PROC(ImpellerParagraphStyleSetFontFamily)                       \
+   PROC(ImpellerParagraphStyleSetFontSize)                         \
+   PROC(ImpellerParagraphStyleSetFontStyle)                        \
+diff --git a/engine/src/flutter/impeller/toolkit/interop/paragraph.cc b/engine/src/flutter/impeller/toolkit/interop/paragraph.cc
+index d4388f36..d4b9ab03 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/paragraph.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/paragraph.cc
+@@ -82,4 +82,8 @@ ImpellerRange Paragraph::GetWordBoundary(size_t code_unit_index) const {
+   return ImpellerRange{range.start, range.end};
+ }
+ 
++std::vector<txt::Paragraph::TextBox> Paragraph::GetPlaceholderRects() const {
++  return paragraph_->GetRectsForPlaceholders();
++}
++
+ }  // namespace impeller::interop
+diff --git a/engine/src/flutter/impeller/toolkit/interop/paragraph.h b/engine/src/flutter/impeller/toolkit/interop/paragraph.h
+index 7635873f..86c7322b 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/paragraph.h
++++ b/engine/src/flutter/impeller/toolkit/interop/paragraph.h
+@@ -57,6 +57,8 @@ class Paragraph final
+ 
+   ImpellerRange GetWordBoundary(size_t code_unit_index) const;
+ 
++  std::vector<txt::Paragraph::TextBox> GetPlaceholderRects() const;
++
+  private:
+   std::unique_ptr<txt::Paragraph> paragraph_;
+   mutable ScopedObject<LineMetrics> lazy_line_metrics_;
+diff --git a/engine/src/flutter/impeller/toolkit/interop/paragraph_builder.cc b/engine/src/flutter/impeller/toolkit/interop/paragraph_builder.cc
+index 9ddc2313..417af1a2 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/paragraph_builder.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/paragraph_builder.cc
+@@ -31,6 +31,15 @@ void ParagraphBuilder::AddText(const uint8_t* data, size_t byte_length) {
+   GetBuilder()->AddText(data, byte_length);
+ }
+ 
++void ParagraphBuilder::AddPlaceholder(double width,
++                                      double height,
++                                      txt::PlaceholderAlignment alignment,
++                                      double baseline_offset) {
++  txt::PlaceholderRun run(width, height, alignment,
++                          txt::TextBaseline::kAlphabetic, baseline_offset);
++  GetBuilder()->AddPlaceholder(run);
++}
++
+ ScopedObject<Paragraph> ParagraphBuilder::Build(Scalar width) const {
+   auto txt_paragraph = GetBuilder()->Build();
+   if (!txt_paragraph) {
+diff --git a/engine/src/flutter/impeller/toolkit/interop/paragraph_builder.h b/engine/src/flutter/impeller/toolkit/interop/paragraph_builder.h
+index 2305eccf..0851ac53 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/paragraph_builder.h
++++ b/engine/src/flutter/impeller/toolkit/interop/paragraph_builder.h
+@@ -36,6 +36,11 @@ class ParagraphBuilder final
+ 
+   void AddText(const uint8_t* data, size_t byte_length);
+ 
++  void AddPlaceholder(double width,
++                      double height,
++                      txt::PlaceholderAlignment alignment,
++                      double baseline_offset);
++
+   ScopedObject<Paragraph> Build(Scalar width) const;
+ 
+  private:
+diff --git a/engine/src/flutter/impeller/toolkit/interop/paragraph_style.cc b/engine/src/flutter/impeller/toolkit/interop/paragraph_style.cc
+index e3880c67..24ba0e03 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/paragraph_style.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/paragraph_style.cc
+@@ -59,6 +59,9 @@ void ParagraphStyle::SetBackground(ScopedObject<Paint> paint) {
+ 
+ txt::TextStyle ParagraphStyle::CreateTextStyle() const {
+   auto style = style_.GetTextStyle();
++  style.letter_spacing = letter_spacing_;
++  style.word_spacing = word_spacing_;
++  style.font_features = font_features_;
+ 
+   if (foreground_) {
+     style.foreground = foreground_->GetPaint();
+@@ -94,4 +97,20 @@ void ParagraphStyle::SetEllipsis(const std::string& string) {
+   style_.ellipsis = fml::Utf8ToUtf16(string);
+ }
+ 
++void ParagraphStyle::SetLetterSpacing(double spacing) {
++  letter_spacing_ = spacing;
++}
++
++void ParagraphStyle::SetWordSpacing(double spacing) {
++  word_spacing_ = spacing;
++}
++
++void ParagraphStyle::SetFontFeature(const std::string& tag, int value) {
++  font_features_.SetFeature(tag, value);
++}
++
++void ParagraphStyle::ClearFontFeatures() {
++  font_features_ = {};
++}
++
+ }  // namespace impeller::interop
+diff --git a/engine/src/flutter/impeller/toolkit/interop/paragraph_style.h b/engine/src/flutter/impeller/toolkit/interop/paragraph_style.h
+index 6a4e559e..ade776b8 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/paragraph_style.h
++++ b/engine/src/flutter/impeller/toolkit/interop/paragraph_style.h
+@@ -50,6 +50,14 @@ class ParagraphStyle final
+ 
+   void SetEllipsis(const std::string& string);
+ 
++  void SetLetterSpacing(double spacing);
++
++  void SetWordSpacing(double spacing);
++
++  void SetFontFeature(const std::string& tag, int value);
++
++  void ClearFontFeatures();
++
+   txt::TextStyle CreateTextStyle() const;
+ 
+   const txt::ParagraphStyle& GetParagraphStyle() const;
+@@ -59,6 +67,9 @@ class ParagraphStyle final
+   ScopedObject<Paint> foreground_;
+   ScopedObject<Paint> background_;
+   std::optional<ImpellerTextDecoration> decoration_;
++  double letter_spacing_ = 0.0;
++  double word_spacing_ = 0.0;
++  txt::FontFeatures font_features_;
+ };
+ 
+ }  // namespace impeller::interop

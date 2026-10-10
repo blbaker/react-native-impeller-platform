@@ -84,6 +84,8 @@
 #   SC30f  contain stretched -> g2:imageContain
 #   SC30g  center scales up like contain -> g2:imageCenter
 #   SC30h  repeat stretched -> g2:imageRepeat
+#   SC32a..g  custom Impeller SDK: no tile, judged by tools/ci-impeller-sdk-custom.sh
+#             (tools/mutation-verify-impeller-sdk-custom.sh has the per-mutant rules)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -631,6 +633,48 @@ if want SC30h; then
 echo "== SC30h: repeat stretched =="
 mutate engine/scenegraph/ImagePaint.cpp "  if (resizeMode == 4) {" "  if (false) {"
 check SC30h g2:imageRepeat; N=$((N + 1))
+fi
+
+if want SC32a; then
+echo "== SC32a: custom SDK, letter spacing dropped (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC32a bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32a (custom SDK gate)"
+N=$((N + 1))
+fi
+
+if want SC32b; then
+echo "== SC32b: custom SDK, word spacing stored as letter spacing (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC32b bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32b (custom SDK gate)"
+N=$((N + 1))
+fi
+
+if want SC32c; then
+echo "== SC32c: custom SDK, font features dropped (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC32c bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32c (custom SDK gate)"
+N=$((N + 1))
+fi
+
+if want SC32d; then
+echo "== SC32d: custom SDK, ClearFontFeatures no-op (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC32d bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32d (custom SDK gate)"
+N=$((N + 1))
+fi
+
+if want SC32e; then
+echo "== SC32e: custom SDK, top placeholder alignment mapped to baseline (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC32e bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32e (custom SDK gate)"
+N=$((N + 1))
+fi
+
+if want SC32f; then
+echo "== SC32f: custom SDK, placeholder rect x lost (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC32f bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32f (custom SDK gate)"
+N=$((N + 1))
+fi
+
+if want SC32g; then
+echo "== SC32g: custom SDK, CMake keeps the stock SDK (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC32g bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32g (custom SDK gate)"
+N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
