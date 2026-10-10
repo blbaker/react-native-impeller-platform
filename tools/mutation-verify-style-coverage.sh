@@ -36,6 +36,11 @@
 #   SC11d  hue-rotate degrees used as radians -> g2:filterHueRotate
 #   SC11e  brightness ignored -> g2:filterChain (grid1 filterBrightness fails too, but the coverage gate reports first)
 #   SC11f  filter opacity ignored -> g2:filterOpacity
+#   SC12a  blur() not applied -> nw:blur (grid1 filterBlur fails too, the coverage gate reports first)
+#   SC12b  iOS shadow on a bare view shadows the whole box again -> g2:shadowNoBg
+#   SC12c  content shadow offset ignored -> g2:shadowNoBg
+#   SC12d  drop-shadow blur dropped -> filterDropShadow (grid 1; no coverage tile uses drop-shadow)
+#   SC12e  content shadow not tinted (a copy of the content) -> g2:shadowNoBg
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -280,6 +285,37 @@ if want SC11f; then
 echo "== SC11f: filter opacity ignored =="
 mutate engine/scenegraph/ColorMatrixFilter.cpp "m[18] = std::clamp(v, 0.0f, 1.0f); return true;" "m[18] = 1.0f; return true;"
 check SC11f g2:filterOpacity; N=$((N + 1))
+fi
+
+if want SC12a; then
+echo "== SC12a: blur() not applied =="
+mutate engine/scenegraph/SceneGraph.cpp "    if (ImpellerImageFilter bf = rni::MakeBlurImageFilter(node.blurSigma)) {" "    if (ImpellerImageFilter bf = rni::MakeBlurImageFilter(0.0f)) {"
+check SC12a nw:blur; N=$((N + 1))
+fi
+
+if want SC12b; then
+echo "== SC12b: iOS shadow on a bare view shadows the whole box again =="
+mutate engine/scenegraph/SceneGraph.cpp "  if (node.hasLayerShadow && HasVisibleBackground(node)) {" "  if (node.hasLayerShadow) {"
+mutate engine/scenegraph/SceneGraph.cpp "  if (node.hasLayerShadow && !HasVisibleBackground(node)) specs.push_back(node.layerShadow);" ""
+check SC12b g2:shadowNoBg; N=$((N + 1))
+fi
+
+if want SC12c; then
+echo "== SC12c: content shadow offset ignored =="
+mutate engine/scenegraph/ContentFilters.cpp "  ImpellerDisplayListBuilderTranslate(builder, s.offsetX, s.offsetY);" "  ImpellerDisplayListBuilderTranslate(builder, 0.0f, 0.0f);"
+check SC12c g2:shadowNoBg; N=$((N + 1))
+fi
+
+if want SC12d; then
+echo "== SC12d: drop-shadow blur dropped =="
+mutate engine/scenegraph/ContentFilters.cpp "      s.sigma = std::max(0.0f, static_cast<float>(p.standardDeviation)) * 0.5f;" "      s.sigma = 0.0f;"
+check SC12d filterDropShadow; N=$((N + 1))
+fi
+
+if want SC12e; then
+echo "== SC12e: content shadow not tinted =="
+mutate engine/scenegraph/ContentFilters.cpp "ImpellerColorFilterCreateBlendNew(&tint, kImpellerBlendModeSourceIn);" "ImpellerColorFilterCreateBlendNew(&tint, kImpellerBlendModeDestination);"
+check SC12e g2:shadowNoBg; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

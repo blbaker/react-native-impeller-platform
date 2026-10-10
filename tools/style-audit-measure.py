@@ -192,6 +192,20 @@ def outside_levels(px, box=(30, 31, 89, 90)):
     return len({v for (x, y), v in px.items() if ink(v) and not (x0 <= x <= x1 and y0 <= y <= y1)})
 
 
+def blur_ok(c, f, d):
+    """SC-12 blur(4px): a soft ramp across the left edge, the centre still blue."""
+    levels = len({at(f, x, 60) for x in range(16, 45)})
+    return levels >= 6 and at(f, 60, 60) == (0, 0, 255) and ink(at(f, 28, 60)) and not ink(at(f, 8, 60))
+
+
+def drop_shadow_ok(c, f, d):
+    """SC-12 drop-shadow(6px 6px 4px black): ink outside the box only right/below
+    it, blurred (>= 5 levels), dark beside the box's bottom-right, box unchanged."""
+    br, tl = outside_split(f)
+    return (br > 50 and tl == 0 and outside_levels(f) >= 5 and at(f, 60, 60) == (0, 0, 255)
+            and max(at(f, 92, 70)) < 80 and max(at(f, 70, 92)) < 80)
+
+
 def cast_shadow(c, f, d):
     """A blurred shadow cast toward the bottom-right: more ink there than
     above/left, and a soft edge (many distinct levels), not a hard copy."""
@@ -437,6 +451,8 @@ STRICT = {
     "boxShadowInset": lambda c, f, d: outside(f) == 0 and cls(at(f, 60, 60)) == "blue"
     and cls(at(f, 31, 60)) == "red" and cls(at(f, 45, 60)) == "blue",
     "textInputSecure": bullets,
+    "filterBlur": blur_ok,
+    "filterDropShadow": drop_shadow_ok,
     # The rounded clip must cut the corner AND keep the child's full width
     # through the middle (a clip that drops the child entirely also leaves the
     # corner white).

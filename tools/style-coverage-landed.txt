@@ -24,3 +24,5 @@ g2:filterOpacity SC-11
 g2:filterSaturate SC-11
 g2:filterChain SC-11
 nw:grayscale SC-11
+g2:shadowNoBg SC-12
+nw:blur SC-12

@@ -105,6 +105,12 @@ struct SceneNode {
   // CSS `filter` colour-matrix functions composed into one 4x5 matrix (ColorMatrixFilter.h).
   bool hasFilterMatrix{false};
   std::array<float, 20> filterMatrix{};
+  // CSS blur() sigma and drop-shadow() list, and the iOS shadow* spec. A view
+  // with no background casts its iOS shadow from its content (ContentFilters.h).
+  float blurSigma{0.0f};
+  std::vector<ShadowSpec> dropShadows;
+  bool hasLayerShadow{false};
+  ShadowSpec layerShadow;
   std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
 
   bool overflowHidden{false};
@@ -838,6 +844,11 @@ class SceneGraph {
   ImpellerColorSource makeGradientSource(const SceneNode* def, float x, float y,
                                          float w, float h, float alpha) const;
   int painted_{0};  // reset per paint(); incremented in paintNode()
+  // The node whose content-shadow pass is being painted (paintNode skips its
+  // transform/opacity/filter layers, already open, and its content shadows).
+  const SceneNode* shadowPassNode_{nullptr};
+  void paintContentShadows(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                           float originX, float originY);
   // The paint's point->pixel scale, for DrawShadow's device_pixel_ratio
   // (style audit item 4, elevation). Set at the top of paint().
   float pointScale_{1.0f};

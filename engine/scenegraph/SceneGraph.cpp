@@ -24,6 +24,7 @@
 #include "scenegraph/BorderRounded.h"
 #include "scenegraph/Outline.h"
 #include "scenegraph/ColorMatrixFilter.h"
+#include "scenegraph/ContentFilters.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
@@ -430,6 +431,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     // CALayer radius is used as sigma directly for iOS shadows, and blur/2
     // for boxShadow, which keeps the two models consistent with each other.
     node.shadows.clear();
+    node.hasLayerShadow = false;
     {
       float sc[4] = {0, 0, 0, 1};
       const bool hasColor = (bool)props->shadowColor;
@@ -446,7 +448,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
         // a translucent background (no clip-out, unlike CSS boxShadow). With
         // an opaque background the box paints over the umbra either way.
         s.clipOutsideBox = false;
-        node.shadows.push_back(s);
+        node.layerShadow = s;
+        node.hasLayerShadow = true;
       }
     }
     for (const auto& bs : props->boxShadow) {
@@ -541,6 +544,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       default: node.pointerEvents = 0; break;
     }
     node.hasFilterMatrix = rni::BuildFilterMatrix(props->filter, node.filterMatrix);
+    rni::ParseContentFilters(props->filter, node.blurSigma, node.dropShadows);
     node.hasTransform = false;
     node.backfaceHidden = false;
     if (!props->transform.operations.empty()) {
@@ -1612,6 +1616,31 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) 
   return paragraph;
 }
 
+// B11: RCTViewComponentView gives the layer a shadowPath only over a
+// background; without one CoreAnimation casts the shadow from the content.
+static bool HasVisibleBackground(const SceneNode& n) {
+  return (n.hasBackgroundColor && n.bg[3] > 0.0f) || !n.bgLayers.empty();
+}
+
+// A1 drop-shadow() and B11: each shadow repaints the subtree as a tinted,
+// blurred, offset silhouette under the real paint. painted_ counts it once.
+void SceneGraph::paintContentShadows(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                                     float originX, float originY) {
+  std::vector<ShadowSpec> specs;
+  if (node.hasLayerShadow && !HasVisibleBackground(node)) specs.push_back(node.layerShadow);
+  specs.insert(specs.end(), node.dropShadows.begin(), node.dropShadows.end());
+  for (const auto& s : specs) {
+    rni::BeginContentShadow(builder, s);
+    const SceneNode* prev = shadowPassNode_;
+    const int counted = painted_;
+    shadowPassNode_ = &node;
+    paintNode(builder, node, originX, originY);
+    shadowPassNode_ = prev;
+    painted_ = counted;
+    rni::EndContentShadow(builder);
+  }
+}
+
 void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                            const SceneNode& node, float originX,
                            float originY) {
@@ -1685,7 +1714,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // the node's painted position. Everything the node draws — background,
   // borders, text, children — is inside this save, because a transform that
   // moved only the background would be a subtler wrong than no transform.
-  const bool transformed = node.hasTransform;
+  // A1/B11: a content-shadow pass of this node runs inside its own layers, already open.
+  const bool shadowPass = shadowPassNode_ == &node;
+  const bool transformed = node.hasTransform && !shadowPass;
   if (transformed) {
     ImpellerDisplayListBuilderSave(builder);
     // ImpellerMatrix is column-major float[16], the same layout RN uses, so the
@@ -1706,7 +1737,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // just before the transform restore at the end of paintNode. The bounds are
   // a hint only (children may overflow the frame, so it is not the frame);
   // Impeller sizes the offscreen from the content's actual coverage.
-  const bool opacityLayer = UsesOpacityLayer(node);
+  const bool opacityLayer = UsesOpacityLayer(node) && !shadowPass;
   if (opacityLayer) {
     ImpellerPaint layerPaint = ImpellerPaintNew();
     const ImpellerColor lc = {1.0f, 1.0f, 1.0f,
@@ -1721,16 +1752,24 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
 
   // CSS filter colour matrix: a layer inside the opacity layer (filter, then opacity).
-  const bool filterLayer = node.hasFilterMatrix;
+  // blur() rides the same layer as an image filter, so it blurs drop-shadows too.
+  const bool filterLayer = (node.hasFilterMatrix || node.blurSigma > 0.0f) && !shadowPass;
   if (filterLayer) {
-    ImpellerColorFilter cf = rni::MakeMatrixColorFilter(node.filterMatrix);
     ImpellerPaint fp = ImpellerPaintNew();
-    ImpellerPaintSetColorFilter(fp, cf);
+    if (node.hasFilterMatrix) {
+      ImpellerColorFilter cf = rni::MakeMatrixColorFilter(node.filterMatrix);
+      ImpellerPaintSetColorFilter(fp, cf);
+      ImpellerColorFilterRelease(cf);
+    }
+    if (ImpellerImageFilter bf = rni::MakeBlurImageFilter(node.blurSigma)) {
+      ImpellerPaintSetImageFilter(fp, bf);
+      ImpellerImageFilterRelease(bf);
+    }
     const ImpellerRect fb = {-100000.0f, -100000.0f, 200000.0f, 200000.0f};
     ImpellerDisplayListBuilderSaveLayer(builder, &fb, fp, nullptr);
     ImpellerPaintRelease(fp);
-    ImpellerColorFilterRelease(cf);
   }
+  if (!shadowPass) paintContentShadows(builder, node, originX, originY);
 
   // ⛔ THE SVG MATRIX MUST WRAP THIS NODE *AND ITS CHILDREN*.
   //
@@ -1885,6 +1924,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   if (node.elevation > 0.0f) {
     PaintElevationShadow(builder, shadowBox, node.elevation, node.elevationColor,
                          OwnAlpha(node), pointScale_);
+  }
+  if (node.hasLayerShadow && HasVisibleBackground(node)) {
+    PaintOuterShadows(builder, shadowBox, {node.layerShadow}, OwnAlpha(node));
   }
   if (!node.shadows.empty()) {
     PaintOuterShadows(builder, shadowBox, node.shadows, OwnAlpha(node));
