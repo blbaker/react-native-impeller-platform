@@ -138,7 +138,22 @@ def _ti_padding(ctl, feat):
     return True, f"ink shift={dx}"
 
 
+def _border_no_color(ctl, feat):
+    # Feature: 60x60 white box, borderWidth 4, no colour. Control: same box, no border.
+    # Every edge midpoint must be dark and the interior must stay white.
+    for name, (x, y) in {'top': (30, 1), 'bottom': (30, 58), 'left': (1, 30), 'right': (58, 30)}.items():
+        if not is_dark(feat.px(x, y)):
+            return False, f"{name} edge not dark {feat.px(x, y)}"
+        if not is_white(ctl.px(x, y)):
+            return False, f"control {name} edge not white {ctl.px(x, y)}"
+    if not is_white(feat.px(30, 30)):
+        return False, f"interior not white {feat.px(30, 30)}"
+    return True, f"top={feat.px(30, 1)}"
+
+
 RULES = {
+    # SC-03
+    'g2:borderNoColor': _border_no_color,
     # SC-02
     'g2:tiPadding': _ti_padding,
     # SC-01

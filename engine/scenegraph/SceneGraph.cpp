@@ -378,8 +378,11 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     node.borderStyle = (int)metrics.borderStyles.top;
     for (int i = 0; i < 4; ++i) {
       node.borderWidths[i] = (float)widths[i];
-      node.hasBorderColors[i] = (bool)colors[i];
+      // SC-03: a width with no resolved colour paints opaque black (RN default).
+      node.hasBorderColors[i] = (bool)colors[i] || widths[i] > 0;
       if (colors[i]) colorToFloats(colors[i], node.borderColors[i]);
+      else node.borderColors[i][0] = node.borderColors[i][1] = node.borderColors[i][2] = 0.0f,
+           node.borderColors[i][3] = 1.0f;
     }
 
     // Radii in IMPELLER's field order (TL, BL, TR, BR), which is NOT the order
