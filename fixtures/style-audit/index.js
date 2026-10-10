@@ -124,7 +124,7 @@ const TESTS = [
   { id: 'writingDirection', c: () => h(View, { style: { width: 80 } }, txt('AB')), f: () => h(View, { style: { width: 80 } }, txt('AB', { writingDirection: 'rtl' })) },
   { id: 'textAlignCenter', c: () => h(View, { style: { width: 80 } }, txt('AB')), f: () => h(View, { style: { width: 80 } }, txt('AB', { textAlign: 'center' })) },
   { id: 'textAlignRight', c: () => h(View, { style: { width: 80 } }, txt('AB')), f: () => h(View, { style: { width: 80 } }, txt('AB', { textAlign: 'right' })) },
-  { id: 'textAlignJustify', c: () => h(View, { style: { width: 80 } }, txt('I I I IIIIIIII', { fontSize: 14 })), f: () => h(View, { style: { width: 80 } }, txt('I I I IIIIIIII', { fontSize: 14, textAlign: 'justify' })) },
+  { id: 'textAlignJustify', c: () => h(View, { style: { width: 80 } }, txt('I I I IIII IIIIIIII IIIIII', { fontSize: 14 })), f: () => h(View, { style: { width: 80 } }, txt('I I I IIII IIIIIIII IIIIII', { fontSize: 14, textAlign: 'justify' })) },
   { id: 'nestedText', c: () => txt('AABB'), f: () => txt(['AA', h(Text, { key: 'r', style: { color: RED } }, 'BB')]) },
   { id: 'nestedTextSize', c: () => txt('AAAA', { fontSize: 14 }), f: () => txt(['AA', h(Text, { key: 'r', style: { fontSize: 30 } }, 'AA')], { fontSize: 14 }) },
   { id: 'textBackground', c: () => txt('AB'), f: () => txt(['A', h(Text, { key: 'r', style: { backgroundColor: 'rgb(0,255,0)' } }, 'B')]) },

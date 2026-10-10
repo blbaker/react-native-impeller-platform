@@ -43,6 +43,11 @@
 #   SC12e  content shadow not tinted (a copy of the content) -> g2:shadowNoBg
 #   SC13a  multiply composited as normal -> mixBlendMode (grid 1)
 #   SC13b  isolation:isolate ignored -> isolation (grid 1)
+#   SC14a  italic not applied at paint -> g2:nestedItalic
+#   SC14b  nested span opacity ignored -> g2:nestedOpacity
+#   SC14c  writingDirection ignored -> writingDirection (grid 1)
+#   SC14d  justify painted as left -> textAlignJustify (grid 1)
+#   SC14e  vertical centring ignored -> g2:textAlignVertical (also verticalAlign)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -330,6 +335,36 @@ if want SC13b; then
 echo "== SC13b: isolation:isolate ignored =="
 mutate engine/scenegraph/SceneGraph.cpp "(node.mixBlend != react::BlendMode::Normal || node.isolate);" "(node.mixBlend != react::BlendMode::Normal);"
 check SC13b isolation; N=$((N + 1))
+fi
+
+if want SC14a; then
+echo "== SC14a: italic not applied at paint =="
+mutate engine/scenegraph/SceneGraph.cpp "    ApplyFontStyle(style, run.italic);" ""
+check SC14a g2:nestedItalic; N=$((N + 1))
+fi
+
+if want SC14b; then
+echo "== SC14b: nested span opacity ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "ImpellerColor tc = impellerColor(run.color, OwnAlpha(node) * run.opacity);" "ImpellerColor tc = impellerColor(run.color, OwnAlpha(node));"
+check SC14b g2:nestedOpacity; N=$((N + 1))
+fi
+
+if want SC14c; then
+echo "== SC14c: writingDirection ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "    ApplyTextDirection(style, node.writingDirection);" ""
+check SC14c writingDirection; N=$((N + 1))
+fi
+
+if want SC14d; then
+echo "== SC14d: justify painted as left =="
+mutate engine/text/TextStyle.h "    case 4: a = kImpellerTextAlignmentJustify; break;" "    case 4: a = kImpellerTextAlignmentLeft; break;"
+check SC14d textAlignJustify; N=$((N + 1))
+fi
+
+if want SC14e; then
+echo "== SC14e: vertical centring ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "  if (node.textVAlign == 3) return spare * 0.5f;" "  if (node.textVAlign == 3) return 0.0f;"
+check SC14e g2:textAlignVertical; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

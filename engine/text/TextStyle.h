@@ -32,6 +32,22 @@ inline bool ApplyFontWeight(ImpellerParagraphStyle style, int weight) {
   return true;
 }
 
+// Measured AND painted: an italic face has different advances.
+inline bool ApplyFontStyle(ImpellerParagraphStyle style, bool italic) {
+  if (!italic) return false;
+  ImpellerParagraphStyleSetFontStyle(style, kImpellerFontStyleItalic);
+  return true;
+}
+
+// RN WritingDirection: 0 Natural, 1 LeftToRight, 2 RightToLeft. Sets the
+// paragraph direction, which decides where Natural alignment starts.
+inline bool ApplyTextDirection(ImpellerParagraphStyle style, int dir) {
+  if (dir != 1 && dir != 2) return false;
+  ImpellerParagraphStyleSetTextDirection(
+      style, dir == 2 ? kImpellerTextDirectionRTL : kImpellerTextDirectionLTR);
+  return true;
+}
+
 // Paint only. The paragraph must be laid out at the node's real width (not
 // the 1e6 "unconstrained" width) or centre/right push the glyphs off-screen.
 inline bool ApplyTextAlign(ImpellerParagraphStyle style, int align) {

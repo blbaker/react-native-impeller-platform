@@ -26,3 +26,8 @@ g2:filterChain SC-11
 nw:grayscale SC-11
 g2:shadowNoBg SC-12
 nw:blur SC-12
+g2:nestedItalic SC-14
+g2:nestedOpacity SC-14
+g2:textAlignVertical SC-14
+g2:verticalAlign SC-14
+nw:italic SC-14

@@ -42,6 +42,8 @@ struct TextRun {
   std::string fontFamily;
   float lineHeight{0.0f};
   int fontWeight{0};
+  bool italic{false};
+  float opacity{1.0f};  // nested <Text style={{opacity}}>, multiplies the colour alpha
   int decoLine{0};
   int decoStyle{0};
   bool hasDecoColor{false};
@@ -185,6 +187,8 @@ struct SceneNode {
   // are paint-only (they do not change the measured box).
   int fontWeight{0};        // react::FontWeight 100..900, 0 = unset
   int textAlign{0};         // react::TextAlignment, 0 = Natural
+  int writingDirection{0};  // react::WritingDirection, 0 = Natural
+  int textVAlign{0};        // react::TextAlignmentVertical: 0 Auto/Top, 1 Top, 2 Bottom, 3 Center
   int decoLine{0};          // react::TextDecorationLineType, 0 = None
   int decoStyle{0};         // react::TextDecorationStyle, 0 = Solid
   bool hasDecoColor{false};

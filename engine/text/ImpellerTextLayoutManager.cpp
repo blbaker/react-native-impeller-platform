@@ -63,6 +63,8 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
     // Style audit item 5: the SAME weight setter paint uses (text/TextStyle.h),
     // so a bold label is measured in the bold face's advances.
     ApplyFontWeight(style, attrs.fontWeight.has_value() ? (int)*attrs.fontWeight : 0);
+    ApplyFontStyle(style, attrs.fontStyle.has_value() &&
+                              *attrs.fontStyle != react::FontStyle::Normal);
     if (paragraphAttributes.maximumNumberOfLines > 0) {
       ImpellerParagraphStyleSetMaxLines(
           style, (uint32_t)paragraphAttributes.maximumNumberOfLines);

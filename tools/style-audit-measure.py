@@ -19,6 +19,8 @@ import re
 import sys
 from pathlib import Path
 
+from style_audit_rules_sc14 import italic_ok, rtl_ok, justify_ok  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 PPM = Path(sys.argv[1])
 SRC = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "fixtures/style-audit/index.js"
@@ -492,6 +494,10 @@ STRICT = {
     # P1 item 14: nested runs keep their own colour / background, in place.
     "nestedText": nested_color_ok,
     "textBackground": text_bg_ok,
+    # SC-14
+    "italic": italic_ok,
+    "writingDirection": rtl_ok,
+    "textAlignJustify": justify_ok,
 }
 
 # Mac RULES that the RN source itself cannot meet, REPLACED (not ANDed) here

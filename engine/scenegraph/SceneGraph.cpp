@@ -583,6 +583,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     node.lineHeight = 0.0f;
     node.fontWeight = 0;
     node.textAlign = 0;
+    node.writingDirection = 0;
+    node.textVAlign = 0;
     node.decoLine = 0;
     node.decoStyle = 0;
     node.hasDecoColor = false;
@@ -596,6 +598,9 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       // unclamped Text never truncates, so the mode is irrelevant there.
       node.ellipsizeMode = (int)pp->paragraphAttributes.ellipsizeMode;
       node.selectable = pp->isSelectable;  // P1 item 15
+      if (pp->paragraphAttributes.textAlignVertical.has_value()) {
+        node.textVAlign = (int)*pp->paragraphAttributes.textAlignVertical;
+      }
     }
     // textTransform rides on the per-fragment TextAttributes, not on
     // ParagraphProps. Read it from the FIRST non-empty fragment: RN resolves a
@@ -625,6 +630,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
           run.fontFamily = fa.fontFamily;
           if (fa.lineHeight > 0) run.lineHeight = (float)fa.lineHeight;
           if (fa.fontWeight.has_value()) run.fontWeight = (int)*fa.fontWeight;
+          run.italic = fa.fontStyle.has_value() && *fa.fontStyle != react::FontStyle::Normal;
+          if (std::isfinite(fa.opacity)) run.opacity = std::clamp((float)fa.opacity, 0.0f, 1.0f);
           if (fa.textDecorationLineType.has_value()) {
             run.decoLine = (int)*fa.textDecorationLineType;
           }
@@ -660,6 +667,9 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
         const auto& ta = fragment.textAttributes;
         if (ta.fontWeight.has_value()) node.fontWeight = (int)*ta.fontWeight;
         if (ta.alignment.has_value()) node.textAlign = (int)*ta.alignment;
+        if (ta.baseWritingDirection.has_value()) {
+          node.writingDirection = (int)*ta.baseWritingDirection;
+        }
         if (ta.textDecorationLineType.has_value()) {
           node.decoLine = (int)*ta.textDecorationLineType;
         }
@@ -1560,6 +1570,16 @@ size_t TiNearestOnLine(const TiGeom& g, size_t L, float x) {
 // on EVERY run's style: Impeller takes them from the first style on the stack,
 // and measure sets the clamp on every run the same way. Item 15's hit mapping
 // builds through here too, so a point maps to the glyph PAINTED there.
+// textAlignVertical / verticalAlign: the glyphs sit at the top, middle or
+// bottom of a content box taller than the text (Android semantics).
+static float ParagraphVOffset(const SceneNode& node, ImpellerParagraph paragraph, float boxH) {
+  const float spare = boxH - ImpellerParagraphGetHeight(paragraph);
+  if (spare <= 0.0f) return 0.0f;
+  if (node.textVAlign == 3) return spare * 0.5f;
+  if (node.textVAlign == 2) return spare;
+  return 0.0f;
+}
+
 ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) {
   if (typography_ == nullptr) return nullptr;
   std::vector<ImpellerPaint> runPaints;
@@ -1574,6 +1594,8 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) 
     // Style audit items 5, 7 (text/TextStyle.h). Weight is measured too.
     ApplyFontWeight(style, run.fontWeight);
     ApplyTextAlign(style, node.textAlign);
+    ApplyFontStyle(style, run.italic);
+    ApplyTextDirection(style, node.writingDirection);
     if (node.maxLines > 0) {
       // Painting must honour the same clamp measurement did, or a
       // numberOfLines={1} label is measured at one line and painted at
@@ -1588,7 +1610,7 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) 
       }
     }
     ImpellerPaint textPaint = ImpellerPaintNew();
-    ImpellerColor tc = impellerColor(run.color, OwnAlpha(node));
+    ImpellerColor tc = impellerColor(run.color, OwnAlpha(node) * run.opacity);
     ImpellerPaintSetColor(textPaint, &tc);
     ImpellerParagraphStyleSetForeground(style, textPaint);
     runPaints.push_back(textPaint);
@@ -1596,7 +1618,7 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) 
     // only (RN iOS NSBackgroundColorAttributeName), not the whole line box.
     if (run.hasBackground) {
       ImpellerPaint bgPaint = ImpellerPaintNew();
-      ImpellerColor bc = impellerColor(run.background, OwnAlpha(node));
+      ImpellerColor bc = impellerColor(run.background, OwnAlpha(node) * run.opacity);
       ImpellerPaintSetColor(bgPaint, &bc);
       ImpellerParagraphStyleSetBackground(style, bgPaint);
       runPaints.push_back(bgPaint);
@@ -1605,7 +1627,7 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w) 
     ApplyTextDecoration(style, run.decoLine, run.decoStyle,
                         impellerColor(run.hasDecoColor ? run.decoColor
                                                        : run.color,
-                                      OwnAlpha(node)));
+                                      OwnAlpha(node) * run.opacity));
     ImpellerParagraphBuilderPushStyle(pb, style);
     ImpellerParagraphBuilderAddText(pb, (const uint8_t*)run.text.c_str(),
                                     run.text.size());
@@ -2135,6 +2157,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerParagraph paragraph =
         buildRunParagraph(node, std::max(0.0f, w - (float)(pins.left + pins.right)));
     if (paragraph != nullptr) {
+      const float vOff =
+          ParagraphVOffset(node, paragraph, h - (float)(pins.top + pins.bottom));
       // P1 item 15: a selectable paragraph's selection highlight, UNDER the
       // glyphs (drawn first), one rect per selected grapheme cluster as laid
       // out in THIS paragraph, so a wrapped selection follows its lines.
@@ -2156,13 +2180,13 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
           const ImpellerRect r = ClusterBounds(gi);
           const size_t end = ImpellerGlyphInfoGetGraphemeClusterCodeUnitRangeEnd(gi);
           ImpellerGlyphInfoRelease(gi);
-          ImpellerRect at = {px + r.x, py + r.y, r.width, r.height};
+          ImpellerRect at = {px + r.x, py + vOff + r.y, r.width, r.height};
           ImpellerDisplayListBuilderDrawRect(builder, &at, selPaint);
           i = end > i ? end : i + 1;
         }
         ImpellerPaintRelease(selPaint);
       }
-      ImpellerPoint at = {px, py};
+      ImpellerPoint at = {px, py + vOff};
       ImpellerDisplayListBuilderDrawParagraph(builder, paragraph, &at);
       ImpellerParagraphRelease(paragraph);
     }
@@ -4213,6 +4237,8 @@ size_t SceneGraph::textOffsetAt(facebook::react::Tag tag, float x, float y) {
                                (float)(cin.left + cin.right)));
   if (par == nullptr) return 0;
   size_t off = 0;
+  oy += ParagraphVOffset(node, par, (float)node.layoutMetrics.frame.size.height -
+                                        (float)(cin.top + cin.bottom));
   ImpellerGlyphInfo gi = ImpellerParagraphCreateGlyphInfoAtParagraphCoordinatesNew(
       par, (double)(x - ox), (double)(y - oy));
   if (gi != nullptr) {
