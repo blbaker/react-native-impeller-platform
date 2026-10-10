@@ -9,8 +9,6 @@
  * (hover / press / focus targets at fixed positions).
  */
 import './global.css';
-import * as RNFF from 'react-native/src/private/featureflags/ReactNativeFeatureFlags';
-RNFF.override({shouldPressibilityUseW3CPointerEventsForHover: () => true});
 import React from 'react';
 import {AppRegistry, View, Text, TextInput, Pressable, Linking} from 'react-native';
 

@@ -13,6 +13,10 @@
 // onHoverIn. Measured in HostApp: a synthesised hover_enter on a Button logged
 // {"hover":false}.
 //
+// The default is TRUE (SC-25): the engine delivers hover_enter/leave as W3C
+// pointer events, so a stock app (NativeWind hover:, group-hover:) works with
+// no override. An app can still override() it to false.
+//
 // Fix, scoped to this ONE flag: re-export every other flag from the real
 // module untouched, and redefine this one through createJavaScriptFlagGetter,
 // which reads the same `overrides` object override()/setOverrides install.
@@ -28,7 +32,7 @@ const shim = Object.create(real);
 Object.defineProperty(shim, 'shouldPressibilityUseW3CPointerEventsForHover', {
   value: createJavaScriptFlagGetter(
     'shouldPressibilityUseW3CPointerEventsForHover',
-    false,
+    true,
   ),
   enumerable: true,
 });

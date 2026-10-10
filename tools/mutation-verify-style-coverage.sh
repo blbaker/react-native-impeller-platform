@@ -69,6 +69,7 @@
 #   SC22b  systemBlue table entry wrong -> risky:platformColor
 #   SC24a  Button shim fills the block with `color` (android look) -> g2:button
 #   SC24b  Button shim ignores `color` for the title -> g2:button
+#   SC25a  hover feature flag defaults to false again -> interact:hover
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -521,6 +522,15 @@ echo "== SC24b: Button ignores color for the title =="
 mutate package/src/metro-shims/shims/Button.impeller.js "    textStyles.push({color});" "    textStyles.push({color: '#007AFF'});"
 rebundle
 check SC24b g2:button; N=$((N + 1))
+fi
+
+if want SC25a; then
+echo "== SC25a: hover feature flag defaults to false =="
+mutate package/src/metro-shims/shims/ReactNativeFeatureFlags.impeller.js "    'shouldPressibilityUseW3CPointerEventsForHover',
+    true," "    'shouldPressibilityUseW3CPointerEventsForHover',
+    false,"
+rebundle
+check SC25a interact:hover; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
