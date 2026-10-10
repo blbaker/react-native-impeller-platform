@@ -172,6 +172,13 @@ struct SceneNode {
   // at paint/mutation time so clamping does not have to walk the tree from the
   // event thread.
   float scrollContentHeight{0.0f};
+  // A21: indicator flags and style (react::ScrollViewIndicatorStyle), plus the
+  // last contentOffset prop applied so only a CHANGE of the prop moves the list.
+  bool showsVerticalScrollIndicator{true};
+  bool showsHorizontalScrollIndicator{true};
+  int scrollIndicatorStyle{0};
+  bool contentOffsetSeen{false};
+  float contentOffsetPropX{0.0f}, contentOffsetPropY{0.0f};
 
   // Text (Paragraph nodes). Laid out at mount time from ParagraphState so the
   // painted text is the same object that was measured.

@@ -52,3 +52,4 @@ risky:platformColor SC-22
 g2:button SC-24
 interact:hover SC-25
 interact:groupHover SC-25
+g2:scrollIndicator SC-27

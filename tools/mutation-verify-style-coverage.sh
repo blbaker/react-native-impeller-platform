@@ -70,6 +70,10 @@
 #   SC24a  Button shim fills the block with `color` (android look) -> g2:button
 #   SC24b  Button shim ignores `color` for the title -> g2:button
 #   SC25a  hover feature flag defaults to false again -> interact:hover
+#   SC27a  scroll indicators never painted -> g2:scrollIndicator
+#   SC27b  indicator length ignores viewport/content -> g2:scrollIndicator
+#   SC27c  contentOffset.y ignored -> scrollContentOffset (grid 1)
+#   SC27d  contentOffset.x ignored -> scrollHorizontal (grid 1)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -531,6 +535,30 @@ mutate package/src/metro-shims/shims/ReactNativeFeatureFlags.impeller.js "    's
     false,"
 rebundle
 check SC25a interact:hover; N=$((N + 1))
+fi
+
+if want SC27a; then
+echo "== SC27a: scroll indicators never painted =="
+mutate engine/scenegraph/SceneGraph.cpp "    rni::PaintScrollIndicators(builder, si);" ""
+check SC27a g2:scrollIndicator; N=$((N + 1))
+fi
+
+if want SC27b; then
+echo "== SC27b: indicator length ignores viewport/content =="
+mutate engine/scenegraph/ScrollIndicators.cpp "  *len = std::min(track, std::max(kMinLength, track * viewport / content));" "  *len = track;"
+check SC27b g2:scrollIndicator; N=$((N + 1))
+fi
+
+if want SC27c; then
+echo "== SC27c: contentOffset.y ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "          node.scrollY = std::max(0.0f, coy);" "          node.scrollY = 0.0f;"
+check SC27c scrollContentOffset; N=$((N + 1))
+fi
+
+if want SC27d; then
+echo "== SC27d: contentOffset.x ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "          node.scrollX = std::max(0.0f, cox);" "          node.scrollX = 0.0f;"
+check SC27d scrollHorizontal; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

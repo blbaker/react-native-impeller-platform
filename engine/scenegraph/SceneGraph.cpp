@@ -24,6 +24,7 @@
 #include "scenegraph/BorderDashRounded.h"
 #include "scenegraph/BorderRounded.h"
 #include "scenegraph/Outline.h"
+#include "scenegraph/ScrollIndicators.h"
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
 #include "scenegraph/EllipsizeText.h"
@@ -509,6 +510,20 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       if (const auto* sp =
               dynamic_cast<const react::ScrollViewProps*>(view.props.get())) {
         node.scrollHorizontal = sp->horizontal;
+        node.showsVerticalScrollIndicator = sp->showsVerticalScrollIndicator;
+        node.showsHorizontalScrollIndicator = sp->showsHorizontalScrollIndicator;
+        node.scrollIndicatorStyle = static_cast<int>(sp->indicatorStyle);
+        // contentOffset is applied on mount and whenever the prop value changes;
+        // an unrelated re-render must not snap a scrolled list back.
+        const float cox = (float)sp->contentOffset.x, coy = (float)sp->contentOffset.y;
+        if (!node.contentOffsetSeen || cox != node.contentOffsetPropX ||
+            coy != node.contentOffsetPropY) {
+          node.scrollX = std::max(0.0f, cox);
+          node.scrollY = std::max(0.0f, coy);
+          node.contentOffsetSeen = true;
+          node.contentOffsetPropX = cox;
+          node.contentOffsetPropY = coy;
+        }
       }
       // A ScrollView clips by definition. RN's ScrollViewProps does not set
       // overflow:hidden by default the way a native scroll view implies it, so
@@ -2657,6 +2672,21 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       --svgUseDepth_;
       ImpellerDisplayListBuilderRestore(builder);
     }
+  }
+  if (node.isScrollView) {
+    // A21: indicators overlay the content, inside the viewport clip.
+    rni::ScrollIndicatorSpec si = {x, y, w, h, 0.0f, 0.0f, node.scrollX, node.scrollY,
+                                   node.showsVerticalScrollIndicator,
+                                   node.showsHorizontalScrollIndicator,
+                                   node.scrollIndicatorStyle};
+    for (auto childTag : node.children) {
+      auto content = nodes_.find(childTag);
+      if (content == nodes_.end()) continue;
+      const auto& cf = content->second.layoutMetrics.frame;
+      si.contentW = std::max(si.contentW, (float)(cf.origin.x + cf.size.width));
+      si.contentH = std::max(si.contentH, (float)(cf.origin.y + cf.size.height));
+    }
+    rni::PaintScrollIndicators(builder, si);
   }
   if (clip) {
     ImpellerDisplayListBuilderRestore(builder);
