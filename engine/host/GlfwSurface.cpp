@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <cmath>
 #include <chrono>
 #include "host/GlfwSurface.h"
@@ -6,6 +7,7 @@
 #include <GLES3/gl3.h>
 
 #include "host/PointScale.h"
+#include "scenegraph/CursorKinds.h"
 
 #if defined(__APPLE__)
 // ⛔ macOS REACHES THE WINDOW THROUGH ANGLE, NOT THROUGH SYSTEM EGL.
@@ -244,6 +246,9 @@ GlfwSurface::~GlfwSurface() {
   if (arrowCursor_) glfwDestroyCursor(arrowCursor_);
   if (handCursor_) glfwDestroyCursor(handCursor_);
   if (ibeamCursor_) glfwDestroyCursor(ibeamCursor_);
+  for (GLFWcursor* c : shapeCursors_) {
+    if (c) glfwDestroyCursor(c);
+  }
 #if defined(__APPLE__)
   if (display_ != EGL_NO_DISPLAY) {
     eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -684,6 +689,13 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   arrowCursor_ = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
   handCursor_ = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
   ibeamCursor_ = glfwCreateStandardCursor(GLFW_IBEAM_CURSOR);
+  shapeCursors_[rni::kCursorCrosshair] = glfwCreateStandardCursor(GLFW_CROSSHAIR_CURSOR);
+  shapeCursors_[rni::kCursorResizeEW] = glfwCreateStandardCursor(GLFW_RESIZE_EW_CURSOR);
+  shapeCursors_[rni::kCursorResizeNS] = glfwCreateStandardCursor(GLFW_RESIZE_NS_CURSOR);
+  shapeCursors_[rni::kCursorResizeNWSE] = glfwCreateStandardCursor(GLFW_RESIZE_NWSE_CURSOR);
+  shapeCursors_[rni::kCursorResizeNESW] = glfwCreateStandardCursor(GLFW_RESIZE_NESW_CURSOR);
+  shapeCursors_[rni::kCursorResizeAll] = glfwCreateStandardCursor(GLFW_RESIZE_ALL_CURSOR);
+  shapeCursors_[rni::kCursorNotAllowed] = glfwCreateStandardCursor(GLFW_NOT_ALLOWED_CURSOR);
 
 #if defined(__APPLE__)
   if (!initAngleForWindow(error)) return false;
@@ -1115,14 +1127,29 @@ void GlfwSurface::applyCursorKind(int kind) {
   }
 #endif
   GLFWcursor* c = arrowCursor_;
-  if (kind == 1) c = handCursor_;
-  else if (kind == 2) c = ibeamCursor_;
+  if (kind == rni::kCursorHand || kind == rni::kCursorGrab ||
+      kind == rni::kCursorGrabbing) {
+    c = handCursor_;  // GLFW has no grab shape off darwin
+  } else if (kind == rni::kCursorIBeam) {
+    c = ibeamCursor_;
+  } else if (kind > 0 && kind < rni::kCursorKindCount && shapeCursors_[kind]) {
+    c = shapeCursors_[kind];
+  }
   // A null standard cursor (platform did not provide the shape) means "leave
   // the current cursor alone" rather than resetting to the platform default,
   // which would flicker to arrow over a hand-requesting view on such a host.
   if (!c) return;
   glfwSetCursor(window_, c);
   appliedCursorKind_ = kind;
+  // Name the cursor object actually handed to GLFW, not the requested kind.
+  int shown = rni::kCursorArrow;
+  if (c == handCursor_) shown = rni::kCursorHand;
+  else if (c == ibeamCursor_) shown = rni::kCursorIBeam;
+  for (int k = 0; k < rni::kCursorKindCount; ++k) {
+    if (shapeCursors_[k] && c == shapeCursors_[k]) shown = k;
+  }
+  printf("rn-impeller: cursor_applied=%s\n", rni::CursorKindName(shown));
+  fflush(stdout);
 }
 
 void GlfwSurface::synthesiseHover(double screenX, double screenY) {

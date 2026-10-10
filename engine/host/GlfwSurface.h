@@ -582,6 +582,8 @@ class GlfwSurface {
   GLFWcursor* arrowCursor_{nullptr};
   GLFWcursor* handCursor_{nullptr};
   GLFWcursor* ibeamCursor_{nullptr};
+  // The other standard shapes, indexed by rni::CursorKind (null = unused).
+  GLFWcursor* shapeCursors_[12]{};
   // The cursor kind currently applied to the window, so a per-move stream that
   // stays over one shape does not call glfwSetCursor every frame. -1 means
   // "never set", forcing the first apply through.

@@ -1,6 +1,7 @@
 #include "scenegraph/SceneGraph.h"
 
 #include "scenegraph/CaretBlink.h"
+#include "scenegraph/CursorKinds.h"
 
 #include <react/renderer/core/ConcreteState.h>
 #include <react/renderer/components/textinput/BaseTextInputProps.h>
@@ -482,30 +483,9 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     // an Android device with default theming.
     node.elevationColor[0] = node.elevationColor[1] = node.elevationColor[2] = 0.0f;
     node.elevationColor[3] = 1.0f;
-    // ENG-09 hover/cursor. Collapse RN's full Cursor enum to the three shapes
-    // the host has standard GLFW cursors for. Everything that is not an
-    // explicit pointer/text request reads as arrow -- including Cursor::Auto,
-    // which is the default and means "let the platform decide", and the
-    // platform decision here is the arrow. Only the two authors actually set
-    // to change the pointer are honoured, so a view with no cursor prop (every
-    // existing app) is unchanged.
-    switch (props->cursor) {
-      case react::Cursor::Pointer:
-        node.cursorKind = 1;  // hand
-        break;
-      case react::Cursor::Text:
-        node.cursorKind = 2;  // ibeam
-        break;
-      case react::Cursor::Grab:
-        node.cursorKind = 3;  // open hand (NSCursor openHandCursor)
-        break;
-      case react::Cursor::Grabbing:
-        node.cursorKind = 4;  // closed hand (NSCursor closedHandCursor)
-        break;
-      default:
-        node.cursorKind = 0;  // arrow
-        break;
-    }
+    // ENG-09 hover/cursor. RN's Cursor enum -> the nearest GLFW standard
+    // shape (CursorKinds.h); a view with no cursor prop stays arrow.
+    node.cursorKind = rni::CursorKindFromRN(props->cursor);
 
     // <ScrollView>. ENG-02.
     //

@@ -58,6 +58,7 @@
 // be testable (--test-pointscale) on hosts that have no window at all.
 #include "host/PointScale.h"
 #include "scenegraph/CaretBlink.h"
+#include "scenegraph/CursorKinds.h"
 #include "impeller.h"
 #include "runtime/FeatureFlags.h"
 #if !defined(_WIN32)
@@ -877,10 +878,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // the transitions are: a gate wants "the shape became a hand", not a line
     // per pixel of travel. The names are the ones the peer's gate parses.
     if (r.cursorKind != lastLoggedCursor) {
-      const char* name = r.cursorKind == 1   ? "hand"
-                         : r.cursorKind == 2 ? "ibeam"
-                                             : "arrow";
-      printf("rn-impeller: cursor=%s\n", name);
+      printf("rn-impeller: cursor=%s\n", rni::CursorKindName(r.cursorKind));
       lastLoggedCursor = r.cursorKind;
       logged = true;
     }
