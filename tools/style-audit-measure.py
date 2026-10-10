@@ -468,7 +468,7 @@ RULES = {
     "borderDashed": lambda c, f, d: edge_runs(f, 32) >= 6,
     "borderDotted": lambda c, f, d: edge_runs(f, 32) >= 10,
     "borderPerSide": lambda c, f, d: {"red", "green", "blue"} <= set(stats(f)["counts"]),
-    "roundedMixedBorder": lambda c, f, d: not ink(at(f, 30, 31)) and stats(f)["counts"].get("red", 0) > 0,
+    "roundedMixedBorder": lambda c, f, d: not ink(at(f, 30, 31)) and cls(at(f, 60, 33)) == "red" and cls(at(f, 32, 61)) == "blue" and cls(at(f, 88, 61)) == "blue" and cls(at(f, 60, 88)) == "blue",
     "overflowRounded": lambda c, f, d: not ink(at(f, 30, 31)),
     "overflowRect": lambda c, f, d: stats(f)["n"] == 3600,
     "outline": lambda c, f, d: outside(f) > 100,

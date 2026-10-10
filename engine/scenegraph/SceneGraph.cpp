@@ -18,6 +18,7 @@
 #endif
 
 #include "scenegraph/BorderDash.h"
+#include "scenegraph/BorderRounded.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
@@ -3330,6 +3331,18 @@ void SceneGraph::paintBorders(ImpellerDisplayListBuilder builder,
                        std::max(0.0f, radii.bottom_right.y - t * 0.5f)};
     ImpellerDisplayListBuilderDrawRoundedRect(builder, &inset, &ir, paint);
     ImpellerPaintRelease(paint);
+    return;
+  }
+
+  if (rounded) {
+    const float widths4[4] = {t, r, b, l};
+    ImpellerColor cols[4];
+    bool vis[4];
+    for (int e = 0; e < 4; ++e) {
+      cols[e] = impellerColor(node.borderColors[e], OwnAlpha(node));
+      vis[e] = node.hasBorderColors[e] && node.borderColors[e][3] > 0.0f;
+    }
+    PaintRoundedMixedBorder(builder, x, y, w, h, widths4, cols, vis, radii);
     return;
   }
 

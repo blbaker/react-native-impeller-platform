@@ -12,6 +12,8 @@
 #   SC01a  Text paints at the frame origin (insets dropped) -> g2:textBoxStyle
 #   SC02a  TextInput paint ignores contentInsets.left -> g2:tiPadding
 #   SC03a  width without colour paints nothing -> g2:borderNoColor
+#   SC04a  mixed rounded border drops the outer radius clip -> g2:roundedPerSideWidthColor
+#   SC04b  mixed rounded border drops the inner cutout -> g2:radiusUnevenWidth
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -105,6 +107,19 @@ if want SC03a; then
 echo "== SC03a: width without colour paints nothing =="
 mutate engine/scenegraph/SceneGraph.cpp "node.hasBorderColors[i] = (bool)colors[i] || widths[i] > 0;" "node.hasBorderColors[i] = (bool)colors[i];"
 check SC03a g2:borderNoColor; N=$((N + 1))
+fi
+
+if want SC04a; then
+echo "== SC04a: mixed rounded border without the outer radius clip =="
+mutate engine/scenegraph/BorderRounded.cpp "ImpellerDisplayListBuilderClipRoundedRect(builder, &outer, &radii,
+                                            kImpellerClipOperationIntersect);" "(void)radii;"
+check SC04a g2:roundedPerSideWidthColor; N=$((N + 1))
+fi
+
+if want SC04b; then
+echo "== SC04b: mixed rounded border thickness ignores the per-edge width =="
+mutate engine/scenegraph/BorderRounded.cpp "const float t = widths[0], r = widths[1], b = widths[2], l = widths[3];" "const float t = widths[3], r = widths[3], b = widths[3], l = widths[3];"
+check SC04b g2:radiusUnevenWidth; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

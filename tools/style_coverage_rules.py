@@ -151,7 +151,45 @@ def _border_no_color(ctl, feat):
     return True, f"top={feat.px(30, 1)}"
 
 
+def _run(slot, x, y, dx, dy, pred, limit=40):
+    n = 0
+    while n < limit and pred(slot.px(x + dx * n, y + dy * n)):
+        n += 1
+    return n
+
+
+def _rounded_edges(ctl, feat, top, left, right, bottom, top_w, left_w):
+    # Outer corner pixels stay background in both slots (the radius survives),
+    # each edge midpoint has its colour, and the top/left thickness matches.
+    for name, s in (('control', ctl), ('feature', feat)):
+        for cx, cy in ((0, 0), (59, 0), (0, 59), (59, 59)):
+            if not is_white(s.px(cx, cy)):
+                return False, f"{name} corner {cx},{cy} not background {s.px(cx, cy)}"
+    for name, pred, pt in (('top', top, (30, 1)), ('left', left, (1, 30)),
+                           ('right', right, (58, 30)), ('bottom', bottom, (30, 58))):
+        if not pred(feat.px(*pt)):
+            return False, f"{name} edge wrong colour {feat.px(*pt)} at {pt}"
+    tw = _run(feat, 30, 0, 0, 1, top)
+    lw = _run(feat, 0, 30, 1, 0, left)
+    if abs(tw - top_w) > 1 or abs(lw - left_w) > 1:
+        return False, f"thickness top={tw} (want {top_w}) left={lw} (want {left_w})"
+    return True, f"top={tw} left={lw}"
+
+
+def _radius_uneven_width(ctl, feat):
+    # Control: uniform 4 blue. Feature: 2 all round, 12 on top, all blue.
+    return _rounded_edges(ctl, feat, is_blue, is_blue, is_blue, is_blue, 12, 2)
+
+
+def _rounded_per_side(ctl, feat):
+    # Feature: top 8 red, left 4 green, right 4 black, bottom 4 blue.
+    return _rounded_edges(ctl, feat, is_red, is_green, is_dark, is_blue, 8, 4)
+
+
 RULES = {
+    # SC-04
+    'g2:radiusUnevenWidth': _radius_uneven_width,
+    'g2:roundedPerSideWidthColor': _rounded_per_side,
     # SC-03
     'g2:borderNoColor': _border_no_color,
     # SC-02

@@ -3,3 +3,5 @@ g2:borderAlphaOverBg SC-00
 g2:textBoxStyle SC-01
 g2:tiPadding SC-02
 g2:borderNoColor SC-03
+g2:radiusUnevenWidth SC-04
+g2:roundedPerSideWidthColor SC-04

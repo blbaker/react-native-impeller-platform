@@ -38,6 +38,7 @@ LANDED=(
   underline:9 lineThrough:9 decorationColor:9
   borderDashed:10 borderDotted:25
   nestedText:P1-14 nestedTextSize:P1-14 textBackground:P1-14
+  roundedMixedBorder:SC-04
 )
 # Features the audit measured working on 02cf8ea7; must stay PASS.
 # (aspectRatio and nestedTextSize are font/bundle sensitive across the Mac and

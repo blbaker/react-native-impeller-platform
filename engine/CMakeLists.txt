@@ -231,6 +231,7 @@ add_executable(rn-impeller
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
   scenegraph/Shadows.cpp
+  scenegraph/BorderRounded.cpp
   text/ImpellerTextLayoutManager.cpp
   text/FontRegistry.cpp
 )
