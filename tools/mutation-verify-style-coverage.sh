@@ -18,6 +18,10 @@
 #   SC05b  dashed border paints every dash in the top colour -> g2:dashedPerSideColor
 #   SC06a  vertical corner radius takes the horizontal one -> g2:ellipticalRadius
 #   SC06b  continuous corners fall back to circular -> g2:borderCurve
+#   SC07a  backgroundColor skipped when an image layer exists -> g2:gradientOverBgColor
+#   SC07b  only one image layer painted -> g2:gradientLayers
+#   SC07c  colour hints ignored -> g2:gradientColorHint
+#   SC07d  radial gradients painted as linear -> nw:gradientRadial
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -151,6 +155,32 @@ if want SC06b; then
 echo "== SC06b: continuous corners fall back to circular =="
 mutate engine/scenegraph/SceneGraph.cpp "const bool continuous = rounded && node.borderContinuous;" "const bool continuous = false && rounded && node.borderContinuous;"
 check SC06b g2:borderCurve; N=$((N + 1))
+fi
+
+if want SC07a; then
+echo "== SC07a: backgroundColor skipped when an image layer exists =="
+mutate engine/scenegraph/SceneGraph.cpp "  // CSS order: background colour first, then every image layer over it.
+  if (node.hasBackgroundColor && node.bg[3] > 0.0f) {" "  // CSS order: background colour first, then every image layer over it.
+  if (node.bgLayers.empty() && node.hasBackgroundColor && node.bg[3] > 0.0f) {"
+check SC07a g2:gradientOverBgColor; N=$((N + 1))
+fi
+
+if want SC07b; then
+echo "== SC07b: only one image layer painted =="
+mutate engine/scenegraph/BackgroundLayers.cpp "for (auto it = layers.rbegin(); it != layers.rend(); ++it) {" "for (auto it = layers.rbegin(); it != layers.rbegin() + 1 && it != layers.rend(); ++it) {"
+check SC07b g2:gradientLayers; N=$((N + 1))
+fi
+
+if want SC07c; then
+echo "== SC07c: colour hints ignored =="
+mutate engine/scenegraph/BackgroundLayers.cpp "  if (span <= 0.0f) return;" "  if (span <= 0.0f || true) return;"
+check SC07c g2:gradientColorHint; N=$((N + 1))
+fi
+
+if want SC07d; then
+echo "== SC07d: radial gradients painted as linear =="
+mutate engine/scenegraph/BackgroundLayers.cpp "    if (it->radial) {" "    if (false && it->radial) {"
+check SC07d nw:gradientRadial; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

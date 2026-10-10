@@ -9,6 +9,7 @@
 #include <react/renderer/graphics/BackgroundImage.h>
 #include <react/renderer/graphics/Color.h>
 #include <react/renderer/graphics/LinearGradient.h>
+#include "BackgroundLayers.h"
 #include <react/renderer/graphics/Transform.h>
 
 #if RNI_WITH_RNSVG
@@ -538,65 +539,10 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.hasTransform = resolved != react::Transform::Identity();
     }
 
-    // LINEAR GRADIENT (`experimental_backgroundImage`).
-    node.hasGradient = false;
-    node.gradStops.clear();
-    node.gradColors.clear();
-    const float fw = (float)view.layoutMetrics.frame.size.width;
-    const float fh = (float)view.layoutMetrics.frame.size.height;
-    for (const auto& image : props->backgroundImage) {
-      if (!std::holds_alternative<react::LinearGradient>(image)) continue;
-      const auto& lg = std::get<react::LinearGradient>(image);
-      if (lg.colorStops.size() < 2) continue;
-
-      // Direction -> a start/end point pair on the node's own box. RN gives
-      // either a CSS angle (0deg = to top, growing clockwise) or a corner
-      // keyword; both reduce to a line through the box centre.
-      float angleRad = 0.0f;
-      if (std::holds_alternative<react::Float>(lg.direction)) {
-        angleRad = (float)std::get<react::Float>(lg.direction) *
-                   (float)M_PI / 180.0f;
-      } else {
-        switch (std::get<react::GradientKeyword>(lg.direction)) {
-          case react::GradientKeyword::ToTopRight:    angleRad = 0.25f * (float)M_PI; break;
-          case react::GradientKeyword::ToBottomRight: angleRad = 0.75f * (float)M_PI; break;
-          case react::GradientKeyword::ToBottomLeft:  angleRad = 1.25f * (float)M_PI; break;
-          case react::GradientKeyword::ToTopLeft:     angleRad = 1.75f * (float)M_PI; break;
-        }
-      }
-      // CSS: the gradient line runs through the centre at `angle`, and its ends
-      // sit where the box's projection onto that line ends. y is negated
-      // because CSS angles measure from "up" while our y axis grows downward.
-      const float dx = std::sin(angleRad);
-      const float dy = -std::cos(angleRad);
-      const float half = (std::fabs(fw * dx) + std::fabs(fh * dy)) * 0.5f;
-      const float cx = fw * 0.5f, cy = fh * 0.5f;
-      node.gradStart[0] = cx - dx * half;
-      node.gradStart[1] = cy - dy * half;
-      node.gradEnd[0] = cx + dx * half;
-      node.gradEnd[1] = cy + dy * half;
-
-      // Stops. RN leaves `position` unset for stops the author did not place,
-      // meaning "distribute evenly" — reading .value blindly makes every such
-      // stop 0 and collapses the gradient into a hard edge at the origin.
-      const size_t n = lg.colorStops.size();
-      for (size_t i = 0; i < n; ++i) {
-        const auto& stop = lg.colorStops[i];
-        // ValueUnit has an operator bool() that is true only when the unit is
-        // set; there is no isDefined(). A percent stop resolves against 1.0
-        // because Impeller wants stops as a 0..1 fraction, and
-        // ValueUnit::resolve multiplies percent by referenceLength * 0.01.
-        float pos = (bool)stop.position
-                        ? stop.position.resolve(1.0f)
-                        : (float)i / (float)(n - 1);
-        float rgba[4] = {0, 0, 0, 0};
-        if (stop.color) colorToFloats(stop.color, rgba);
-        node.gradStops.push_back(std::clamp(pos, 0.0f, 1.0f));
-        node.gradColors.push_back({rgba[0], rgba[1], rgba[2], rgba[3]});
-      }
-      node.hasGradient = node.gradStops.size() >= 2;
-      break;  // first gradient wins; layered backgrounds are a later phase
-    }
+    // experimental_backgroundImage: linear and radial layers (BackgroundLayers.cpp).
+    node.bgLayers = BuildBackgroundLayers(
+        props->backgroundImage, (float)view.layoutMetrics.frame.size.width,
+        (float)view.layoutMetrics.frame.size.height);
   }
 
   // <Text>: the measured AttributedString rides on ParagraphState, which is
@@ -1908,41 +1854,21 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     PaintOuterShadows(builder, shadowBox, node.shadows, OwnAlpha(node));
   }
 
-  // GRADIENT first: in CSS a background image paints over the background colour.
-  if (node.hasGradient) {
-    std::vector<ImpellerColor> colors;
-    colors.reserve(node.gradColors.size());
-    for (const auto& c : node.gradColors) {
-      colors.push_back(impellerColor(c.data(), OwnAlpha(node)));
-    }
-    // Gradient endpoints are stored node-local; the display list is in surface
-    // coordinates, so they translate by the node's painted origin.
-    ImpellerPoint start = {x + node.gradStart[0], y + node.gradStart[1]};
-    ImpellerPoint end = {x + node.gradEnd[0], y + node.gradEnd[1]};
-    ImpellerColorSource src = ImpellerColorSourceCreateLinearGradientNew(
-        &start, &end, (uint32_t)colors.size(), colors.data(),
-        node.gradStops.data(), kImpellerTileModeClamp, nullptr);
-    if (src != nullptr) {
-      // ⛔ Its OWN paint, not the shared one. `ImpellerPaintSetColorSource` is
-      // declared IMPELLER_NONNULL, so there is no way to CLEAR a colour source
-      // once set — passing nullptr to unset it segfaults inside Impeller. A
-      // paint that has ever held a gradient therefore paints everything after
-      // it with that gradient, so the gradient gets a paint that is discarded.
-      ImpellerPaint gp = ImpellerPaintNew();
-      ImpellerPaintSetColorSource(gp, src);
-      if (continuous && drawBoxWith(gp)) {
-      } else if (rounded) {
+  // CSS order: background colour first, then every image layer over it.
+  if (node.hasBackgroundColor && node.bg[3] > 0.0f) {
+    ImpellerColor c = impellerColor(node.bg, OwnAlpha(node));
+    ImpellerPaintSetColor(paint, &c);
+    fillBox();
+  }
+  if (!node.bgLayers.empty()) {
+    PaintBackgroundLayers(node.bgLayers, x, y, OwnAlpha(node), [&](ImpellerPaint gp) {
+      if (continuous && drawBoxWith(gp)) return;
+      if (rounded) {
         ImpellerDisplayListBuilderDrawRoundedRect(builder, &rect, &radii, gp);
       } else {
         ImpellerDisplayListBuilderDrawRect(builder, &rect, gp);
       }
-      ImpellerPaintRelease(gp);
-      ImpellerColorSourceRelease(src);
-    }
-  } else if (node.hasBackgroundColor && node.bg[3] > 0.0f) {
-    ImpellerColor c = impellerColor(node.bg, OwnAlpha(node));
-    ImpellerPaintSetColor(paint, &c);
-    fillBox();
+    });
   }
 
   // Inset boxShadows sit over the background and under the border (CSS).

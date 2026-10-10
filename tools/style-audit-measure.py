@@ -115,6 +115,18 @@ def at(px, x, y):
     return px[(x, y)]
 
 
+def radial_grid1_ok(px):
+    # SC-07: centre red-dominant, corners blue-dominant and symmetric within 6.
+    # The 60x60 box spans x 30..89, y 31..90.
+    mid = at(px, 60, 61)
+    if not mid[0] > mid[2] + 100:
+        return False
+    cs = [at(px, x, y) for x, y in ((31, 32), (88, 32), (31, 89), (88, 89))]
+    if any(not p[2] > p[0] + 100 for p in cs):
+        return False
+    return all(max(p[k] for p in cs) - min(p[k] for p in cs) <= 6 for k in range(3))
+
+
 def edge_runs(px, y, x0=30, x1=89):
     vals = [ink(px[(x, y)]) and cls(px[(x, y)]) == "black" for x in range(x0, x1 + 1)]
     return sum(1 for a, b in zip(vals, vals[1:]) if a != b)
@@ -473,7 +485,7 @@ RULES = {
     "overflowRect": lambda c, f, d: stats(f)["n"] == 3600,
     "outline": lambda c, f, d: outside(f) > 100,
     "gradientLinear": lambda c, f, d: stats(f)["colors"] > 20,
-    "gradientRadial": lambda c, f, d: stats(f)["colors"] > 20,
+    "gradientRadial": lambda c, f, d: radial_grid1_ok(f),
     "filterBlur": lambda c, f, d: outside(f) > 50 or stats(f)["colors"] > 5,
     "filterBrightness": lambda c, f, d: at(f, 60, 60)[2] < 200,
     "filterGrayscale": lambda c, f, d: cls(at(f, 60, 60)) == "gray",

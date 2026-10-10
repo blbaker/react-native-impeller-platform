@@ -5,6 +5,7 @@
 // the surface. One mutex guards the tree, so a paint mid-commit sees a
 // consistent tree rather than a half-applied transaction.
 #pragma once
+#include "BackgroundLayers.h"
 
 #include <react/renderer/components/scrollview/ScrollViewProps.h>
 #include <react/renderer/components/text/ParagraphProps.h>
@@ -89,14 +90,8 @@ struct SceneNode {
   float borderRadiiV[4]{0, 0, 0, 0};
   bool borderContinuous{false};  // borderCurve 'continuous' on any corner
 
-  // Linear gradient (`experimental_backgroundImage`). Painted UNDER the
-  // background colour rule: when a gradient is present it replaces the flat
-  // fill, matching CSS painting order.
-  bool hasGradient{false};
-  float gradStart[2]{0, 0};  // in node-local coordinates
-  float gradEnd[2]{0, 0};
-  std::vector<float> gradStops;         // 0..1, ascending
-  std::vector<std::array<float, 4>> gradColors;
+  // experimental_backgroundImage layers, first listed on top; painted over backgroundColor.
+  std::vector<BgLayer> bgLayers;
 
   // Resolved transform matrix (column-major 4x4, RN's own layout), already
   // including transform-origin. Identity when the node has no transform.

@@ -320,3 +320,9 @@ RULES = {
     # SC-00 (harness example; already correct on bf7be0f)
     'g2:borderAlphaOverBg': _border_alpha_over_bg,
 }
+
+
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from style_coverage_rules_sc07 import RULES as _SC07  # noqa: E402
+RULES.update(_SC07)

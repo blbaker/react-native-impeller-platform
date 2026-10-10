@@ -9,3 +9,7 @@ g2:dashedRounded SC-05
 g2:dashedPerSideColor SC-05
 g2:ellipticalRadius SC-06
 g2:borderCurve SC-06
+g2:gradientOverBgColor SC-07
+g2:gradientLayers SC-07
+g2:gradientColorHint SC-07
+nw:gradientRadial SC-07
