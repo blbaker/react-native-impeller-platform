@@ -7,7 +7,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-FIX="$ROOT/fixtures/eng19-nativewind"
+FIX="${NW_FIX:-$ROOT/fixtures/eng19-nativewind}"
 OUT="${1:-$FIX/prebuilt/eng19-nativewind.bundle}"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
 RNI_ENGINE_PKG="${RNI_ENGINE_PKG:-$ROOT/packages-engine/engine-linux-x64}"
