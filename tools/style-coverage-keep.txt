@@ -125,7 +125,6 @@ nw:textShadow
 nw:textColor
 nw:placeholderColor
 nw:vw
-nw:backface
 nw:selectNone
 nw:cursorPointer
 variants-light:ios

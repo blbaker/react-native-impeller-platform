@@ -492,7 +492,7 @@ RULES = {
     "skewX": lambda c, f, d: stats(f)["bbox"][2] - stats(f)["bbox"][0] > 50,
     "transformOrigin": lambda c, f, d: stats(f)["bbox"][:2] == (30, 31),
     "perspective": lambda c, f, d: stats(f)["bbox"][3] - stats(f)["bbox"][1] > 61,
-    "backfaceHidden": lambda c, f, d: stats(f)["n"] == 0,
+    "backfaceHidden": lambda c, f, d: stats(c)["n"] > 3000 and stats(f)["n"] == 0,
     "radiusPerCorner": lambda c, f, d: not ink(at(f, 30, 31)) and ink(at(f, 89, 31)),
     "radiusPercent": lambda c, f, d: not ink(at(f, 30, 31)) and 2700 < stats(f)["n"] < 3000,
     "borderDashed": lambda c, f, d: edge_runs(f, 32) >= 6,

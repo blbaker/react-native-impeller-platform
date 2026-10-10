@@ -540,10 +540,21 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       default: node.pointerEvents = 0; break;
     }
     node.hasTransform = false;
+    node.backfaceHidden = false;
     if (!props->transform.operations.empty()) {
       const auto resolved = props->resolveTransform(view.layoutMetrics);
       node.transform = resolved.matrix;
       node.hasTransform = resolved != react::Transform::Identity();
+      node.backfaceHidden = false;
+      if (props->backfaceVisibility == react::BackfaceVisibility::Hidden) {
+        // Orientation of the z=0 plane after the transform: determinant of the
+        // x, y, w rows over columns 0, 1, 3. Negative means the back faces us.
+        const auto& m = node.transform;
+        const double det = m[0] * (m[5] * m[15] - m[13] * m[7]) -
+                           m[4] * (m[1] * m[15] - m[13] * m[3]) +
+                           m[12] * (m[1] * m[7] - m[5] * m[3]);
+        node.backfaceHidden = det < 0;
+      }
     }
 
     // experimental_backgroundImage: linear and radial layers (BackgroundLayers.cpp).
@@ -1661,6 +1672,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     }
   }
 #endif
+  // backfaceVisibility 'hidden': a node whose plane faces away paints nothing,
+  // children included (they share its transformed plane).
+  if (node.backfaceHidden) return;
   ImpellerPaint paint = ImpellerPaintNew();
   ImpellerRect rect = {x, y, w, h};  // {x,y,w,h}, NOT LTRB
 
@@ -3613,6 +3627,7 @@ facebook::react::Tag SceneGraph::hitTestNode(const SceneNode& node,
 
   // parity item 9: pointerEvents='none' removes the node AND its subtree.
   if (node.pointerEvents == 1) return 0;
+  if (node.backfaceHidden) return 0;
 
   // parity item 9: a transformed node is HIT where it is PAINTED. paintNode
   // draws it as translate(c) * M * translate(-c) about its centre c; map the

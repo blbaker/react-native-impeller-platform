@@ -28,6 +28,8 @@
 #   SC09a  outlineOffset ignored -> grid1 outline
 #   SC09b  dashed outline painted solid -> g2:outlineDashed
 #   SC09c  solid outline stroke twice as wide -> nw:outline
+#   SC10a  back-facing test never fires -> nw:backface
+#   SC10b  back-facing test inverted -> nw:backface
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -224,6 +226,18 @@ if want SC09c; then
 echo "== SC09c: solid outline stroke twice as wide =="
 mutate engine/scenegraph/Outline.cpp "  ImpellerPaintSetStrokeWidth(paint, width);" "  ImpellerPaintSetStrokeWidth(paint, width * 2.0f);"
 check SC09c nw:outline; N=$((N + 1))
+fi
+
+if want SC10a; then
+echo "== SC10a: back-facing test never fires =="
+mutate engine/scenegraph/SceneGraph.cpp "        node.backfaceHidden = det < 0;" "        node.backfaceHidden = det < -1e30;"
+check SC10a nw:backface; N=$((N + 1))
+fi
+
+if want SC10b; then
+echo "== SC10b: back-facing test inverted =="
+mutate engine/scenegraph/SceneGraph.cpp "        node.backfaceHidden = det < 0;" "        node.backfaceHidden = det > 0;"
+check SC10b nw:backface; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

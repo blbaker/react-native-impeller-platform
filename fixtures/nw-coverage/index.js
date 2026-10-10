@@ -80,7 +80,7 @@ const TESTS = [
   {id: 'placeholderColor', e: 'same', c: () => <TextInput placeholder="Ph" placeholderTextColor={RED} style={{width: 80, height: 40, fontSize: 16}} />, f: () => <TextInput placeholder="Ph" className="placeholder:text-red-500" style={{width: 80, height: 40, fontSize: 16}} />},
   {id: 'calc', e: 'same', c: () => <View style={{width: 60, height: 60, backgroundColor: GREY}}><View style={{width: 40, height: 20, backgroundColor: BLUE}} /></View>, f: () => <View style={{width: 60, height: 60, backgroundColor: GREY}}><View className="w-[calc(50%+10px)] h-5" style={{backgroundColor: BLUE}} /></View>},
   {id: 'vw', e: 'same', c: () => B({width: 60}), f: () => N('w-[5vw] h-[60px]', {backgroundColor: BLUE})},
-  {id: 'backface', e: 'same', c: () => B({transform: [{rotateY: '180deg'}], backfaceVisibility: 'hidden'}), f: () => N('w-[60px] h-[60px] rotate-y-180 backface-hidden', {backgroundColor: BLUE})},
+  {id: 'backface', e: 'diff', c: () => B({transform: [{rotateY: '180deg'}]}), f: () => N('w-[60px] h-[60px] rotate-y-180 backface-hidden', {backgroundColor: BLUE})},
   {id: 'selectNone', e: 'same', c: () => T('Ab', {userSelect: 'none'}), f: () => NT('Ab', 'select-none')},
   {id: 'cursorPointer', e: 'same', c: () => B({cursor: 'pointer'}), f: () => N('w-[60px] h-[60px] cursor-pointer', {backgroundColor: BLUE})},
 ];

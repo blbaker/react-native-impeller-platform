@@ -100,6 +100,8 @@ struct SceneNode {
   // Resolved transform matrix (column-major 4x4, RN's own layout), already
   // including transform-origin. Identity when the node has no transform.
   bool hasTransform{false};
+  // backfaceVisibility 'hidden' and the transform turns the node away.
+  bool backfaceHidden{false};
   std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
 
   bool overflowHidden{false};
