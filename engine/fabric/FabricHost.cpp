@@ -15,6 +15,7 @@
 #include <react/renderer/components/view/ViewComponentDescriptor.h>
 #include "SwitchShadowNode.h"  // ENG-15
 #include "ActivityIndicatorShadowNode.h"  // A20
+#include "ModalHostShadowNode.h"  // A22
 #include <react/renderer/core/EventBeat.h>
 #include <react/renderer/core/LayoutConstraints.h>
 #include <react/renderer/core/LayoutContext.h>
@@ -565,6 +566,9 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
       react::concreteComponentDescriptorProvider<react::ImpellerSwitchComponentDescriptor>());
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::ImpellerActivityIndicatorComponentDescriptor>());
+  // <Modal>. A22: a window-sized layout root painted after the app root.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::ImpellerModalHostComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
   // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --
@@ -732,6 +736,7 @@ void FabricHost::startSurface(const std::string& moduleName, int surfaceId,
   const float pointWidth = width / scale;
   const float pointHeight = height / scale;
 
+  rni::modal::SetScreenSize(pointWidth, pointHeight);
   react::LayoutConstraints constraints;
   constraints.minimumSize = {.width = pointWidth, .height = pointHeight};
   constraints.maximumSize = {.width = pointWidth, .height = pointHeight};
@@ -763,6 +768,7 @@ bool FabricHost::updateSurface(int surfaceId, float width, float height,
   const float pointWidth = width / scale;
   const float pointHeight = height / scale;
 
+  rni::modal::SetScreenSize(pointWidth, pointHeight);
   react::LayoutConstraints constraints;
   constraints.minimumSize = {.width = pointWidth, .height = pointHeight};
   constraints.maximumSize = {.width = pointWidth, .height = pointHeight};
@@ -1754,6 +1760,18 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
                                  const std::string& code, KeyEventPhase phase,
                                  const KeyModifiers& mods) {
   if (!sceneGraph_ || !runtimeScheduler_) return 0;
+  // A22: Escape asks the topmost visible modal to close (Android's back
+  // button, iOS's swipe-dismiss); the modal consumes the key.
+  if (key == "Escape" && phase == KeyEventPhase::Down) {
+    react::EventEmitter::Shared emitter;
+    if (const react::Tag modal = sceneGraph_->topModal(&emitter)) {
+      if (auto m = std::dynamic_pointer_cast<const react::ModalHostViewEventEmitter>(emitter))
+        m->onRequestClose({});
+      std::printf("[modal] request_close tag=%d\n", modal);
+      std::fflush(stdout);
+      return modal;
+    }
+  }
   // Focused field first; fall back to the surface root so a key event
   // always has SOMEWHERE to land rather than being silently swallowed the
   // instant nothing has focus -- the ask explicitly requires this fallback.

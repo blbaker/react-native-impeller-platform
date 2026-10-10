@@ -239,6 +239,7 @@ add_executable(rn-impeller
   scenegraph/Outline.cpp
   scenegraph/ScrollIndicators.cpp
   scenegraph/ActivityIndicator.cpp
+  scenegraph/Modal.cpp
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
   scenegraph/ContentFilters.cpp

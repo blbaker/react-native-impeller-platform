@@ -740,6 +740,16 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     }
   }
 
+  // <Modal>. A22: codegen ModalHostViewProps (visible, transparent).
+  if (node.componentName == "ModalHostView") {
+    node.isModal = true;
+    if (const auto* mp =
+            dynamic_cast<const react::ModalHostViewProps*>(view.props.get())) {
+      node.modalVisible = mp->visible;
+      node.modalTransparent = mp->transparent;
+    }
+  }
+
   // <TextInput>. ENG-01b. The component name RN gives the iOS single-line input
   // is "TextInput" (iostextinput's TextInputComponentName). Its controlled value
   // rides on BaseTextInputProps::text; placeholder and its colour are siblings.
@@ -1835,6 +1845,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   const float y = originY + (float)frame.origin.y;
   const float w = (float)frame.size.width;
   const float h = (float)frame.size.height;
+
+  // A22: a modal paints in its own pass after the app root (Modal.cpp).
+  if (node.isModal && node.tag != modalWalk_) return;
 
   ++painted_;
 
@@ -3464,6 +3477,7 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
       if (it == nodes_.end()) continue;
       paintNode(off, it->second, 0, 0);
     }
+    paintModalsLocked(off);
     supersample_ = savedN;
 
     ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
@@ -3734,9 +3748,9 @@ ImpellerColorSource SceneGraph::makeGradientSource(const SceneNode* def,
       kImpellerTileModeClamp, nullptr);
 }
 
-int SceneGraph::paint(ImpellerDisplayListBuilder builder,
-                      float pointScaleFactor) {
-  std::lock_guard<std::mutex> lock(mutex_);
+int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
+                            float pointScaleFactor,
+                            std::vector<facebook::react::EventEmitter::Shared>* shows) {
   // Rebuild the gradient registry before walking the tree: a def may be
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
@@ -3769,6 +3783,7 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder,
   if (supersample_ >= 2 && paintTreeSupersampled(builder, pointScaleFactor)) {
     // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
     // so it already reflects the visited node count.
+    collectModalShowsLocked(shows);
     return painted_;
   }
 #endif
@@ -3797,7 +3812,9 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder,
     if (it == nodes_.end()) continue;
     paintNode(builder, it->second, 0, 0);
   }
+  paintModalsLocked(builder);
   if (scaled) ImpellerDisplayListBuilderRestore(builder);
+  collectModalShowsLocked(shows);
   return painted_;
 }
 
@@ -3916,6 +3933,8 @@ facebook::react::Tag SceneGraph::hitTestNode(const SceneNode& node,
   // parity item 9: pointerEvents='none' removes the node AND its subtree.
   if (node.pointerEvents == 1) return 0;
   if (node.backfaceHidden) return 0;
+  // A22: a modal is hit-tested first, in its own pass (Modal.cpp).
+  if (node.isModal && node.tag != modalWalk_) return 0;
 
   // parity item 9: a transformed node is HIT where it is PAINTED. paintNode
   // draws it as translate(c) * M * translate(-c) about its centre c; map the
@@ -3976,13 +3995,7 @@ facebook::react::Tag SceneGraph::hitTestNode(const SceneNode& node,
 
 facebook::react::Tag SceneGraph::hitTest(float x, float y) {
   std::lock_guard<std::mutex> lock(mutex_);
-  // Roots in reverse too: a later root paints over an earlier one.
-  for (auto it = roots_.rbegin(); it != roots_.rend(); ++it) {
-    auto root = nodes_.find(*it);
-    if (root == nodes_.end()) continue;
-    if (auto hit = hitTestNode(root->second, 0, 0, x, y)) return hit;
-  }
-  return 0;
+  return hitTestLocked(x, y);
 }
 
 facebook::react::EventEmitter::Shared SceneGraph::eventEmitterFor(
@@ -4109,6 +4122,8 @@ bool SceneGraph::absoluteOriginLocked(facebook::react::Tag tag, float* ox,
     auto it = nodes_.find(cur);
     if (it == nodes_.end()) return false;
     const SceneNode& n = it->second;
+    // A22: a modal sits at window (0,0) whatever its tree position.
+    if (n.isModal) break;
     // hitTestNode shifts a ScrollView's CHILDREN by -scroll; the ScrollView
     // itself is not shifted. So subtract only for ancestors, never for self.
     if (!self && n.isScrollView) {
@@ -4405,16 +4420,11 @@ std::string SceneGraph::paragraphTextReport() {
 // this text". Its own pointerEvents/clip/scroll rules come from hitTestNode.
 facebook::react::Tag SceneGraph::selectableTextAt(float x, float y) {
   std::lock_guard<std::mutex> lock(mutex_);
-  for (auto it = roots_.rbegin(); it != roots_.rend(); ++it) {
-    auto root = nodes_.find(*it);
-    if (root == nodes_.end()) continue;
-    if (auto hit = hitTestNode(root->second, 0, 0, x, y)) {
-      auto n = nodes_.find(hit);
-      if (n != nodes_.end() && n->second.isParagraph && n->second.selectable &&
-          !n->second.runs.empty()) {
-        return hit;
-      }
-      return 0;
+  if (auto hit = hitTestLocked(x, y)) {
+    auto n = nodes_.find(hit);
+    if (n != nodes_.end() && n->second.isParagraph && n->second.selectable &&
+        !n->second.runs.empty()) {
+      return hit;
     }
   }
   return 0;
@@ -4525,12 +4535,7 @@ std::string SceneGraph::describe() {
 // only on an empty list.
 facebook::react::Tag SceneGraph::scrollViewAt(float x, float y) {
   std::lock_guard<std::mutex> lock(mutex_);
-  facebook::react::Tag hit = 0;
-  for (auto it = roots_.rbegin(); it != roots_.rend(); ++it) {
-    auto root = nodes_.find(*it);
-    if (root == nodes_.end()) continue;
-    if ((hit = hitTestNode(root->second, 0, 0, x, y))) break;
-  }
+  facebook::react::Tag hit = hitTestLocked(x, y);
   if (hit == 0) return 0;
 
   // Bounded: a corrupt parent chain that formed a cycle would hang the event
@@ -4633,12 +4638,7 @@ SceneGraph::ScrollResult SceneGraph::scrollBy(float x, float y, float dx,
   // The hit target, in the same POINT space as scrollViewAt. Inlined here (not
   // via scrollViewAt) because that helper takes the lock itself AND stops at
   // the first ScrollView -- nested resolution has to keep walking past it.
-  facebook::react::Tag hit = 0;
-  for (auto rit = roots_.rbegin(); rit != roots_.rend(); ++rit) {
-    auto root = nodes_.find(*rit);
-    if (root == nodes_.end()) continue;
-    if ((hit = hitTestNode(root->second, 0, 0, x, y))) break;
-  }
+  facebook::react::Tag hit = hitTestLocked(x, y);
   if (hit == 0) return r;
 
   // ⛔ AXIS FROM THE DELTA THE HOST SENT, NOT FROM ANY VIEW'S CONTENT.

@@ -246,6 +246,12 @@ struct SceneNode {
   bool isSwitch{false};
   // A20: <ActivityIndicator>. Colour defaults to iOS gray (#999) when unset.
   bool isSpinner{false};
+  // A22: <Modal> (ModalHostView). Skipped in the tree walk; painted and
+  // hit-tested after the app root at window (0,0). modalShown = onShow sent.
+  bool isModal{false};
+  bool modalVisible{true};
+  bool modalTransparent{false};
+  bool modalShown{false};
   bool spAnimating{true};
   bool spHidesWhenStopped{true};
   float spColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
@@ -568,6 +574,8 @@ class SceneGraph {
   // makes text and vector geometry rasterise at full device resolution rather
   // than being upscaled after the fact.
   int paint(ImpellerDisplayListBuilder builder, float pointScaleFactor = 1.0f);
+  // A22: the topmost visible modal (0 if none) and its emitter, for Escape.
+  facebook::react::Tag topModal(facebook::react::EventEmitter::Shared* emitter);
 
   // Diagnostics: node count and root tag, for gates that need to distinguish
   // "no tree" from "tree present but invisible".
@@ -877,6 +885,16 @@ class SceneGraph {
   ImpellerColorSource makeGradientSource(const SceneNode* def, float x, float y,
                                          float w, float h, float alpha) const;
   int painted_{0};  // reset per paint(); incremented in paintNode()
+  // A22 (Modal.cpp). paintNode/hitTestNode enter only the modal named by
+  // modalWalk_; the modal passes run after the app root, at window (0,0).
+  facebook::react::Tag modalWalk_{0};
+  int paintLocked(ImpellerDisplayListBuilder builder, float pointScaleFactor,
+                  std::vector<facebook::react::EventEmitter::Shared>* shows);
+  void collectModalsLocked(facebook::react::Tag tag,
+                           std::vector<facebook::react::Tag>* out) const;
+  void paintModalsLocked(ImpellerDisplayListBuilder builder);
+  void collectModalShowsLocked(std::vector<facebook::react::EventEmitter::Shared>* shows);
+  facebook::react::Tag hitTestLocked(float x, float y);
   // The node whose content-shadow pass is being painted (paintNode skips its
   // transform/opacity/filter layers, already open, and its content shadows).
   const SceneNode* shadowPassNode_{nullptr};
