@@ -49,7 +49,7 @@ render() {  # name bundle app scene w h [extra engine args...]
 }
 
 echo "== render (headless, supersample $SS) =="
-render g2 "$SC_BUNDLE" probe g2 1200 3300
+render g2 "$SC_BUNDLE" probe g2 1200 3600
 render risky "$SC_BUNDLE" probe risky 1200 300
 render nw "$NW_BUNDLE" Eng19NativeWind nw 1200 1800
 render variants-light "$NW_BUNDLE" Eng19NativeWind variants 1200 600

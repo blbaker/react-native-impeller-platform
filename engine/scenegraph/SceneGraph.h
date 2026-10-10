@@ -27,6 +27,8 @@
 
 #include "impeller.h"
 #include "modules/WorldRasterStore.h"
+#include "scenegraph/ImageEvents.h"
+#include "scenegraph/ImagePaint.h"
 #include "scenegraph/Shadows.h"
 #include "scenegraph/TextInputStyle.h"
 
@@ -246,6 +248,23 @@ struct SceneNode {
   bool isSwitch{false};
   // A20: <ActivityIndicator>. Colour defaults to iOS gray (#999) when unset.
   bool isSpinner{false};
+  // A19: <Image> ("Image" from RCTImageView). Sources as JS sent them (uri,
+  // scale, size in points); the painter picks one per frame size.
+  bool isImage{false};
+  struct ImageSrc {
+    std::string uri;
+    float scale{1.0f};
+    float width{0.0f};
+    float height{0.0f};
+  };
+  std::vector<ImageSrc> imgSources;
+  // SC-31: painted while the source has no pixels (loading or failed).
+  std::string imgDefaultUri;
+  // SC-31: load events for the node's current ImageRequest.
+  std::shared_ptr<rni::ImageEventBinding> imgEvents;
+  int imgResizeMode{0};
+  bool imgHasTint{false};
+  float imgTint[4]{0, 0, 0, 0};
   // A22: <Modal> (ModalHostView). Skipped in the tree walk; painted and
   // hit-tested after the app root at window (0,0). modalShown = onShow sent.
   bool isModal{false};
@@ -975,6 +994,10 @@ class SceneGraph {
   std::atomic<uint64_t> version_{0};
   std::atomic<bool> spinnerAnimating_{false};
   std::chrono::steady_clock::time_point spinnerEpoch_{std::chrono::steady_clock::now()};
+  // A19: <Image> textures, one per decoded source.
+  rni::ImageTextures imageTextures_;
+  // SC-31: a finished image load repaints through this (cleared on teardown).
+  std::shared_ptr<rni::ImageDamageSink> imageDamage_ = std::make_shared<rni::ImageDamageSink>();
   // P12-01: the wake fired by bumpVersion(). Guarded by its OWN mutex (never
   // mutex_) so applyMutations — which bumps while holding mutex_ — cannot invert
   // the lock order. Null until a windowed idle-skip loop installs it.

@@ -208,6 +208,7 @@ const SPEC_FOR = {
   // ENG-14. RN's iOS accessibility spec; AccessibilityInfo's non-Android arm
   // reads it, and the engine module subclasses NativeAccessibilityManagerCxxSpec.
   AccessibilityManager: 'src/private/specs_DEPRECATED/modules/NativeAccessibilityManager.js',
+  ImageLoader:        'src/private/specs_DEPRECATED/modules/NativeImageLoaderIOS.js',
 };
 
 // ⛔ SOME MODULES HAVE NO RN CORE SPEC, AND THAT IS NOT AN ESCAPE HATCH.

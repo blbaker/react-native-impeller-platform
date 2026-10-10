@@ -23,6 +23,7 @@
 
 #include "runtime/FeatureFlags.h"
 #include "modules/ClipboardModule.h"
+#include "modules/ImageLoaderModule.h"  // SC-31
 #include "modules/AccessibilityManagerModule.h"  // ENG-14
 
 namespace rni {
@@ -271,6 +272,12 @@ ReactHost::ReactHost(bool withInspector) {
   // ran fine and every request failed. See NetworkingModule.h.
   modules_->add("Networking", [n = network_](auto inv) {
     return std::make_shared<NetworkingModule>(inv, n);
+  });
+  // SC-31. <Image> remote sources load over the same transport and count as
+  // network activity; ImageLoader is Image.getSize/prefetch/queryCache.
+  InstallImageFetcher(network_);
+  modules_->add("ImageLoader", [](auto inv) {
+    return std::make_shared<ImageLoaderModule>(inv);
   });
   // parity item 12. WebSocketModule: getEnforcing'd by every __DEV__ bundle
   // (setUpReactDevTools / HMRClient), so its absence made dev bundles throw

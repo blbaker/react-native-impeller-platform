@@ -16,6 +16,8 @@
 #include "SwitchShadowNode.h"  // ENG-15
 #include "ActivityIndicatorShadowNode.h"  // A20
 #include "ModalHostShadowNode.h"  // A22
+#include <react/renderer/components/image/ImageComponentDescriptor.h>  // A19
+#include <react/renderer/imagemanager/ImageManager.h>
 #include <react/renderer/core/EventBeat.h>
 #include <react/renderer/core/LayoutConstraints.h>
 #include <react/renderer/core/LayoutContext.h>
@@ -569,6 +571,10 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
   // <Modal>. A22: a window-sized layout root painted after the app root.
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::ImpellerModalHostComponentDescriptor>());
+  // <Image>. A19: RN's ImageShadowNode ("Image", from RCTImageView) with OUR
+  // ImageManager (fabric/platform/impeller/.../ImageManager.cpp).
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::ImageComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
   // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --
@@ -634,6 +640,8 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
       "TextLayoutManager",
       std::shared_ptr<react::TextLayoutManager>(
           std::make_shared<ImpellerTextLayoutManager>(contextContainer, typography)));
+  contextContainer->insert(react::ImageManagerKey,
+                           std::make_shared<react::ImageManager>(contextContainer));
   // Scheduler's ctor asserts on this key. Weak ptr, same shape as RCTInstance.
   contextContainer->insert(
       react::RuntimeSchedulerKey,

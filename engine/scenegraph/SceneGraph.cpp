@@ -26,6 +26,7 @@
 #include "scenegraph/Outline.h"
 #include "scenegraph/ScrollIndicators.h"
 #include "scenegraph/ActivityIndicator.h"
+#include <react/renderer/components/image/ImageProps.h>  // A19
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
 #include "scenegraph/EllipsizeText.h"
@@ -324,6 +325,10 @@ SceneGraph::SceneGraph(ImpellerTypographyContext typography)
     : typography_(typography) {}
 
 SceneGraph::~SceneGraph() {
+  {
+    std::lock_guard<std::mutex> lock(imageDamage_->mutex);
+    imageDamage_->wake = nullptr;
+  }
   // Release every cached offscreen texture. Ownership of each was transferred
   // to Impeller when it was adopted from the GL handle, so Impeller frees the
   // underlying GL texture on the last Release — we must not glDeleteTextures it.
@@ -738,6 +743,32 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.spHidesWhenStopped = ap->hidesWhenStopped;
       if (ap->color) colorToFloats(ap->color, node.spColor);
     }
+  }
+
+  // <Image>. A19: RN's ImageProps (sources, resizeMode, tintColor).
+  if (node.componentName == "Image") {
+    node.isImage = true;
+    node.imgSources.clear();
+    node.imgHasTint = false;
+    node.imgDefaultUri.clear();
+    if (const auto* ip = dynamic_cast<const react::ImageProps*>(view.props.get())) {
+      for (const auto& src : ip->sources) {
+        node.imgSources.push_back({src.uri, (float)src.scale, (float)src.size.width,
+                                   (float)src.size.height});
+      }
+      node.imgResizeMode = (int)ip->resizeMode;
+      node.imgDefaultUri = ip->defaultSource.uri;
+      if (ip->tintColor) {
+        node.imgHasTint = true;
+        colorToFloats(ip->tintColor, node.imgTint);
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(imageDamage_->mutex);
+      if (!imageDamage_->wake) imageDamage_->wake = [this] { bumpVersion(); };
+    }
+    if (!node.imgEvents) node.imgEvents = std::make_shared<rni::ImageEventBinding>();
+    node.imgEvents->update(view, imageDamage_);
   }
 
   // <Modal>. A22: codegen ModalHostViewProps (visible, transparent).
@@ -1282,6 +1313,27 @@ namespace {
 bool UsesOpacityLayer(const SceneNode& n) {
   return n.opacity < 0.999f && !n.children.empty();
 }
+// A19: like RCTImageView, the source whose pixel area best covers the box
+// (smallest one at least as large, else the largest). Sizeless sources win ties
+// by order.
+const SceneNode::ImageSrc& PickImageSource(const std::vector<SceneNode::ImageSrc>& srcs, float w,
+                                           float h) {
+  if (srcs.size() == 1) return srcs[0];
+  const float need = w * h;
+  const SceneNode::ImageSrc* best = &srcs[0];
+  float bestArea = -1.0f;
+  for (const auto& s : srcs) {
+    const float area = s.width * s.height;
+    const bool covers = area >= need, bestCovers = bestArea >= need;
+    if (bestArea < 0.0f || (covers && (!bestCovers || area < bestArea)) ||
+        (!covers && !bestCovers && area > bestArea)) {
+      best = &s;
+      bestArea = area;
+    }
+  }
+  return *best;
+}
+
 float OwnAlpha(const SceneNode& n) {
   return UsesOpacityLayer(n) ? 1.0f : n.opacity;
 }
@@ -2413,6 +2465,37 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     rni::PaintActivityIndicator(builder, x, y, w, h, impellerColor(node.spColor, OwnAlpha(node)),
                                 node.spAnimating ? rni::SpinnerStep(ms) : 0);
     if (node.spAnimating) spinnerAnimating_.store(true, std::memory_order_relaxed);
+  }
+
+  // <Image>. A19: the decoded source, clipped to the (rounded) box.
+  if (node.isImage && w > 0.0f && h > 0.0f && !node.imgSources.empty()) {
+    const SceneNode::ImageSrc& src = PickImageSource(node.imgSources, w, h);
+    int tw = 0, th = 0;
+    ImpellerTexture tex = imageTextures_.Get(renderContext_, src.uri, &tw, &th);
+    // Natural size: the source's declared size if JS sent one, else pixels / scale.
+    float scale = src.scale > 0.0f ? src.scale : 1.0f;
+    if (src.width > 0.0f) scale = (float)tw / src.width;
+    if (tex == nullptr && !node.imgDefaultUri.empty()) {
+      tex = imageTextures_.Get(renderContext_, node.imgDefaultUri, &tw, &th);
+      scale = 1.0f;
+    }
+    if (tex != nullptr) {
+      ImpellerDisplayListBuilderSave(builder);
+      ImpellerPath sqClip = continuous ? rni::MakeContinuousRRectPath(x, y, w, h, radii) : nullptr;
+      if (sqClip != nullptr) {
+        ImpellerDisplayListBuilderClipPath(builder, sqClip, kImpellerClipOperationIntersect);
+        ImpellerPathRelease(sqClip);
+      } else if (rounded) {
+        ImpellerDisplayListBuilderClipRoundedRect(builder, &rect, &radii,
+                                                  kImpellerClipOperationIntersect);
+      } else {
+        ImpellerDisplayListBuilderClipRect(builder, &rect, kImpellerClipOperationIntersect);
+      }
+      float tint[4] = {node.imgTint[0], node.imgTint[1], node.imgTint[2], node.imgTint[3]};
+      rni::PaintImage(builder, tex, tw, th, scale, x, y, w, h, node.imgResizeMode,
+                      node.imgHasTint ? tint : nullptr, OwnAlpha(node));
+      ImpellerDisplayListBuilderRestore(builder);
+    }
   }
 
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this

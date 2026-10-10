@@ -56,8 +56,8 @@ const SHIM_TARGETS = {
   'react-native/Libraries/Components/TextInput/TextInputState.js':
     'TextInputState.impeller.js',
   // parity item 12. Image.js self re-exports to undefined on impeller; in a
-  // __DEV__ bundle that crashed LogBox on its first warning. Placeholder
-  // until item 17 (real Image + ImageLoader). See the shim.
+  // __DEV__ bundle that crashed LogBox on its first warning. SC-30: the shim
+  // now mounts the real RCTImageView host component. See the shim.
   'react-native/Libraries/Image/Image.js': 'Image.impeller.js',
   // SC-18. Adds a fontFamily processor (array -> CSS stack); see the shim.
   'react-native/Libraries/Components/View/ReactNativeStyleAttributes.js':

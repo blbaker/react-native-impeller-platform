@@ -53,3 +53,9 @@ g2:button SC-24
 interact:hover SC-25
 interact:groupHover SC-25
 g2:scrollIndicator SC-27
+g2:imageBackground SC-30
+g2:imageContain SC-30
+g2:imageCover SC-30
+g2:imageCenter SC-30
+g2:imageRepeat SC-30
+g2:imageRadius SC-30

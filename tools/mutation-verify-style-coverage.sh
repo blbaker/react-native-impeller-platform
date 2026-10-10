@@ -76,6 +76,14 @@
 #   SC27d  contentOffset.x ignored -> scrollHorizontal (grid 1)
 #   SC28a  spokes do not fade -> activityIndicator (grid 1)
 #   SC28b  colour prop ignored (iOS gray) -> activityIndicator (grid 1)
+#   SC30a  image never painted -> g2:imageBackground
+#   SC30b  tintColor ignored -> imageTint (grid 1)
+#   SC30c  cover scales like contain -> g2:imageCover
+#   SC30d  image not clipped to a square box -> g2:imageCover
+#   SC30e  image not clipped to the rounded box -> g2:imageRadius
+#   SC30f  contain stretched -> g2:imageContain
+#   SC30g  center scales up like contain -> g2:imageCenter
+#   SC30h  repeat stretched -> g2:imageRepeat
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -573,6 +581,56 @@ if want SC28b; then
 echo "== SC28b: colour prop ignored =="
 mutate engine/scenegraph/SceneGraph.cpp "      if (ap->color) colorToFloats(ap->color, node.spColor);" ""
 check SC28b activityIndicator; N=$((N + 1))
+fi
+
+if want SC30a; then
+echo "== SC30a: image never painted =="
+mutate engine/scenegraph/ImagePaint.cpp "  if (texture == nullptr || texW <= 0" "  if (true || texture == nullptr || texW <= 0"
+check SC30a g2:imageBackground; N=$((N + 1))
+fi
+
+if want SC30b; then
+echo "== SC30b: tintColor ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "node.imgHasTint ? tint : nullptr" "nullptr"
+check SC30b imageTint; N=$((N + 1))
+fi
+
+if want SC30c; then
+echo "== SC30c: cover scales like contain =="
+mutate engine/scenegraph/ImagePaint.cpp "    case 0: s = std::max(w / iw, h / ih); break;" "    case 0: s = std::min(w / iw, h / ih); break;"
+check SC30c g2:imageCover; N=$((N + 1))
+fi
+
+if want SC30d; then
+echo "== SC30d: image not clipped to a square box =="
+mutate engine/scenegraph/SceneGraph.cpp "        ImpellerDisplayListBuilderClipRect(builder, &rect, kImpellerClipOperationIntersect);" ""
+check SC30d g2:imageCover; N=$((N + 1))
+fi
+
+if want SC30e; then
+echo "== SC30e: image not clipped to the rounded box =="
+mutate engine/scenegraph/SceneGraph.cpp "      } else if (rounded) {
+        ImpellerDisplayListBuilderClipRoundedRect(builder, &rect, &radii,
+                                                  kImpellerClipOperationIntersect);" "      } else if (rounded) {"
+check SC30e g2:imageRadius; N=$((N + 1))
+fi
+
+if want SC30f; then
+echo "== SC30f: contain stretched =="
+mutate engine/scenegraph/ImagePaint.cpp "if (resizeMode == 0 || resizeMode == 1 || resizeMode == 3) {" "if (resizeMode == 0 || resizeMode == 3) {"
+check SC30f g2:imageContain; N=$((N + 1))
+fi
+
+if want SC30g; then
+echo "== SC30g: center scales up like contain =="
+mutate engine/scenegraph/ImagePaint.cpp "std::min(1.0f, std::min(w / iw, h / ih))" "std::min(w / iw, h / ih)"
+check SC30g g2:imageCenter; N=$((N + 1))
+fi
+
+if want SC30h; then
+echo "== SC30h: repeat stretched =="
+mutate engine/scenegraph/ImagePaint.cpp "  if (resizeMode == 4) {" "  if (false) {"
+check SC30h g2:imageRepeat; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

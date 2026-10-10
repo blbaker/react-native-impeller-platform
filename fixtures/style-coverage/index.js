@@ -10,7 +10,7 @@
 const React = require('react');
 const RN = require('react-native');
 const {
-  AppRegistry, View, Text, ScrollView, ImageBackground, Switch, TextInput,
+  AppRegistry, View, Text, ScrollView, ImageBackground, Image, Switch, TextInput,
   Button, Linking, PlatformColor,
 } = RN;
 const h = React.createElement;
@@ -27,6 +27,8 @@ const txt = (s, style, props) => h(Text, Object.assign({ style: [{ fontSize: 20,
 const frame = (style, ...kids) => h(View, { style: [{ width: 60, height: 60, backgroundColor: GREY }, style] }, ...kids);
 const wbox = (extra) => box([{ backgroundColor: 'white', borderWidth: 4, borderColor: BLACK }, extra]);
 const ti = (extra, props) => h(TextInput, Object.assign({ value: 'ab', style: [{ width: 80, height: 40, fontSize: 16, color: BLACK }, extra] }, props || {}));
+const IMG_8X4 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAFklEQVR42mNg+M8ARGACihiQedSQAABCdh/hJ5B+uAAAAABJRU5ErkJggg==';
+const img8x4 = (resizeMode, extra) => h(Image, { source: { uri: IMG_8X4 }, resizeMode, style: [{ width: 60, height: 60 }, extra] });
 const row = (style, ...kids) => h(View, { style: [{ width: 60, height: 60, flexDirection: 'row', backgroundColor: GREY }, style] }, ...kids);
 const chip = (c, extra) => h(View, { style: [{ width: 20, height: 20, backgroundColor: c }, extra] });
 
@@ -195,6 +197,12 @@ const TESTS = [
     f: () => h(ScrollView, { style: { width: 60, height: 60, backgroundColor: GREY }, showsVerticalScrollIndicator: true, persistentScrollbar: true, indicatorStyle: 'black' }, chip(BLUE, { height: 200 })) },
   { id: 'filterChain', e: 'diff', c: () => box(), f: () => box({ filter: 'brightness(0.5) invert(1)' }) },
   { id: 'fontStack', e: 'diff', c: () => txt('iiMM'), f: () => txt('iiMM', { fontFamily: ['No Such Face', "'Nope Sans'", 'monospace'] }) },
+  // SC-30: an 8x4 PNG, columns 0-1 green, 2-5 red, 6-7 blue. Controls stretch it.
+  { id: 'imageContain', e: 'diff', c: () => img8x4('stretch'), f: () => img8x4('contain') },
+  { id: 'imageCover', e: 'diff', c: () => img8x4('stretch'), f: () => img8x4('cover') },
+  { id: 'imageCenter', e: 'diff', c: () => img8x4('stretch'), f: () => img8x4('center') },
+  { id: 'imageRepeat', e: 'diff', c: () => img8x4('stretch'), f: () => img8x4('repeat') },
+  { id: 'imageRadius', e: 'diff', c: () => img8x4('cover'), f: () => img8x4('cover', { borderRadius: 30 }) },
 ];
 
 const RISKY = [

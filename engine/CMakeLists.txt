@@ -229,6 +229,7 @@ add_executable(rn-impeller
   modules/AccessibilitySettings.cpp
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/modules/AccessibilitySettingsDarwin.mm>
   modules/NetworkingModule.cpp
+  modules/ImageLoaderModule.cpp
   modules/WebSocketModule.cpp
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
@@ -240,6 +241,8 @@ add_executable(rn-impeller
   scenegraph/ScrollIndicators.cpp
   scenegraph/ActivityIndicator.cpp
   scenegraph/Modal.cpp
+  scenegraph/ImagePaint.cpp
+  scenegraph/ImageEvents.cpp
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
   scenegraph/ContentFilters.cpp

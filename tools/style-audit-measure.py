@@ -24,6 +24,7 @@ from style_audit_rules_sc15 import text_shadow_ok  # noqa: E402
 from style_audit_rules_sc16 import head_ok, middle_ok  # noqa: E402
 from style_audit_rules_sc27 import offset_x_ok, offset_y_ok  # noqa: E402
 from style_audit_rules_sc28 import spinner_ok  # noqa: E402
+from style_audit_rules_sc30 import image_ok, image_tint_ok  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 PPM = Path(sys.argv[1])
@@ -509,6 +510,8 @@ STRICT = {
     "scrollHorizontal": offset_x_ok,
     # SC-28
     "activityIndicator": spinner_ok,
+    "image": image_ok,
+    "imageTint": image_tint_ok,
 }
 
 # Mac RULES that the RN source itself cannot meet, REPLACED (not ANDed) here

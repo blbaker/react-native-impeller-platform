@@ -52,7 +52,12 @@ file(GLOB rr_attributedstring_SRC  ${RR}/attributedstring/*.cpp)
 file(GLOB rr_tlm_SRC               ${RR}/textlayoutmanager/*.cpp)
 file(GLOB rr_tlm_cxx_SRC           ${RR}/textlayoutmanager/platform/cxx/react/renderer/textlayoutmanager/*.cpp)
 file(GLOB rr_imagemanager_SRC      ${RR}/imagemanager/*.cpp)
-file(GLOB rr_imagemanager_cxx_SRC  ${RR}/imagemanager/platform/cxx/react/renderer/imagemanager/*.cpp)
+# A19 (SC-30): OUR ImageManager (decodes local sources) replaces the cxx stub,
+# and RN's components/image (ImageShadowNode, ImageProps) is compiled.
+set(rr_imagemanager_cxx_SRC
+  ${CMAKE_SOURCE_DIR}/fabric/platform/impeller/react/renderer/imagemanager/ImageManager.cpp
+  ${CMAKE_SOURCE_DIR}/fabric/ImageStore.cpp)
+file(GLOB rr_comp_image_SRC        ${RR}/components/image/*.cpp)
 file(GLOB rr_telemetry_SRC         ${RR}/telemetry/*.cpp)
 file(GLOB rr_leakchecker_SRC       ${RR}/leakchecker/*.cpp)
 file(GLOB rr_animations_SRC        ${RR}/animations/*.cpp)
@@ -105,7 +110,7 @@ set(reactcommon_fabric_SRC
   ${rr_mounting_SRC} ${rr_mounting_internal_SRC} ${rr_mounting_stubs_SRC}
   ${rr_scheduler_SRC} ${rr_uimanager_SRC} ${rr_uimanager_consistency_SRC}
   ${rr_attributedstring_SRC} ${rr_tlm_SRC} ${rr_tlm_cxx_SRC}
-  ${rr_imagemanager_SRC} ${rr_imagemanager_cxx_SRC}
+  ${rr_imagemanager_SRC} ${rr_imagemanager_cxx_SRC} ${rr_comp_image_SRC}
   ${rr_telemetry_SRC} ${rr_leakchecker_SRC} ${rr_animations_SRC}
   ${rr_css_SRC} ${rr_dom_SRC} ${rr_element_SRC} ${rr_observers_events_SRC}
   ${rr_observers_intersection_SRC} ${rr_observers_mutation_SRC}
@@ -157,6 +162,7 @@ target_include_directories(reactcommon_fabric SYSTEM PUBLIC
 # expecting the top-level imagemanager dir on the path (upstream adds it in the
 # pod/gradle build). PRIVATE so it cannot shadow anything downstream.
 target_include_directories(reactcommon_fabric PRIVATE ${RR}/imagemanager)
+target_include_directories(reactcommon_fabric PRIVATE ${CMAKE_SOURCE_DIR}/fabric ${CMAKE_SOURCE_DIR}/third_party/stb)
 
 # renderer/animated/ includes the codegen'd spec as
 # `<FBReactNativeSpec/FBReactNativeSpecJSI.h>` — i.e. via the PARENT directory —
