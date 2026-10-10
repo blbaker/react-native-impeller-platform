@@ -59,6 +59,9 @@ const SHIM_TARGETS = {
   // __DEV__ bundle that crashed LogBox on its first warning. Placeholder
   // until item 17 (real Image + ImageLoader). See the shim.
   'react-native/Libraries/Image/Image.js': 'Image.impeller.js',
+  // SC-18. Adds a fontFamily processor (array -> CSS stack); see the shim.
+  'react-native/Libraries/Components/View/ReactNativeStyleAttributes.js':
+    'ReactNativeStyleAttributes.impeller.js',
 };
 
 // ---------------------------------------------------------------------------
@@ -298,6 +301,8 @@ function withImpeller(config = {}) {
     const originShim = shimForOrigin(context.originModulePath, resolution.filePath);
     if (originShim) return {type: 'sourceFile', filePath: originShim};
     const shim = shimForResolvedPath(resolution.filePath);
+    // A shim that wraps the real module requires it by path; do not loop it back.
+    if (shim && origin === toPosix(shim)) return resolution;
     return shim ? {type: 'sourceFile', filePath: shim} : resolution;
   }
 

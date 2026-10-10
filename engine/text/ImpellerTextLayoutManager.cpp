@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "text/FitScale.h"
+#include "text/FontFamily.h"
 #include "text/LineHeight.h"
 #include "text/TextStyle.h"
 #include "text/TextTransform.h"
@@ -61,7 +62,8 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
       float fontSize = (attrs.fontSize > 0 ? (float)attrs.fontSize : 14.0f) * scale;
       ImpellerParagraphStyleSetFontSize(style, fontSize);
       if (!attrs.fontFamily.empty()) {
-        ImpellerParagraphStyleSetFontFamily(style, attrs.fontFamily.c_str());
+        ImpellerParagraphStyleSetFontFamily(
+            style, rni::ResolveFontFamily(attrs.fontFamily).c_str());
       }
       // ENG-23: the same setter SceneGraph paints with (text/LineHeight.h).
       ApplyLineHeight(style, (float)attrs.lineHeight * scale, fontSize);

@@ -243,6 +243,7 @@ add_executable(rn-impeller
   scenegraph/BorderDashRounded.cpp
   text/ImpellerTextLayoutManager.cpp
   text/FontRegistry.cpp
+  text/FontFamily.cpp
 )
 
 target_include_directories(rn-impeller PRIVATE

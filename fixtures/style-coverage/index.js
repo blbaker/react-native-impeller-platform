@@ -194,6 +194,7 @@ const TESTS = [
     c: () => h(ScrollView, { style: { width: 60, height: 60, backgroundColor: GREY }, showsVerticalScrollIndicator: false }, chip(BLUE, { height: 200 })),
     f: () => h(ScrollView, { style: { width: 60, height: 60, backgroundColor: GREY }, showsVerticalScrollIndicator: true, persistentScrollbar: true, indicatorStyle: 'black' }, chip(BLUE, { height: 200 })) },
   { id: 'filterChain', e: 'diff', c: () => box(), f: () => box({ filter: 'brightness(0.5) invert(1)' }) },
+  { id: 'fontStack', e: 'diff', c: () => txt('iiMM'), f: () => txt('iiMM', { fontFamily: ['No Such Face', "'Nope Sans'", 'monospace'] }) },
 ];
 
 const RISKY = [

@@ -60,6 +60,7 @@ ARGS=(g2="$WORK/g2.ppm" risky="$WORK/risky.ppm" nw="$WORK/nw.ppm"
       variants-600="$WORK/variants-600.ppm")
 PROPS_ERR="$(cat "$WORK"/*.log | grep -c 'Error while converting prop' || true)"
 echo "   prop-conversion errors across renders: $PROPS_ERR"
+[ "$PROPS_ERR" = 0 ] || { grep -h 'Error while converting prop' "$WORK"/*.log | sort | uniq -c | head -5 >&2; fail "$PROPS_ERR prop-conversion error(s) in the render logs"; }
 
 WINDOWED="${RNI_SC_WINDOWED:-1}"
 if [ "$WINDOWED" = 1 ]; then

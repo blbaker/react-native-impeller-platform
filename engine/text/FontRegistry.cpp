@@ -1,5 +1,7 @@
 #include "text/FontRegistry.h"
 
+#include "text/FontFamily.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -78,6 +80,7 @@ int RegisterFontDirs(ImpellerTypographyContext typography,
       }
     }
     std::sort(files.begin(), files.end());
+    NoteAppFontDir(dir);
     for (const auto& path : files) {
       std::ifstream in(path, std::ios::binary);
       std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)),

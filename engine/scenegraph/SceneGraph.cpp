@@ -28,6 +28,7 @@
 #include "scenegraph/EllipsizeText.h"
 #include "scenegraph/ContentFilters.h"
 #include "text/FitScale.h"
+#include "text/FontFamily.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
@@ -77,7 +78,8 @@ float TextInputLineTop(float y, float h, float blockH, float insetTop,
 // family measure used cannot be dropped from one paint path and not another.
 void ApplyFontFamily(ImpellerParagraphStyle style, const std::string& family) {
   if (!family.empty()) {
-    ImpellerParagraphStyleSetFontFamily(style, family.c_str());
+    ImpellerParagraphStyleSetFontFamily(
+        style, rni::ResolveFontFamily(family).c_str());
   }
 }
 }  // namespace

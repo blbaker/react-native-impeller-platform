@@ -55,6 +55,8 @@
 #   SC16b  middle ellipsis cut at the tail -> ellipsizeMiddle (grid 1)
 #   SC17a  painter ignores the fit scale -> g2:adjustsFontSize
 #   SC17b  fit search always returns the minimum scale -> g2:adjustsFontSize (measure-only height is invisible to ink rules)
+#   SC18a  generic family names not mapped (monospace passes through) -> g2:fontMonospace
+#   SC18b  stack takes its first entry without checking it resolves -> g2:fontStack
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -416,6 +418,18 @@ if want SC17b; then
 echo "== SC17b: fit search returns the minimum scale =="
 mutate engine/text/FitScale.h "  return good;" "  return lo;"
 check SC17b g2:adjustsFontSize; N=$((N + 1))
+fi
+
+if want SC18a; then
+echo "== SC18a: generic families not mapped =="
+mutate engine/text/FontFamily.cpp "    if (!kind.empty()) chosen = Generic(kind);" "    if (false) chosen = Generic(kind);"
+check SC18a g2:fontMonospace; N=$((N + 1))
+fi
+
+if want SC18b; then
+echo "== SC18b: stack entry not checked for existence =="
+mutate engine/text/FontFamily.cpp "names.size() == 1 || Exists(names[i])" "true"
+check SC18b g2:fontStack; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

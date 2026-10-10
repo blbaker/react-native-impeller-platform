@@ -33,3 +33,9 @@ g2:verticalAlign SC-14
 nw:italic SC-14
 g2:textShadowNested SC-15
 g2:adjustsFontSize SC-17
+g2:fontMonospace SC-18
+g2:fontSerif SC-18
+g2:nestedFamily SC-18
+g2:tiMonospace SC-18
+g2:fontStack SC-18
+nw:fontMono SC-18
