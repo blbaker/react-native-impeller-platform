@@ -24,6 +24,7 @@
 #include "scenegraph/BorderRounded.h"
 #include "scenegraph/Outline.h"
 #include "scenegraph/ColorMatrixFilter.h"
+#include "scenegraph/BlendGroup.h"
 #include "scenegraph/ContentFilters.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
@@ -544,6 +545,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       default: node.pointerEvents = 0; break;
     }
     node.hasFilterMatrix = rni::BuildFilterMatrix(props->filter, node.filterMatrix);
+    node.mixBlend = props->mixBlendMode;
+    node.isolate = props->isolation == react::Isolation::Isolate;
     rni::ParseContentFilters(props->filter, node.blurSigma, node.dropShadows);
     node.hasTransform = false;
     node.backfaceHidden = false;
@@ -1737,6 +1740,11 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // just before the transform restore at the end of paintNode. The bounds are
   // a hint only (children may overflow the frame, so it is not the frame);
   // Impeller sizes the offscreen from the content's actual coverage.
+  // A2: mixBlendMode composites this node's whole group onto the backdrop;
+  // isolation:isolate opens the same transparent group with a plain composite.
+  // Opacity and filter layers are groups already.
+  const bool blendLayer = !shadowPass && (node.mixBlend != react::BlendMode::Normal || node.isolate);
+  if (blendLayer) rni::BeginBlendGroup(builder, rni::ToImpellerBlend(node.mixBlend));
   const bool opacityLayer = UsesOpacityLayer(node) && !shadowPass;
   if (opacityLayer) {
     ImpellerPaint layerPaint = ImpellerPaintNew();
@@ -2506,6 +2514,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
   if (opacityLayer) {
     ImpellerDisplayListBuilderRestore(builder);  // item 8: group opacity
+  }
+  if (blendLayer) {
+    ImpellerDisplayListBuilderRestore(builder);  // A2: blend / isolation group
   }
   if (transformed) {
     ImpellerDisplayListBuilderRestore(builder);

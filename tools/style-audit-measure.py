@@ -115,6 +115,25 @@ def at(px, x, y):
     return px[(x, y)]
 
 
+def _green_around(px):
+    """The 60x60 green backdrop shows just outside the 40x40 square (x 40..79, y 41..80)."""
+    return all(px[p][1] > 100 and px[p][0] < 60 and px[p][2] < 60 for p in ((34, 60), (84, 60), (60, 35), (60, 86)))
+
+
+def blend_ok(c, f, d):
+    """SC-13 multiply: red over green is black across the overlap; the control stays red."""
+    return (_green_around(f) and all(max(at(f, x, y)) < 30 for x, y in ((45, 46), (60, 60), (75, 76)))
+            and cls(at(c, 60, 60)) == "red")
+
+
+def isolation_ok(c, f, d):
+    """SC-13 isolate: the red square is not blended with the green grandparent
+    (red, not black), the backdrop still shows around it, and the control (no
+    isolation) multiplies to black."""
+    return (_green_around(f) and all(cls(at(f, x, y)) == "red" for x, y in ((45, 46), (60, 60), (75, 76)))
+            and max(at(c, 60, 60)) < 30)
+
+
 def radial_grid1_ok(px):
     # SC-07: centre red-dominant, corners blue-dominant and symmetric within 6.
     # The 60x60 box spans x 30..89, y 31..90.
@@ -524,8 +543,8 @@ RULES = {
     "filterBrightness": lambda c, f, d: all(abs(a - b) <= 6 for a, b in zip(at(f, 60, 60), (0, 0, 128))) and outside(f) == 0,
     "filterGrayscale": lambda c, f, d: all(abs(a - b) <= 6 for a, b in zip(at(f, 60, 60), (54, 54, 54))) and outside(f) == 0,
     "filterDropShadow": lambda c, f, d: outside(f) > 50,
-    "mixBlendMode": lambda c, f, d: cls(at(f, 60, 60)) == "black",
-    "isolation": lambda c, f, d: cls(at(f, 60, 60)) == "red" and cls(at(c, 60, 60)) == "black",
+    "mixBlendMode": blend_ok,
+    "isolation": isolation_ok,
     "zIndex": lambda c, f, d: cls(at(f, 60, 60)) == "red" and cls(at(c, 60, 60)) == "blue",
     "absNegative": lambda c, f, d: stats(f)["bbox"][:2] == (15, 16),
     "aspectRatio": lambda c, f, d: stats(f)["bbox"][2] - stats(f)["bbox"][0] == 89,

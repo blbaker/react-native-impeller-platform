@@ -102,6 +102,9 @@ struct SceneNode {
   bool hasTransform{false};
   // backfaceVisibility 'hidden' and the transform turns the node away.
   bool backfaceHidden{false};
+  // mixBlendMode (A2) and isolation:isolate; see BlendGroup.h.
+  facebook::react::BlendMode mixBlend{facebook::react::BlendMode::Normal};
+  bool isolate{false};
   // CSS `filter` colour-matrix functions composed into one 4x5 matrix (ColorMatrixFilter.h).
   bool hasFilterMatrix{false};
   std::array<float, 20> filterMatrix{};

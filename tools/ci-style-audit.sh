@@ -43,7 +43,7 @@ LANDED=(
   backfaceHidden:SC-10
   gradientRadial:SC-07
   filterBrightness:SC-11 filterGrayscale:SC-11
-  filterBlur:SC-12 filterDropShadow:SC-12
+  filterBlur:SC-12 filterDropShadow:SC-12 mixBlendMode:SC-13 isolation:SC-13
 )
 # Features the audit measured working on 02cf8ea7; must stay PASS.
 # (aspectRatio and nestedTextSize are font/bundle sensitive across the Mac and

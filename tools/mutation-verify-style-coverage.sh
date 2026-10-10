@@ -41,6 +41,8 @@
 #   SC12c  content shadow offset ignored -> g2:shadowNoBg
 #   SC12d  drop-shadow blur dropped -> filterDropShadow (grid 1; no coverage tile uses drop-shadow)
 #   SC12e  content shadow not tinted (a copy of the content) -> g2:shadowNoBg
+#   SC13a  multiply composited as normal -> mixBlendMode (grid 1)
+#   SC13b  isolation:isolate ignored -> isolation (grid 1)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -316,6 +318,18 @@ if want SC12e; then
 echo "== SC12e: content shadow not tinted =="
 mutate engine/scenegraph/ContentFilters.cpp "ImpellerColorFilterCreateBlendNew(&tint, kImpellerBlendModeSourceIn);" "ImpellerColorFilterCreateBlendNew(&tint, kImpellerBlendModeDestination);"
 check SC12e g2:shadowNoBg; N=$((N + 1))
+fi
+
+if want SC13a; then
+echo "== SC13a: multiply composited as normal =="
+mutate engine/scenegraph/BlendGroup.cpp "    case BlendMode::Multiply: return kImpellerBlendModeMultiply;" "    case BlendMode::Multiply: return kImpellerBlendModeSourceOver;"
+check SC13a mixBlendMode; N=$((N + 1))
+fi
+
+if want SC13b; then
+echo "== SC13b: isolation:isolate ignored =="
+mutate engine/scenegraph/SceneGraph.cpp "(node.mixBlend != react::BlendMode::Normal || node.isolate);" "(node.mixBlend != react::BlendMode::Normal);"
+check SC13b isolation; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then
