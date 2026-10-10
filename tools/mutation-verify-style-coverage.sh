@@ -53,6 +53,8 @@
 #   SC15c  shadow x offset mirrored to -x -> g2:textShadowNested
 #   SC16a  head ellipsis cut at the tail -> ellipsizeHead (grid 1)
 #   SC16b  middle ellipsis cut at the tail -> ellipsizeMiddle (grid 1)
+#   SC17a  painter ignores the fit scale -> g2:adjustsFontSize
+#   SC17b  fit search always returns the minimum scale -> g2:adjustsFontSize (measure-only height is invisible to ink rules)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -402,6 +404,18 @@ if want SC16b; then
 echo "== SC16b: middle ellipsis cut at the tail =="
 mutate engine/scenegraph/EllipsizeText.cpp "const size_t head = mode == 1 ? 0 : (keep + 1) / 2;" "const size_t head = mode == 1 ? 0 : keep;"
 check SC16b ellipsizeMiddle; N=$((N + 1))
+fi
+
+if want SC17a; then
+echo "== SC17a: painter ignores the fit scale =="
+mutate engine/scenegraph/SceneGraph.cpp "    if (s < 1.0f) {" "    if (s < 0.0f) {"
+check SC17a g2:adjustsFontSize; N=$((N + 1))
+fi
+
+if want SC17b; then
+echo "== SC17b: fit search returns the minimum scale =="
+mutate engine/text/FitScale.h "  return good;" "  return lo;"
+check SC17b g2:adjustsFontSize; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

@@ -32,3 +32,4 @@ g2:textAlignVertical SC-14
 g2:verticalAlign SC-14
 nw:italic SC-14
 g2:textShadowNested SC-15
+g2:adjustsFontSize SC-17

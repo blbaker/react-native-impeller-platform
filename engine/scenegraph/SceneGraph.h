@@ -201,6 +201,9 @@ struct SceneNode {
   // numberOfLines. Must be applied at PAINT time as well as measure time, or a
   // clamped label measures one line and paints three.
   int maxLines{0};
+  // adjustsFontSizeToFit / minimumFontScale (SC-17), applied at measure and paint.
+  bool adjustsFit{false};
+  float minFontScale{0.0f};
   // ellipsizeMode. RN default is Tail. Only meaningful together with maxLines >
   // 0 (an unclamped paragraph never truncates), and applied at PAINT time via
   // ImpellerParagraphStyleSetEllipsis so a clamped line ends in "…" rather than

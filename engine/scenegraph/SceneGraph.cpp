@@ -27,6 +27,7 @@
 #include "scenegraph/BlendGroup.h"
 #include "scenegraph/EllipsizeText.h"
 #include "scenegraph/ContentFilters.h"
+#include "text/FitScale.h"
 #include "text/LineHeight.h"
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
@@ -590,11 +591,15 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     node.decoStyle = 0;
     node.hasDecoColor = false;
     node.maxLines = 0;
+    node.adjustsFit = false;
+    node.minFontScale = 0.0f;
     node.ellipsizeMode = 0;
     node.textTransform = 0;
     if (const auto* pp =
             dynamic_cast<const react::ParagraphProps*>(view.props.get())) {
       node.maxLines = pp->paragraphAttributes.maximumNumberOfLines;
+      node.adjustsFit = pp->paragraphAttributes.adjustsFontSizeToFit;
+      node.minFontScale = (float)pp->paragraphAttributes.minimumFontScale;
       // ellipsizeMode is only consulted when the paragraph is line-clamped; an
       // unclamped Text never truncates, so the mode is irrelevant there.
       node.ellipsizeMode = (int)pp->paragraphAttributes.ellipsizeMode;
@@ -1596,7 +1601,40 @@ static bool SameShadow(const TextRun& a, const TextRun& b) {
          a.shadowSigma == b.shadowSigma && std::equal(a.shadowColor, a.shadowColor + 4, b.shadowColor);
 }
 
+static std::vector<TextRun> ScaleRuns(const std::vector<TextRun>& runs, float s) {
+  std::vector<TextRun> out = runs;
+  for (TextRun& r : out) {
+    r.fontSize *= s;
+    r.lineHeight *= s;
+  }
+  return out;
+}
+
 ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w, int shadow) {
+  // SC-17: shrink every run by the factor measure found for this width.
+  if (node.adjustsFit) {
+    const auto shape = [&](float s) {
+      SceneNode plain = node;
+      plain.maxLines = 0;
+      plain.adjustsFit = false;
+      plain.ellipsizeMode = 0;
+      plain.runs = ScaleRuns(node.runs, s);
+      ImpellerParagraph p = buildRunParagraphFrom(plain, plain.runs, w, -1);
+      std::pair<int, float> r{0, 0.0f};
+      if (p) {
+        r = {(int)ImpellerParagraphGetLineCount(p), ImpellerParagraphGetLongestLineWidth(p)};
+        ImpellerParagraphRelease(p);
+      }
+      return r;
+    };
+    const float s = rni::FitFontScale(true, node.minFontScale, node.maxLines, w, shape);
+    if (s < 1.0f) {
+      SceneNode scaled = node;
+      scaled.adjustsFit = false;
+      scaled.runs = ScaleRuns(node.runs, s);
+      return buildRunParagraph(scaled, w, shadow);
+    }
+  }
   // SC-16: Impeller only truncates at the tail, so head/middle are cut by hand.
   if (node.maxLines == 1 && (node.ellipsizeMode == 1 || node.ellipsizeMode == 3)) {
     const auto widthOf = [&](const std::vector<TextRun>& r) {
