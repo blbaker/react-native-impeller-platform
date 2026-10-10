@@ -179,51 +179,77 @@ BgLayer RadialLayer(const react::RadialGradient& rg, float w, float h) {
   return L;
 }
 
+template <typename T>
+const T* Cycled(const std::vector<T>& v, size_t i) {
+  return v.empty() ? nullptr : &v[i % v.size()];
+}
+
 }  // namespace
 
 std::vector<BgLayer> BuildBackgroundLayers(const std::vector<react::BackgroundImage>& images,
+                                           const std::vector<react::BackgroundSize>& sizes,
+                                           const std::vector<react::BackgroundPosition>& positions,
+                                           const std::vector<react::BackgroundRepeat>& repeats,
                                            float w, float h) {
   std::vector<BgLayer> out;
-  for (const auto& image : images) {
+  for (size_t i = 0; i < images.size(); ++i) {
+    const auto& image = images[i];
+    BgTiling tiling = ComputeTiling(Cycled(sizes, i), Cycled(positions, i), Cycled(repeats, i), w, h);
+    const float tw = tiling.tw, th = tiling.th;
     BgLayer L = std::holds_alternative<react::LinearGradient>(image)
-                    ? LinearLayer(std::get<react::LinearGradient>(image), w, h)
-                    : RadialLayer(std::get<react::RadialGradient>(image), w, h);
-    if (L.stops.size() >= 2) out.push_back(std::move(L));
+                    ? LinearLayer(std::get<react::LinearGradient>(image), tw, th)
+                    : RadialLayer(std::get<react::RadialGradient>(image), tw, th);
+    if (L.stops.size() < 2) continue;
+    L.tiling = std::move(tiling);
+    L.boxW = w;
+    L.boxH = h;
+    out.push_back(std::move(L));
   }
   return out;
 }
 
-void PaintBackgroundLayers(const std::vector<BgLayer>& layers, float x, float y,
-                           float opacity,
+void PaintBackgroundLayers(ImpellerDisplayListBuilder builder, const std::vector<BgLayer>& layers,
+                           float x, float y, float opacity,
                            const std::function<void(ImpellerPaint)>& fillShape) {
   for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
     std::vector<ImpellerColor> colors;
     for (const auto& c : it->colors) {
       colors.push_back({c[0], c[1], c[2], c[3] * opacity, kImpellerColorSpaceSRGB});
     }
-    ImpellerColorSource src = nullptr;
-    if (it->radial) {
-      const ImpellerPoint origin = {0.0f, 0.0f};
-      const ImpellerMatrix m = {{it->rx, 0, 0, 0, 0, it->ry, 0, 0, 0, 0, 1, 0,
-                                 x + it->center[0], y + it->center[1], 0, 1}};
-      src = ImpellerColorSourceCreateRadialGradientNew(
-          &origin, 1.0f, (uint32_t)colors.size(), colors.data(), it->stops.data(),
-          kImpellerTileModeClamp, &m);
-    } else {
-      const ImpellerPoint a = {x + it->start[0], y + it->start[1]};
-      const ImpellerPoint b = {x + it->end[0], y + it->end[1]};
-      src = ImpellerColorSourceCreateLinearGradientNew(
-          &a, &b, (uint32_t)colors.size(), colors.data(), it->stops.data(),
-          kImpellerTileModeClamp, nullptr);
+    for (const auto& o : it->tiling.origins) {
+      const float tx = x + o[0], ty = y + o[1];
+      ImpellerColorSource src = nullptr;
+      if (it->radial) {
+        const ImpellerPoint origin = {0.0f, 0.0f};
+        const ImpellerMatrix m = {{it->rx, 0, 0, 0, 0, it->ry, 0, 0, 0, 0, 1, 0,
+                                   tx + it->center[0], ty + it->center[1], 0, 1}};
+        src = ImpellerColorSourceCreateRadialGradientNew(
+            &origin, 1.0f, (uint32_t)colors.size(), colors.data(), it->stops.data(),
+            kImpellerTileModeClamp, &m);
+      } else {
+        const ImpellerPoint a = {tx + it->start[0], ty + it->start[1]};
+        const ImpellerPoint b = {tx + it->end[0], ty + it->end[1]};
+        src = ImpellerColorSourceCreateLinearGradientNew(
+            &a, &b, (uint32_t)colors.size(), colors.data(), it->stops.data(),
+            kImpellerTileModeClamp, nullptr);
+      }
+      if (src == nullptr) continue;
+      // Its own paint: a colour source cannot be cleared once set, so a shared
+      // paint would gradient-fill everything drawn after it.
+      ImpellerPaint gp = ImpellerPaintNew();
+      ImpellerPaintSetColorSource(gp, src);
+      const bool clip = !it->tiling.single;
+      if (clip) {
+        // Clip to the tile (the box shape fill clips itself to the box).
+        const ImpellerRect cell = {tx, ty, it->tiling.tw, it->tiling.th};
+        ImpellerDisplayListBuilderSave(builder);
+        ImpellerDisplayListBuilderClipRect(builder, &cell, kImpellerClipOperationIntersect);
+      }
+      fillShape(gp);
+      if (clip) ImpellerDisplayListBuilderRestore(builder);
+      ImpellerPaintRelease(gp);
+      ImpellerColorSourceRelease(src);
     }
-    if (src == nullptr) continue;
-    // Its own paint: a colour source cannot be cleared once set, so a shared
-    // paint would gradient-fill everything drawn after it.
-    ImpellerPaint gp = ImpellerPaintNew();
-    ImpellerPaintSetColorSource(gp, src);
-    fillShape(gp);
-    ImpellerPaintRelease(gp);
-    ImpellerColorSourceRelease(src);
   }
 }
 

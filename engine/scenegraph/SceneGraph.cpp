@@ -541,7 +541,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
 
     // experimental_backgroundImage: linear and radial layers (BackgroundLayers.cpp).
     node.bgLayers = BuildBackgroundLayers(
-        props->backgroundImage, (float)view.layoutMetrics.frame.size.width,
+        props->backgroundImage, props->backgroundSize, props->backgroundPosition,
+        props->backgroundRepeat, (float)view.layoutMetrics.frame.size.width,
         (float)view.layoutMetrics.frame.size.height);
   }
 
@@ -1861,7 +1862,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     fillBox();
   }
   if (!node.bgLayers.empty()) {
-    PaintBackgroundLayers(node.bgLayers, x, y, OwnAlpha(node), [&](ImpellerPaint gp) {
+    PaintBackgroundLayers(builder, node.bgLayers, x, y, OwnAlpha(node), [&](ImpellerPaint gp) {
       if (continuous && drawBoxWith(gp)) return;
       if (rounded) {
         ImpellerDisplayListBuilderDrawRoundedRect(builder, &rect, &radii, gp);

@@ -13,3 +13,5 @@ g2:gradientOverBgColor SC-07
 g2:gradientLayers SC-07
 g2:gradientColorHint SC-07
 nw:gradientRadial SC-07
+g2:backgroundSize SC-08
+g2:backgroundPosition SC-08

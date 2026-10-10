@@ -22,6 +22,9 @@
 #   SC07b  only one image layer painted -> g2:gradientLayers
 #   SC07c  colour hints ignored -> g2:gradientColorHint
 #   SC07d  radial gradients painted as linear -> nw:gradientRadial
+#   SC08a  backgroundSize ignored (tile = box) -> g2:backgroundSize
+#   SC08b  backgroundPosition ignored (offset 0) -> g2:backgroundPosition
+#   SC08c  backgroundRepeat ignored (one tile) -> g2:backgroundSize
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -181,6 +184,25 @@ if want SC07d; then
 echo "== SC07d: radial gradients painted as linear =="
 mutate engine/scenegraph/BackgroundLayers.cpp "    if (it->radial) {" "    if (false && it->radial) {"
 check SC07d nw:gradientRadial; N=$((N + 1))
+fi
+
+if want SC08a; then
+echo "== SC08a: backgroundSize ignored =="
+mutate engine/scenegraph/BackgroundTiles.cpp "  t.tw = std::max(t.tw, 1.0f);" "  t.tw = std::max(w, 1.0f);"
+check SC08a g2:backgroundSize; N=$((N + 1))
+fi
+
+if want SC08b; then
+echo "== SC08b: backgroundPosition ignored =="
+mutate engine/scenegraph/BackgroundTiles.cpp "  const float ox = AxisOffset(pos.left, pos.right, w, t.tw);" "  const float ox = 0.0f * AxisOffset(pos.left, pos.right, w, t.tw);"
+mutate engine/scenegraph/BackgroundTiles.cpp "  const float oy = AxisOffset(pos.top, pos.bottom, h, t.th);" "  const float oy = 0.0f * AxisOffset(pos.top, pos.bottom, h, t.th);"
+check SC08b g2:backgroundPosition; N=$((N + 1))
+fi
+
+if want SC08c; then
+echo "== SC08c: backgroundRepeat ignored =="
+mutate engine/scenegraph/BackgroundTiles.cpp "  if (style == S::NoRepeat) {" "  if (style == S::NoRepeat || style == S::Repeat) {"
+check SC08c g2:backgroundSize; N=$((N + 1))
 fi
 
 if [ -n "${ONLY:-}" ]; then

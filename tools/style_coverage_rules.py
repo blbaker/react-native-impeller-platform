@@ -326,3 +326,5 @@ import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from style_coverage_rules_sc07 import RULES as _SC07  # noqa: E402
 RULES.update(_SC07)
+from style_coverage_rules_sc08 import RULES as _SC08  # noqa: E402
+RULES.update(_SC08)
