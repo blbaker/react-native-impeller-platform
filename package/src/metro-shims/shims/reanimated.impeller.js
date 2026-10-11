@@ -1,6 +1,6 @@
 'use strict';
 // ENG-19 (moved from HostApp's app-level metro-shims/reanimated-stub.js).
-// INERT react-native-reanimated for the `impeller` platform.
+// react-native-reanimated for the `impeller` platform.
 //
 // WHY: the engine vends no Reanimated / Worklets native module, so the real
 // package cannot initialise, and an app that does not install it cannot even
@@ -8,14 +8,17 @@
 // from native/reanimated.js on every className render that carries a
 // transition/animation, and Gluestack's motion parts import it at module top.
 //
-// WHAT IT DOES: every animated component is the plain RN component, every
-// shared value is a plain {value} box, every animation helper returns its
-// target, every layout-animation preset is a chainable no-op. Styles land at
-// their final value with no motion. Resolved only when the app has NOT
+// WHAT IT DOES (SC-26): animated components are wrappers that re-render on a
+// JS-thread clock, shared values and with* helpers really animate, and
+// react-native-css transitions / animate-* move. Layout-animation presets stay
+// chainable no-ops. Resolved only when the app has NOT
 // installed react-native-reanimated itself (see metro-shims/index.js).
 const RN = require('react-native');
-
-const id = (c) => c;
+const {createAnimatedComponent: animated} = require('./reanimated/component');
+const hooks = require('./reanimated/hooks');
+const values = require('./reanimated/values');
+const {Easing: StubEasing, cubicBezier, cssSteps} = require('./reanimated/easing');
+const {interpolate: interp} = require('./reanimated/interpolate');
 
 // Chainable layout-animation builder: FadeIn.duration(200).delay(50) etc. all
 // return the same inert object.
@@ -25,22 +28,21 @@ const preset = new Proxy(function () {}, {
 });
 
 const Animated = {
-  View: RN.View,
-  Text: RN.Text,
-  Image: RN.Image,
-  ScrollView: RN.ScrollView,
-  FlatList: RN.FlatList,
-  createAnimatedComponent: id,
+  View: animated(RN.View),
+  Text: animated(RN.Text),
+  Image: animated(RN.Image),
+  ScrollView: animated(RN.ScrollView),
+  FlatList: animated(RN.FlatList),
+  createAnimatedComponent: animated,
 };
 
 const sharedValue = (v) => ({value: v, get: () => v, set: () => {}, modify: () => {}});
-const Easing = new Proxy({}, {get: () => () => 'linear'});
 
 module.exports = {
   __esModule: true,
   __impellerStub: true,
   default: Animated,
-  createAnimatedComponent: id,
+  createAnimatedComponent: animated,
   // layout-animation presets Gluestack's parts reference
   FadeIn: preset,
   FadeOut: preset,
@@ -60,35 +62,29 @@ module.exports = {
   SlideOutRight: preset,
   Layout: preset,
   LinearTransition: preset,
-  // hooks
-  useSharedValue: sharedValue,
-  useDerivedValue: (f) => sharedValue(f()),
-  useAnimatedStyle: (f) => f(),
-  useAnimatedProps: (f) => f(),
+  // hooks and animation helpers (JS-thread implementation, see ./reanimated/)
+  useSharedValue: hooks.useSharedValue,
+  useDerivedValue: hooks.useDerivedValue,
+  useAnimatedStyle: hooks.useAnimatedStyle,
+  useAnimatedProps: hooks.useAnimatedProps,
   useAnimatedRef: () => ({current: null}),
-  useAnimatedReaction: () => {},
-  useAnimatedScrollHandler: () => () => {},
-  useReducedMotion: () => true,
-  // animation helpers: land on the target immediately
-  withTiming: (v) => v,
-  withSpring: (v) => v,
-  withDecay: (cfg) => (cfg && cfg.velocity) || 0,
-  withDelay: (_d, v) => v,
-  withRepeat: (v) => v,
-  withSequence: (...vs) => vs[vs.length - 1],
-  cancelAnimation: () => {},
+  useAnimatedReaction: hooks.useAnimatedReaction,
+  useAnimatedScrollHandler: hooks.useAnimatedScrollHandler,
+  useReducedMotion: () => false,
+  withTiming: values.withTiming,
+  withSpring: values.withSpring,
+  withDecay: values.withDecay,
+  withDelay: values.withDelay,
+  withRepeat: values.withRepeat,
+  withSequence: values.withSequence,
+  cancelAnimation: values.cancelAnimation,
   runOnJS: (f) => f,
   runOnUI: (f) => f,
-  interpolate: (x, input, output) => {
-    if (!Array.isArray(input) || !Array.isArray(output) || input.length < 2) return x;
-    const [a, b] = input;
-    const [c, d] = output;
-    return b === a ? c : c + ((x - a) * (d - c)) / (b - a);
-  },
+  interpolate: interp,
   Extrapolation: {CLAMP: 'clamp', EXTEND: 'extend', IDENTITY: 'identity'},
   ReduceMotion: {System: 'system', Always: 'always', Never: 'never'},
-  Easing,
+  Easing: StubEasing,
   // CSS-animation timing helpers react-native-css reads
-  cubicBezier: () => 'ease',
-  steps: () => 'linear',
+  cubicBezier,
+  steps: cssSteps,
 };
