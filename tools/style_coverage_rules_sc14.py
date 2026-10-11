@@ -47,11 +47,25 @@ def _stem_lean(pts, lo=0.45):
     return min(top) - min(bot) if top and bot else None
 
 
+def _ab_split(ctl):
+    """First column of 'BB' in the control's 'AABB': the middle of the gap
+    between the 2nd and 3rd ink column runs. A fixed fraction of the ink width
+    lands inside the 2nd 'A' on faces with a wide 'A' (Segoe UI, SC-40)."""
+    cols = sorted({x for x, _ in _ink(ctl, -22, 90)})
+    runs = []
+    for x in cols:
+        if runs and x == runs[-1][1] + 1:
+            runs[-1][1] = x
+        else:
+            runs.append([x, x])
+    if len(runs) == 4:
+        return (runs[1][1] + runs[2][0] + 1) // 2
+    return cols[0] + int((cols[-1] - cols[0]) * 0.52)
+
+
 def _nested_italic(ctl, feat):
     # 'AA' upright then 'BB' italic. The split is 52% of the control's ink.
-    ci = _ink(ctl, -22, 90)
-    cb = bbox(ci)
-    split = cb[0] + int((cb[2] - cb[0]) * 0.52)
+    split = _ab_split(ctl)
     cr = _slant(_ink(ctl, split, 90))
     fr = _slant(_ink(feat, split, 90))
     fl = _slant(_ink(feat, -22, split))
@@ -68,8 +82,7 @@ def _nested_italic(ctl, feat):
 
 def _nested_opacity(ctl, feat):
     # 'AA' stays black, 'BB' (opacity 0.2) lands on a light grey, still visible.
-    cb = bbox(_ink(ctl, -22, 90))
-    split = cb[0] + int((cb[2] - cb[0]) * 0.52)
+    split = _ab_split(ctl)
 
     def darkest(s, x0, x1):
         return min(_lum(s.px(x, y)) for y in range(-31, 105) for x in range(x0, x1))

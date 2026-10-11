@@ -107,4 +107,33 @@ done
 [ "$UNGUARDED" = "0" ] || exit 1
 echo "apply-win-patches: RN_EXPORT — ${GUARDED} definitions, all #ifndef-guarded (override is safe)"
 
+# ---------------------------------------------------------------------------
+# PATCH 3 — `&(YogaLayoutableShadowNode::yogaNode_)` in a class template.
+#
+# BaseTextInputShadowNode.h (RN 0.86) passes the dependent base's member as
+# `&(Base::member)`. Standard C++ reads the parenthesised form as the address
+# of THIS object's member; MSVC instead forms a pointer-to-member and fails
+# with C2664 "cannot convert from 'facebook::yoga::Node
+# facebook::react::YogaLayoutableShadowNode::*' to 'YGNodeConstRef'".
+# `this->Base::member` names the identical object on every compiler, so the
+# rewrite is behaviour-neutral on Linux/darwin too. Anchor-checked: once the
+# old form is gone the new one must be present, or the patch target moved.
+# ---------------------------------------------------------------------------
+python3 - "$RC" <<'PY'
+import sys, pathlib
+rc = pathlib.Path(sys.argv[1])
+f = rc / "react/renderer/components/textinput/BaseTextInputShadowNode.h"
+old = "&(YogaLayoutableShadowNode::yogaNode_)"
+new = "&(this->YogaLayoutableShadowNode::yogaNode_)"
+text = f.read_text(encoding="utf-8")
+n_old = text.count(old)
+if n_old:
+    f.write_text(text.replace(old, new), encoding="utf-8")
+    print(f"apply-win-patches: yogaNode_ pointer-to-member — patched {n_old} site(s)")
+elif text.count(new) == 2:
+    print("apply-win-patches: yogaNode_ pointer-to-member — nothing to do (already applied)")
+else:
+    sys.exit("apply-win-patches: FAIL — BaseTextInputShadowNode.h anchor not found (RN moved it)")
+PY
+
 echo "APPLY_WIN_PATCHES_OK"

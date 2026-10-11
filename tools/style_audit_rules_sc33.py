@@ -24,9 +24,11 @@ def _bands(px):
 
 
 def _glyphs(px, band):
-    """Column runs of dark ink inside one band: [(x0, x1), ...] left to right."""
+    """Column runs of ink (lum < 180) inside one band: [(x0, x1), ...] left to
+    right. Not _dark: Segoe UI's '1' flag joins its stem only through lum
+    140..180 pixels, so lum < 140 splits one '1' into two runs (SC-40)."""
     y0, y1 = band
-    cols = sorted({x for (x, y), v in px.items() if y0 <= y <= y1 and _dark(v)})
+    cols = sorted({x for (x, y), v in px.items() if y0 <= y <= y1 and sum(v) / 3 < 180})
     out = []
     for x in cols:
         if out and x == out[-1][1] + 1:

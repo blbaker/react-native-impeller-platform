@@ -97,6 +97,11 @@ if(OpenSSL_FOUND)
   add_library(rc_ssl INTERFACE)
   target_link_libraries(rc_ssl INTERFACE OpenSSL::SSL OpenSSL::Crypto)
   target_compile_definitions(rc_ssl INTERFACE RNI_WITH_TLS=1)
+elseif(WIN32)
+  # The source fallback below is a Unix config+make build cmd.exe cannot run.
+  # Build without TLS: NetworkingModule refuses https:// with a clear error.
+  message(STATUS "rc_ssl: Windows without OpenSSL; building WITHOUT TLS (http only)")
+  add_library(rc_ssl INTERFACE)
 else()
   message(STATUS "rc_ssl: no system OpenSSL; building from source")
   FetchContent_Declare(openssl_src

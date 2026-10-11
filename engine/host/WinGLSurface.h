@@ -55,6 +55,10 @@ struct WinGl {
   void(APIENTRY* GenFramebuffers)(GLsizei, GLuint*);
   void(APIENTRY* BindFramebuffer)(GLenum, GLuint);
   void(APIENTRY* FramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
+  void(APIENTRY* GenRenderbuffers)(GLsizei, GLuint*);
+  void(APIENTRY* BindRenderbuffer)(GLenum, GLuint);
+  void(APIENTRY* RenderbufferStorage)(GLenum, GLenum, GLsizei, GLsizei);
+  void(APIENTRY* FramebufferRenderbuffer)(GLenum, GLenum, GLenum, GLuint);
   GLenum(APIENTRY* CheckFramebufferStatus)(GLenum);
   void(APIENTRY* ReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
   GLenum(APIENTRY* GetError)(void);
@@ -70,6 +74,9 @@ class WinGLSurface {
 
   ImpellerContext context() const { return context_; }
   ImpellerSurface surface() const { return surface_; }
+  // Same contract as HeadlessSurface::hasDrawSurface (main.cpp gates every
+  // draw/readback on it); WinGLSurface has no degraded no-FBO mode.
+  bool hasDrawSurface() const { return surface_ != nullptr; }
   ImpellerTypographyContext typography() const { return typography_; }
   int width() const { return width_; }
   int height() const { return height_; }
@@ -103,6 +110,7 @@ class WinGLSurface {
   void* eglContext_{nullptr};  // EGLContext
   uint32_t texture_{0};
   uint32_t fbo_{0};
+  uint32_t depthStencil_{0};
   ImpellerContext context_{nullptr};
   ImpellerSurface surface_{nullptr};
   ImpellerTypographyContext typography_{nullptr};

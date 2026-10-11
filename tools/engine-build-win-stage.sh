@@ -28,6 +28,8 @@ WSL_STAGE="/mnt/c/Devel/rni-win-build/stage/bin"
 fail() { echo "engine-build-win: FAIL — $*" >&2; exit 1; }
 
 [ "$ARCH" = "x64" ] || fail "only x64 is supported on Windows (asked for $ARCH)"
+# Non-login WSL shells (systemd units) do not append the Windows PATH.
+export PATH="$PATH:/mnt/c/Windows/System32"
 command -v cmd.exe >/dev/null || fail "cmd.exe not on PATH — this must run from WSL"
 
 echo "engine-build-win: syncing sources to the Windows side"

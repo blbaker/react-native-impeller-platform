@@ -119,6 +119,10 @@ bool WinGLSurface::loadAngle(std::string* error) {
       !G(&gl_.GenFramebuffers, "glGenFramebuffers") ||
       !G(&gl_.BindFramebuffer, "glBindFramebuffer") ||
       !G(&gl_.FramebufferTexture2D, "glFramebufferTexture2D") ||
+      !G(&gl_.GenRenderbuffers, "glGenRenderbuffers") ||
+      !G(&gl_.BindRenderbuffer, "glBindRenderbuffer") ||
+      !G(&gl_.RenderbufferStorage, "glRenderbufferStorage") ||
+      !G(&gl_.FramebufferRenderbuffer, "glFramebufferRenderbuffer") ||
       !G(&gl_.CheckFramebufferStatus, "glCheckFramebufferStatus") ||
       !G(&gl_.ReadPixels, "glReadPixels") ||
       !G(&gl_.GetError, "glGetError") ||
@@ -202,6 +206,16 @@ bool WinGLSurface::init(int width, int height, std::string* error) {
   gl_.BindFramebuffer(GL_FRAMEBUFFER, fbo_);
   gl_.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            texture_, 0);
+  // SC-40: without a stencil attachment every clip (rounded clips, per-side
+  // borders, image radius) and every concave fill is silently a no-op; same
+  // packed depth-stencil HeadlessSurface attaches on linux/darwin.
+  gl_.GenRenderbuffers(1, &depthStencil_);
+  gl_.BindRenderbuffer(GL_RENDERBUFFER, depthStencil_);
+  gl_.RenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width_, height_);
+  gl_.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+                              depthStencil_);
+  gl_.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
+                              depthStencil_);
   if (gl_.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
     return fail("FBO incomplete");
   }

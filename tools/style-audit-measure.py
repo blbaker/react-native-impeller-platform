@@ -26,6 +26,7 @@ from style_audit_rules_sc27 import offset_x_ok, offset_y_ok  # noqa: E402
 from style_audit_rules_sc28 import spinner_ok  # noqa: E402
 from style_audit_rules_sc30 import image_ok, image_tint_ok  # noqa: E402
 from style_audit_rules_sc33 import letter_spacing_ok, tabular_ok  # noqa: E402
+from style_audit_rules_sc40 import line_at, is_reddish, any_dark  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 PPM = Path(sys.argv[1])
@@ -298,9 +299,10 @@ def row_runs(px, y, x0, x1, want=lambda v: ink(v)):
     return sum(1 for i, v in enumerate(vals) if v and (i == 0 or not vals[i - 1]))
 
 
-def full_rule(px, y, x0, x1, want=lambda v: ink(v) and cls(v) == "black"):
-    """Row y is one unbroken `want` line spanning the text width x0..x1."""
-    return all(want(px[(x, y)]) for x in range(x0, x1 + 1))
+def full_rule(px, y, x0, x1, cover=None):
+    """Rows y..y+1 hold one unbroken black line spanning x0..x1, judged on ink
+    coverage (SC-40: a 1.3 px Segoe UI underline never makes a solid row)."""
+    return line_at(px, y, x0, x1, cover) if cover else line_at(px, y, x0, x1)
 
 
 def glyphs_same(c, f, y0, y1):
@@ -334,13 +336,13 @@ def deco_color_ok(c, f, d):
     the glyphs above keep their own colour."""
     cb = stats(c)["bbox"]
     under = [y for y in range(cb[1], cb[3] + 1) if full_rule(c, y, cb[0], cb[2])]
-    red = [(x, y) for (x, y), v in f.items() if cls(v) == "red"]
+    red = [(x, y) for (x, y), v in f.items() if is_reddish(v)]
     if not under or not red:
         return False
-    if not all(min(under) - 1 <= y <= max(under) + 1 for _, y in red):
+    # full_rule rows start a 2-row window, so the line may reach max(under) + 1.
+    if not all(min(under) - 1 <= y <= max(under) + 2 for _, y in red):
         return False
-    is_red = lambda v: cls(v) == "red"
-    dashes = max(row_runs(f, y, cb[0], cb[2], is_red) for y in {y for _, y in red})
+    dashes = max(row_runs(f, y, cb[0], cb[2], is_reddish) for y in {y for _, y in red})
     return dashes >= 4 and glyphs_same(c, f, cb[1], min(under) - 2)
 
 
@@ -422,6 +424,10 @@ def _box_colours(px, box):
 
 
 def nested_color_ok(c, f, d):
+    return any_dark(lambda bl: _nested_color(c, f, bl), blobs)
+
+
+def _nested_color(c, f, blobs):
     """Item 14, 'AA' + nested red 'BB'. The four glyph boxes match the
     control's within 1 px (one paragraph, so the inner run does not move),
     the first two glyphs have black ink and no red, and the last two have
@@ -438,6 +444,10 @@ def nested_color_ok(c, f, d):
 
 
 def nested_size_ok(c, f, d):
+    return any_dark(lambda bl: _nested_size(c, f, bl), blobs)
+
+
+def _nested_size(c, f, blobs):
     """Item 14, 'AA' at 14 pt + nested 'AA' at 30 pt, on ONE line. The FIRST
     glyph keeps the control's 14 pt height (within 1 px), the LAST is at
     least 1.8x taller, both bottoms sit on one baseline (within 1 px), and
@@ -540,8 +550,13 @@ STRICT = {
 #   when the line WRAPS, which is what the old all-30pt paint did (Mac
 #   baseline bbox height 56). Kept: the Mac's "black < 450" half. Replaced:
 #   the height half, by per-glyph heights on one baseline (nested_size_ok).
+#   decorationColor: the Mac counts pure-red pixels. A thin dashed underline
+#   (Segoe UI, ~1.3 px at a fractional y) has none at all, every pixel is red
+#   blended with white. Replaced by "any red-dominant pixel"; the STRICT rule
+#   still demands >= 4 red dashes on the control's underline rows (SC-40).
 CORRECTED = {
     "tabularNums": tabular_ok,  # SC-33: glyph pitch, not ink width
+    "decorationColor": lambda c, f, d: any(is_reddish(v) for v in f.values()),
     "borderDashed": lambda c, f, d: edge_runs(f, 32) >= 4,
     "nestedTextSize": lambda c, f, d: stats(f)["counts"].get("black", 0) < 450
     and nested_size_ok(c, f, d),

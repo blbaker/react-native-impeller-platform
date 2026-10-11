@@ -64,6 +64,14 @@ KEEP=(
 )
 
 fail() { echo "STYLE_AUDIT_GATE_FAIL: $*" >&2; exit 1; }
+# RNI_EXPECT_PLATFORM=win32|darwin|linux: every render log must prove that engine ran.
+EXPECT="${RNI_EXPECT_PLATFORM:-}"
+assert_platform() {  # log
+  [ -n "$EXPECT" ] || return 0
+  grep -qx "rn-impeller: platform=$EXPECT" "$1" \
+    || fail "$(basename "$1"): want platform=$EXPECT, log says '$(grep -m1 -o 'platform=[a-z0-9]*' "$1" || echo none)'"
+  [ "$EXPECT" != win32 ] || grep -q 'angle_backend=D3D11' "$1" || fail "$(basename "$1"): win32 run did not render through ANGLE D3D11"
+}
 
 [ -s "$BUNDLE" ] || fail "no bundle at $BUNDLE (tools/build-style-audit-bundle.sh)"
 OS="$(uname -s)"
@@ -94,6 +102,7 @@ grep -qE 'scene_nodes=[1-9][0-9]{2}' "$LOG" \
 grep -q "supersample_rnsvg=$SS\$" "$LOG" \
   || fail "supersample not pinned to $SS ($(grep -m1 supersample_rnsvg "$LOG"))"
 [ -s "$SHOT" ] || fail "no screenshot"
+assert_platform "$LOG"
 
 python3 "$ROOT/tools/style-audit-measure.py" "$SHOT" "$ROOT/fixtures/style-audit/index.js" > "$WORK/tiles.txt"
 verdict() { awk -v t="$1" '$1=="TILE" && $3==t {print $4}' "$WORK/tiles.txt"; }
@@ -136,6 +145,7 @@ crun() {  # name, --type spec
   local rc=$?
   set -e
   [ "$rc" -eq 0 ] || { tail -10 "$WORK/$1.log" >&2; fail "C: $1 run exited $rc"; }
+  assert_platform "$WORK/$1.log"
 }
 crun plain '790,1865:<SA><COPY>'
 grep -q 'clipboard op=copy bytes=3' "$WORK/plain.log" \
@@ -168,6 +178,7 @@ srun() {  # name, scene, extra args...
   local rc=$?
   set -e
   [ "$rc" -eq 0 ] || { tail -10 "$WORK/$name.log" >&2; fail "D: $name run exited $rc"; }
+  assert_platform "$WORK/$name.log"
 }
 kv() { echo "$1" | tr ' ' '\n' | awk -F= -v k="$2" '$1==k {print $2}'; }
 srun sel-ctl select-control
@@ -211,4 +222,4 @@ echo "   sel-tap: $mt"
 [ "$(kv "$mt" HL)" -eq 0 ] || fail "D: sel-tap: a press with no drag painted a highlight"
 ! grep -q 'clipboard op=copy-text' "$WORK/sel-tap.log" || fail "D: sel-tap: a press with no drag copied text"
 
-echo "STYLE_AUDIT_GATE_PASS landed=${#LANDED[@]} keep=${#KEEP[@]} select=1"
+echo "STYLE_AUDIT_GATE_PASS landed=${#LANDED[@]} keep=${#KEEP[@]} select=1${EXPECT:+ platform=$EXPECT}"

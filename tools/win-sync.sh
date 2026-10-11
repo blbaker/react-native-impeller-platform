@@ -35,6 +35,14 @@ rsync -aL --delete \
   --exclude 'third_party/hermes/' \
   --exclude 'third_party/hermes-build/' \
   --exclude 'third_party/impeller-sdk/' \
+  --exclude 'third_party/x11-sysroot/' \
+  --exclude 'third_party/glfw/install/' \
+  --exclude 'third_party/impeller-sdk-custom/' \
+  --exclude 'third_party/impeller-sdk-custom-darwin/' \
+  --exclude 'third_party/impeller-sdk-custom-android/' \
+  --exclude 'third_party/impeller-sdk-android/' \
+  --exclude 'third_party/impeller-sdk-darwin/' \
+  --exclude 'third_party/angle-darwin-arm64/' \
   "$ROOT/engine/" "$STAGE/engine/"
 
 # Driver scripts live in their OWN sibling directory: if they sat inside the
