@@ -97,7 +97,7 @@ if not exist synced.txt (
   cd ..
   echo %SHA%> synced.txt
 )
-call git -C flutter checkout -q -- engine/src/flutter/impeller/toolkit/interop || exit /b 14
+call git -C flutter checkout -q -- engine/src/flutter/impeller/toolkit/interop engine/src/flutter/impeller/entity/contents/filters || exit /b 14
 call git -C flutter apply --ignore-whitespace %W%\\rni.patch || exit /b 15
 python prep_vs.py %W% > %W%\\prep_vs.log 2>&1 || exit /b 19
 cd /d %W%\\flutter\\engine\\src

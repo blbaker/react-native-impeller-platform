@@ -20,6 +20,14 @@ def _nw_blur(ctl, feat):
             return False, f"{name} edge ramp has {_ramp(s)} levels, want >= 6"
         if s.px(-2, 30) == (255, 255, 255):
             return False, f"{name} blur does not spill past the edge"
+        # SC-39: soft and centred on the edge. 6 px outside is light (linux
+        # ~205) and no step between neighbours is a cut (linux <= 13).
+        for x in (-6, 65):
+            if s.px(x, 30)[0] < 150:
+                return False, f"{name} {x},30 is {s.px(x, 30)} (smeared, want light)"
+        steps = [abs(s.px(x + 1, 30)[0] - s.px(x, 30)[0]) for x in (*range(-24, 24), *range(36, 84))]
+        if max(steps) > 40:
+            return False, f"{name} hard cut in the blur ramp (step {max(steps)})"
     return True, f"ramp {_ramp(feat)} levels"
 
 

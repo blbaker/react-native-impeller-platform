@@ -76,7 +76,8 @@ EOF
 fi
 
 INTEROP=engine/src/flutter/impeller/toolkit/interop
-git -C "$F" checkout -q -- "$INTEROP"
+# Reset every file a patch touches (0002 is outside interop), then re-apply.
+git -C "$F" checkout -q -- "$INTEROP" $(sed -n 's|^+++ b/||p' "${PATCHES[@]}" | sort -u)
 for p in "${PATCHES[@]}"; do git -C "$F" apply "$p"; done
 # Mutation hook: a command run in the interop dir after patching.
 [ -z "${RNI_SDK_POST_PATCH:-}" ] || (cd "$F/$INTEROP" && eval "$RNI_SDK_POST_PATCH")

@@ -229,8 +229,13 @@ def drop_shadow_ok(c, f, d):
     """SC-12 drop-shadow(6px 6px 4px black): ink outside the box only right/below
     it, blurred (>= 5 levels), dark beside the box's bottom-right, box unchanged."""
     br, tl = outside_split(f)
+    # SC-39: the shadow's own edges are soft and sit 6 px right/down of the
+    # box's: half-light at its left edge (x 34, linux 208), part-grey 2 px
+    # inside its right edge (x 94, linux 51). A clamp-smeared, hard-cut shadow
+    # (darwin before SC-39) is 51 and 0 there.
     return (br > 50 and tl == 0 and outside_levels(f) >= 5 and at(f, 60, 60) == (0, 0, 255)
-            and max(at(f, 92, 70)) < 80 and max(at(f, 70, 92)) < 80)
+            and max(at(f, 92, 70)) < 80 and max(at(f, 70, 92)) < 80
+            and min(at(f, 34, 94)) >= 150 and 20 <= max(at(f, 94, 60)) <= 120)
 
 
 def cast_shadow(c, f, d):
