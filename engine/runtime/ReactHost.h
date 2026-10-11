@@ -9,14 +9,19 @@
 #include <react/renderer/runtimescheduler/RuntimeScheduler.h>
 #include <react/runtime/ReactInstance.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 
 #include "modules/CoreModules.h"
 #include "modules/ModuleRegistry.h"
 #include "modules/NetworkingModule.h"
+#include "modules/WebSocketModule.h"
 #include "modules/PlatformModules.h"
 #include "modules/AppStorageModule.h"
+#include "modules/WorldRasterModule.h"
+#include "modules/WorldRasterStore.h"
+#include "modules/ClipboardBridge.h"
 #include "runtime/DeviceEventSink.h"
 #include "runtime/JsThread.h"
 #include "runtime/NativeAnimatedPump.h"
@@ -25,14 +30,29 @@
 
 namespace rni {
 
+class InspectorHost;
+
 class ReactHost {
  public:
-  ReactHost();
+  // parity item 24. withInspector: register a debuggable page (HostTarget)
+  // so React Native DevTools can attach through Metro. Only for bundles
+  // served by Metro; release / file:// runs pay nothing.
+  explicit ReactHost(bool withInspector = false);
   ~ReactHost();
+  // parity item 24. Opens the inspector device socket to the Metro that
+  // served sourceUrl. No-op without an inspector or for non-http URLs.
+  void connectInspector(const std::string& sourceUrl, const std::string& appName);
 
   // Evaluates `source` as the app bundle. sourceURL is what SourceCode reports.
   void runScript(std::string source, const std::string& sourceURL);
   bool loadBundleFromFile(const std::string& bundlePath);
+  // parity item 14. After runScript with an http:// source URL: start Metro
+  // HMR (HMRClient.setup), as RCTDevSettings does on iOS. No-op for file://.
+  void devServerSetup(const std::string& sourceUrl);
+  // parity item 14. Host hook DevSettings.reload calls (thread: JS).
+  void setReloadHook(std::function<void(const std::string&)> hook) {
+    *reloadHook_ = std::move(hook);
+  }
 
   facebook::react::ReactInstance& instance() { return *instance_; }
   std::shared_ptr<facebook::react::RuntimeScheduler> runtimeScheduler() {
@@ -63,9 +83,19 @@ class ReactHost {
   // module cannot relocate its own sandbox and a gate can point it at a
   // disposable directory without touching process-wide state.
   std::shared_ptr<AppStorageConfig> storage() { return storage_; }
+  // ENG-09. SceneGraph's world painter reads this by node name on every
+  // paint; exposed so the fabric/painter side can be wired to the SAME
+  // store the TurboModule writes into, rather than each owning its own.
+  std::shared_ptr<rni::WorldRasterStore> worldRasterStore() {
+    return worldRasterStore_;
+  }
   // Network activity, so a headless run can wait for in-flight REQUESTS and
   // not only for an idle JS thread. See NetworkActivity in NetworkingModule.h.
   std::shared_ptr<NetworkActivity> network() { return network_; }
+  // item 5. The thread-safe clipboard bridge: the "Clipboard" TurboModule
+  // posts through it, and main.cpp wires its system backend to the real
+  // GLFW clipboard once a window exists. See ClipboardBridge.h.
+  std::shared_ptr<ClipboardBridge> clipboard() { return clipboard_; }
 
   std::string jsThreadStats() const {
     return jsThread_ ? jsThread_->debugStats() : std::string();
@@ -118,8 +148,14 @@ class ReactHost {
 
  private:
   std::shared_ptr<JsThread> jsThread_;
+  // parity item 24. Declared BEFORE instance_ so it is destroyed AFTER it:
+  // the ReactInstance's inspector targets live under its HostTarget.
+  std::unique_ptr<InspectorHost> inspector_;
   std::unique_ptr<facebook::react::ReactInstance> instance_;
   std::shared_ptr<std::string> scriptURL_;
+  // parity item 14: DevSettings.reload calls this (set by the host).
+  std::shared_ptr<std::function<void(const std::string&)>> reloadHook_ =
+      std::make_shared<std::function<void(const std::string&)>>();
   std::shared_ptr<DisplayMetrics> displayMetrics_;
   // Constructed in the ctor, wired to the runtime executor once the instance
   // exists, and INVALIDATED in the dtor before teardown -- see ReactHost.cpp.
@@ -131,7 +167,11 @@ class ReactHost {
   std::shared_ptr<AlertRecord> alerts_;
   std::shared_ptr<NetworkActivity> network_;
   std::shared_ptr<std::string> initialUrl_;
+  std::shared_ptr<ClipboardBridge> clipboard_ =
+      std::make_shared<ClipboardBridge>();
   std::shared_ptr<AppStorageConfig> storage_;
+  std::shared_ptr<rni::WorldRasterStore> worldRasterStore_ =
+      std::make_shared<rni::WorldRasterStore>();
   // ENG-06. The provider owns the NativeAnimatedNodesManager; the pump is the
   // clock the manager does not have. Both outlive the module, which is created
   // lazily by the registry on first JS access.

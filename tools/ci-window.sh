@@ -131,6 +131,26 @@ console.log(m[1]+"x"+m[2]);
 [ "$DIMS" != "BAD" ] || fail "PPM header did not parse (width/height/maxval)"
 echo "   OK: timed screenshot is a valid PPM, ${DIMS}"
 
+# ⛔ A VALID HEADER OVER ALL-ZERO BYTES IS NOT A SCREENSHOT.
+# The capture used to read fbo 0 AFTER eglSwapBuffers, when the back buffer is
+# undefined. Mesa/X11 happens to keep it, so this gate stayed green on linux;
+# on ANGLE-Metal frame 1 came back as 3,072,000 zero bytes with a perfect P6
+# header (ENG-10, 2026-09-26). --screenshot-after 0 captures frame 1, which is
+# exactly the frame darwin blanked. The fixture paints text on a background, so
+# a real capture has more than one colour; an undefined/cleared buffer has one.
+COLOURS="$(node -e '
+const buf=require("fs").readFileSync(process.argv[1]);
+const s=buf.toString("latin1",0,64);
+const m=s.match(/^P6\s+(\d+)\s+(\d+)\s+(\d+)\s/);
+const px=buf.subarray(m[0].length);
+const seen=new Set();
+for (let i=0;i+2<px.length && seen.size<64;i+=3) seen.add((px[i]<<16)|(px[i+1]<<8)|px[i+2]);
+console.log(seen.size);
+' "$SHOT")"
+[ "${COLOURS:-0}" -ge 2 ] || fail \
+  "timed screenshot is ONE flat colour ($COLOURS distinct) -- readback got an undefined/cleared buffer, not the painted frame (capture after present?)"
+echo "   OK: timed screenshot has painted content (>= ${COLOURS} distinct colours)"
+
 echo "== 6. no orphan window process =="
 sleep 1
 if rni_have_own; then

@@ -34,6 +34,14 @@ file(GLOB rr_comp_text_SRC         ${RR}/components/text/*.cpp)
 # surface, which is the ENG-01 disease this closes.
 file(GLOB rr_comp_textinput_SRC    ${RR}/components/textinput/*.cpp)
 file(GLOB rr_comp_iostextinput_SRC ${RR}/components/textinput/platform/ios/react/renderer/components/iostextinput/*.cpp)
+# <Switch>. ENG-15. RN's generated core-component Props + EventEmitters
+# (SwitchProps, SwitchEventEmitter::onChange). Only these two files: they
+# depend on nothing beyond view/core/graphics, which are already here. RN's own
+# Switch ShadowNode is NOT used (it measures through UIKit/AppKit .mm); ours is
+# engine/fabric/SwitchShadowNode.h. The other props classes in these files
+# (Modal, ActivityIndicator, ...) compile but stay unregistered.
+set(rr_fbspec_DIR "${RN_ROOT}/React/FBReactNativeSpec/react/renderer/components/FBReactNativeSpec")
+set(rr_comp_switch_SRC ${rr_fbspec_DIR}/Props.cpp ${rr_fbspec_DIR}/EventEmitters.cpp)
 file(GLOB rr_mounting_SRC          ${RR}/mounting/*.cpp)
 file(GLOB rr_mounting_internal_SRC ${RR}/mounting/internal/*.cpp)
 file(GLOB rr_mounting_stubs_SRC    ${RR}/mounting/stubs/*.cpp)
@@ -44,7 +52,12 @@ file(GLOB rr_attributedstring_SRC  ${RR}/attributedstring/*.cpp)
 file(GLOB rr_tlm_SRC               ${RR}/textlayoutmanager/*.cpp)
 file(GLOB rr_tlm_cxx_SRC           ${RR}/textlayoutmanager/platform/cxx/react/renderer/textlayoutmanager/*.cpp)
 file(GLOB rr_imagemanager_SRC      ${RR}/imagemanager/*.cpp)
-file(GLOB rr_imagemanager_cxx_SRC  ${RR}/imagemanager/platform/cxx/react/renderer/imagemanager/*.cpp)
+# A19 (SC-30): OUR ImageManager (decodes local sources) replaces the cxx stub,
+# and RN's components/image (ImageShadowNode, ImageProps) is compiled.
+set(rr_imagemanager_cxx_SRC
+  ${CMAKE_SOURCE_DIR}/fabric/platform/impeller/react/renderer/imagemanager/ImageManager.cpp
+  ${CMAKE_SOURCE_DIR}/fabric/ImageStore.cpp)
+file(GLOB rr_comp_image_SRC        ${RR}/components/image/*.cpp)
 file(GLOB rr_telemetry_SRC         ${RR}/telemetry/*.cpp)
 file(GLOB rr_leakchecker_SRC       ${RR}/leakchecker/*.cpp)
 file(GLOB rr_animations_SRC        ${RR}/animations/*.cpp)
@@ -93,11 +106,11 @@ set(reactcommon_fabric_SRC
   ${rr_core_SRC} ${rr_graphics_SRC}
   ${rr_componentregistry_SRC} ${rr_componentregistry_native_SRC}
   ${rr_comp_root_SRC} ${rr_comp_view_SRC} ${rr_comp_scrollview_SRC} ${rr_comp_text_SRC}
-  ${rr_comp_textinput_SRC} ${rr_comp_iostextinput_SRC}
+  ${rr_comp_textinput_SRC} ${rr_comp_iostextinput_SRC} ${rr_comp_switch_SRC}
   ${rr_mounting_SRC} ${rr_mounting_internal_SRC} ${rr_mounting_stubs_SRC}
   ${rr_scheduler_SRC} ${rr_uimanager_SRC} ${rr_uimanager_consistency_SRC}
   ${rr_attributedstring_SRC} ${rr_tlm_SRC} ${rr_tlm_cxx_SRC}
-  ${rr_imagemanager_SRC} ${rr_imagemanager_cxx_SRC}
+  ${rr_imagemanager_SRC} ${rr_imagemanager_cxx_SRC} ${rr_comp_image_SRC}
   ${rr_telemetry_SRC} ${rr_leakchecker_SRC} ${rr_animations_SRC}
   ${rr_css_SRC} ${rr_dom_SRC} ${rr_element_SRC} ${rr_observers_events_SRC}
   ${rr_observers_intersection_SRC} ${rr_observers_mutation_SRC}
@@ -105,6 +118,10 @@ set(reactcommon_fabric_SRC
   ${rr_legacyinterop_SRC}
   ${rr_animated_SRC} ${rr_animated_nodes_SRC} ${rr_animated_drivers_SRC}
   ${rr_animated_evdrv_SRC} ${rr_animated_internal_SRC}
+  # item 11: the tvos HostPlatformViewProps has a .cpp (cxx is header-only).
+  # Style audit item 4: now OUR copy of it (engine/fabric/platform/impeller),
+  # which also parses `elevation` (only RN's android variant does).
+  ${CMAKE_SOURCE_DIR}/fabric/platform/impeller/react/renderer/components/view/HostPlatformViewProps.cpp
 )
 # Same targeted Perfetto rule as ReactCommonCore.cmake — see the long comment
 # there for why a blanket "Perfetto" filter breaks the non-Perfetto build.
@@ -117,7 +134,19 @@ target_include_directories(reactcommon_fabric SYSTEM PUBLIC
   ${RC}/yoga
   # platform/cxx selector roots must precede the generic ${RC} root (PUBLIC on
   # reactcommon_core) so <react/renderer/...> resolves to the cxx variant.
-  ${RR}/components/view/platform/cxx
+  #
+  # desktop-input-gap item 11: View props use upstream's TVOS variant, NOT
+  # cxx. The cxx HostPlatformViewProps is a bare alias of BaseViewProps, so
+  # the `focusable` prop View.js sends (and that tabIndex is converted into)
+  # was parsed by nobody and dropped. tvos/HostPlatformViewProps adds exactly
+  # `bool focusable`; its touch/event-emitter headers are identical to cxx and
+  # its traits differ only in unused parameter names. TextInputProps derive
+  # from ViewProps, so fields get it too (TextInput.js always sends it, false
+  # for tabIndex -1).
+  # Style audit item 4: the tvos headers are vendored into
+  # engine/fabric/platform/impeller with `elevation` added, so that root is
+  # used instead of ${RR}/components/view/platform/tvos.
+  ${CMAKE_SOURCE_DIR}/fabric/platform/impeller
   ${RR}/graphics/platform/cxx
   ${RR}/textlayoutmanager/platform/cxx
   ${RR}/imagemanager/platform/cxx
@@ -133,6 +162,7 @@ target_include_directories(reactcommon_fabric SYSTEM PUBLIC
 # expecting the top-level imagemanager dir on the path (upstream adds it in the
 # pod/gradle build). PRIVATE so it cannot shadow anything downstream.
 target_include_directories(reactcommon_fabric PRIVATE ${RR}/imagemanager)
+target_include_directories(reactcommon_fabric PRIVATE ${CMAKE_SOURCE_DIR}/fabric ${CMAKE_SOURCE_DIR}/third_party/stb)
 
 # renderer/animated/ includes the codegen'd spec as
 # `<FBReactNativeSpec/FBReactNativeSpecJSI.h>` — i.e. via the PARENT directory —

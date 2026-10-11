@@ -1,4 +1,5 @@
 #include "runtime/ReactHost.h"
+#include "runtime/InspectorHost.h"
 
 #include <ReactCommon/TurboModuleBinding.h>
 #include <cxxreact/JSBigString.h>
@@ -21,6 +22,9 @@
 #include <unordered_map>
 
 #include "runtime/FeatureFlags.h"
+#include "modules/ClipboardModule.h"
+#include "modules/ImageLoaderModule.h"  // SC-31
+#include "modules/AccessibilityManagerModule.h"  // ENG-14
 
 namespace rni {
 
@@ -48,27 +52,56 @@ class TimerRegistry : public react::PlatformTimerRegistry {
   std::shared_ptr<JsThread> jsThread_;
 };
 
-// ReactInstance's builtins do not install a console for a plain bundle.
+// parity item 10. LOGGING: install RN's `nativeLoggingHook`, NOT a console.
+//
+// This used to replace `console` with a 4-method object (log/info/warn/error).
+// RN's own console polyfill (@react-native/js-polyfills/console.js, a Metro
+// polyfill that runs before any module) only builds the full console --
+// assert, table, group, trace, debug, count, time... -- when
+// global.nativeLoggingHook exists. Without the hook, console.assert stayed
+// undefined, and abort-controller (react-query, SWR, fetch-based code) calls
+// it: `new AbortController().abort()` threw "console.assert is not a
+// function" (Mac audit, measured).
+//
+// Now: the hook prints every RN log line as `[js] <text>` (the prefix every
+// gate already reads), and a FALLBACK console is installed for a bundle that
+// carries no polyfill. The fallback stays silent once the polyfill has
+// replaced global.console, so a __DEV__ bundle (whose polyfill also calls the
+// original console) does not print each line twice.
 void installConsole(jsi::Runtime& runtime) {
-  auto log = jsi::Function::createFromHostFunction(
-      runtime, jsi::PropNameID::forAscii(runtime, "log"), 1,
+  auto hook = jsi::Function::createFromHostFunction(
+      runtime, jsi::PropNameID::forAscii(runtime, "nativeLoggingHook"), 2,
       [](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* args,
          size_t count) -> jsi::Value {
-        std::string line;
-        for (size_t i = 0; i < count; ++i) {
-          if (i) line += " ";
-          line += args[i].toString(rt).utf8(rt);
-        }
+        const std::string line =
+            count > 0 ? args[0].toString(rt).utf8(rt) : std::string();
         std::printf("[js] %s\n", line.c_str());
         std::fflush(stdout);
         return jsi::Value::undefined();
       });
-  jsi::Object console(runtime);
-  console.setProperty(runtime, "log", log);
-  console.setProperty(runtime, "info", log);
-  console.setProperty(runtime, "warn", log);
-  console.setProperty(runtime, "error", log);
-  runtime.global().setProperty(runtime, "console", console);
+  runtime.global().setProperty(runtime, "nativeLoggingHook", hook);
+
+  static const char* kFallback = R"JS(
+(function (g) {
+  var hook = g.nativeLoggingHook;
+  var c = {};
+  function mk(level) {
+    return function () {
+      if (g.console !== c) return;  // RN's polyfill took over: stay silent
+      hook(Array.prototype.map.call(arguments, String).join(' '), level);
+    };
+  }
+  c.log = mk(1); c.info = mk(1); c.debug = mk(0); c.trace = mk(0);
+  c.warn = mk(2); c.error = mk(3);
+  c.assert = function (cond, label) {
+    if (g.console !== c) return;
+    if (!cond) hook('Assertion failed: ' + label, 3);
+  };
+  g.console = c;
+})(globalThis);
+)JS";
+  runtime.evaluateJavaScript(std::make_shared<jsi::StringBuffer>(kFallback),
+                             "rni-console-fallback.js");
 }
 
 // RN's NativeComponentRegistry asks this global whether a native component
@@ -99,7 +132,7 @@ void installHasComponent(jsi::Runtime& runtime,
 
 }  // namespace
 
-ReactHost::ReactHost() {
+ReactHost::ReactHost(bool withInspector) {
   installFeatureFlags();
 
   jsThread_ = std::make_shared<JsThread>();
@@ -161,9 +194,15 @@ ReactHost::ReactHost() {
         std::fflush(stderr);
       };
 
+  // parity item 24. The HostTarget must exist before the instance: the
+  // instance registers its InstanceTarget + Hermes RuntimeTarget under it
+  // (on the inspector queue) and buffers runtime work until that is done.
+  if (withInspector) {
+    inspector_ = std::make_unique<InspectorHost>(reloadHook_);
+  }
   instance_ = std::make_unique<react::ReactInstance>(
       std::move(jsRuntime), jsThread_, timerManager, std::move(onJsError),
-      /*parentInspectorTarget*/ nullptr);
+      /*parentInspectorTarget*/ inspector_ ? inspector_->hostTarget() : nullptr);
 
   timerManager->setRuntimeExecutor(instance_->getBufferedRuntimeExecutor());
 
@@ -221,8 +260,8 @@ ReactHost::ReactHost() {
   modules_->add("StatusBarManager", [](auto inv) {
     return std::make_shared<StatusBarManagerModule>(inv);
   });
-  modules_->add("DevSettings", [](auto inv) {
-    return std::make_shared<DevSettingsModule>(inv);
+  modules_->add("DevSettings", [r = reloadHook_](auto inv) {
+    return std::make_shared<DevSettingsModule>(inv, r);
   });
   modules_->add("LinkingManager", [u = initialUrl_](auto inv) {
     return std::make_shared<LinkingManagerModule>(inv, u);
@@ -233,6 +272,18 @@ ReactHost::ReactHost() {
   // ran fine and every request failed. See NetworkingModule.h.
   modules_->add("Networking", [n = network_](auto inv) {
     return std::make_shared<NetworkingModule>(inv, n);
+  });
+  // SC-31. <Image> remote sources load over the same transport and count as
+  // network activity; ImageLoader is Image.getSize/prefetch/queryCache.
+  InstallImageFetcher(network_);
+  modules_->add("ImageLoader", [](auto inv) {
+    return std::make_shared<ImageLoaderModule>(inv);
+  });
+  // parity item 12. WebSocketModule: getEnforcing'd by every __DEV__ bundle
+  // (setUpReactDevTools / HMRClient), so its absence made dev bundles throw
+  // before the first render. Also Metro's HMR transport and app WebSockets.
+  modules_->add("WebSocketModule", [](auto inv) {
+    return std::make_shared<WebSocketModule>(inv);
   });
   // ENG-04 shape B. ONE narrow file primitive; the AsyncStorage-shaped API is
   // a JS shim on top. See AppStorageModule.h for why the engine does not vend
@@ -245,6 +296,35 @@ ReactHost::ReactHost() {
   // a real round trip, not that the module resolves.
   modules_->add("AppStorage", [s = storage_](auto inv) {
     return std::make_shared<AppStorageModule>(inv, s);
+  });
+
+  // ENG-09. Narrow raster primitive: JS pushes an RGBA buffer keyed by a
+  // string id; SceneGraph's world painter reads the SAME store by node name
+  // at paint time (worldRasterStore(), used from FabricHost/SceneGraph
+  // wiring). Not getEnforcing'd by anything in RN -- same silent-absence
+  // trap AppStorage and Networking document above -- so the gate asserts a
+  // real round trip end to end (JS setPixels -> painted pixels), not merely
+  // that the module resolves.
+  modules_->add("WorldRaster", [s = worldRasterStore_](auto inv) {
+    return std::make_shared<rni::WorldRasterModule>(inv, s);
+  });
+
+  // item 5. System clipboard. See ClipboardBridge.h for the thread-safety
+  // design (GLFW's clipboard functions are main-thread only; this module
+  // runs on the JS thread) and ClipboardModule.h for the Promise shape.
+  // NOT getEnforcing'd by anything in RN's own JS -- Clipboard.js reaches
+  // for it directly rather than through TurboModuleRegistry.getEnforcing --
+  // so its absence is SILENT the same way AppStorage's and Networking's are.
+  modules_->add("Clipboard", [c = clipboard_](auto inv) {
+    return std::make_shared<ClipboardModule>(inv, c);
+  });
+
+  // ENG-14. AccessibilityInfo's non-Android arm reads this module (RN's iOS
+  // name). Its absence is NOT silent: every AccessibilityInfo.is*Enabled()
+  // REJECTED, and apps read a rejection as "reduce motion off". See
+  // AccessibilityManagerModule.h.
+  modules_->add("AccessibilityManager", [](auto inv) {
+    return std::make_shared<rni::AccessibilityManagerModule>(inv);
   });
 
   // ENG-06. RN's own C++ NativeAnimated engine (ReactCommon/react/renderer/
@@ -328,6 +408,17 @@ ReactHost::~ReactHost() {
   // completes before the runtime goes away.
   if (jsThread_) {
     waitForJsIdle(5000);
+  }
+
+  // parity item 24. Detach the debugger BEFORE the runtime goes: unregister
+  // the instance/runtime targets on the inspector queue (their owning
+  // thread, as RCTInstance invalidate / ReactHostImpl do on theirs), then
+  // close the device socket, drop the page and the HostTarget.
+  if (inspector_) {
+    if (instance_) {
+      inspector_->queue().runSync([this] { instance_->unregisterFromInspector(); });
+    }
+    inspector_->shutdown();
   }
 
   // ⛔ TEARDOWN ORDER IS LOAD-BEARING, AND THE RUNTIME MUST OUTLIVE THE MODULES.
@@ -452,6 +543,43 @@ void ReactHost::runScript(std::string source, const std::string& sourceURL) {
   *scriptURL_ = sourceURL;
   instance_->loadScript(
       std::make_unique<react::JSBigStdString>(std::move(source)), sourceURL);
+}
+
+void ReactHost::connectInspector(const std::string& sourceUrl,
+                                 const std::string& appName) {
+  if (inspector_) inspector_->connectToMetro(sourceUrl, appName);
+}
+
+void ReactHost::devServerSetup(const std::string& sourceUrl) {
+  // http://host:port/path?query -> HMRClient.setup(platform, path, host,
+  // port, isEnabled, scheme). `path` is the bundle path WITHOUT the leading
+  // slash and WITH the query, exactly what RCTDevSettings passes (NSURL
+  // path is query-less there, but HMRClient prefers getDevServer()'s
+  // fullBundleUrl anyway, which is this whole URL).
+  const size_t se = sourceUrl.find("://");
+  if (se == std::string::npos) return;
+  const std::string scheme = sourceUrl.substr(0, se);
+  if (scheme != "http" && scheme != "https") return;
+  const std::string rest = sourceUrl.substr(se + 3);
+  const size_t slash = rest.find('/');
+  const std::string hostport = slash == std::string::npos ? rest : rest.substr(0, slash);
+  std::string path = slash == std::string::npos ? "" : rest.substr(slash + 1);
+  const size_t q = path.find('?');
+  if (q != std::string::npos) path = path.substr(0, q);
+  std::string host = hostport, port;
+  const size_t colon = hostport.rfind(':');
+  if (colon != std::string::npos) {
+    host = hostport.substr(0, colon);
+    port = hostport.substr(colon + 1);
+  }
+  folly::dynamic args = folly::dynamic::array(
+      "impeller", path, host,
+      port.empty() ? folly::dynamic(nullptr) : folly::dynamic(port), true,
+      scheme);
+  std::printf("rn-impeller: hmr_setup host=%s port=%s path=%s\n", host.c_str(),
+              port.c_str(), path.c_str());
+  std::fflush(stdout);
+  instance_->callFunctionOnModule("HMRClient", "setup", std::move(args));
 }
 
 bool ReactHost::loadBundleFromFile(const std::string& bundlePath) {

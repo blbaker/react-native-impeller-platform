@@ -58,10 +58,27 @@
 // be testable (--test-pointscale) on hosts that have no window at all.
 #include "host/PointScale.h"
 #include "scenegraph/CaretBlink.h"
+#include "scenegraph/CursorKinds.h"
 #include "impeller.h"
 #include "runtime/FeatureFlags.h"
+#if !defined(_WIN32)
+#include <unistd.h>
+#else
+#include <process.h>
+#endif
+#include "host/OsAppearance.h"
+#include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
+#include "text/FontRegistry.h"
+
+// ENG-22: --font-dir values, registered with each surface's typography context
+// right after init and BEFORE anything measures (see text/FontRegistry.h).
+static std::vector<std::string> gFontDirs;
+
+// --title: windowed-mode window title (title bar + macOS Window menu). Empty =
+// GlfwSurface's default, "React Native (Impeller)".
+static std::string gWindowTitle;
 
 // Process-start clock for the first_present_ms line. Static init runs before
 // main(), so this is as close to "launch" as the process can see.
@@ -127,6 +144,9 @@ void Usage() {
           "                     default 4 on darwin, 0 (off) elsewhere\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
+          "                   [--title <string>]  (windowed) window title, also\n"
+          "                     the macOS Window menu entry. Default\n"
+          "                     \"React Native (Impeller)\".\n"
           "                   [--screenshot-first <file.ppm>]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
           "       rn-impeller --test-openurl   (URL predicate self-test)\n"
@@ -196,6 +216,8 @@ int ListModules() {
     return 1;
   }
   rni::SceneGraph sceneGraph(surface.typography());
+  // ENG-09 — wire the world raster store so --list-modules boots identically.
+  sceneGraph.setWorldRasterStore(host.worldRasterStore());
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          /*logMutations*/ false, host.displayMetrics());
 
@@ -295,6 +317,102 @@ int CountDistinctColors(const std::vector<rni::Px>& px) {
 
 }  // namespace
 
+// desktop-input-gap P0 item 1. Windowed keyboard test hook payload, shared
+// between main()'s --key-after-frames parser (built unconditionally) and
+// RunWindowed's consumer loop (RNI_WITH_WINDOW only). Defined OUTSIDE the
+// RNI_WITH_WINDOW guard below so main() can reference it on every platform,
+// including a headless-only build where RunWindowed does not exist at all.
+struct KeySpec {
+  std::string key;
+  int phase = 0;  // 0=down 1=repeat 2=up
+  bool shift = false, ctrl = false, alt = false, meta = false,
+       capsLock = false;
+};
+
+// desktop-input-gap item 2a. One synthetic CHARACTER (decoded Unicode
+// codepoint), consumed one-per-frame the same way KeySpec is -- see
+// --char-after-frames's flag-parser comment for the wire format. File-scope
+// for the same reason KeySpec is: RunWindowed (RNI_WITH_WINDOW only) and
+// main()'s flag parser (built unconditionally) both need the type.
+struct CharSpec {
+  unsigned int codepoint = 0;
+};
+
+// item 4b. One synthetic mouse event: op 0 press, 1 release, 2 move; x/y in
+// SCREEN coords; shift held for a press.
+struct MouseSpec {
+  int op = 0;
+  double x = 0.0, y = 0.0;
+  bool shift = false;
+  // item 6: W3C button (0 left .. 4 forward) and full modifiers. When
+  // `button` is set (>= 0), the event goes through synthesiseMouseButton.
+  int button = -1;
+  bool ctrl = false, alt = false, meta = false;
+};
+
+// ENG-18. One --type token. The headless probe and the windowed hook both
+// read the SAME parsed list, so a spec means the same thing in both modes.
+//   plain text   one character (UTF-8 decoded to a codepoint)
+//   <BS>         Backspace       <CR>    Enter        <S-CR>  Shift+Enter
+//   <SA>         select all      <COPY>  copy         <CUT>   cut
+struct TypeToken {
+  enum Kind { Char, Backspace, Enter, ShiftEnter, SelectAll, Copy, Cut } kind;
+  unsigned int codepoint = 0;
+};
+
+static std::vector<TypeToken> ParseTypeSeq(const std::string& seq) {
+  std::vector<TypeToken> out;
+  static const struct { const char* tag; TypeToken::Kind kind; } kTags[] = {
+      {"<S-CR>", TypeToken::ShiftEnter}, {"<BS>", TypeToken::Backspace},
+      {"<CR>", TypeToken::Enter},        {"<SA>", TypeToken::SelectAll},
+      {"<COPY>", TypeToken::Copy},       {"<CUT>", TypeToken::Cut},
+  };
+  for (size_t i = 0; i < seq.size();) {
+    bool tagged = false;
+    for (const auto& t : kTags) {
+      const size_t n = std::strlen(t.tag);
+      if (seq.compare(i, n, t.tag) == 0) {
+        out.push_back({t.kind, 0});
+        i += n;
+        tagged = true;
+        break;
+      }
+    }
+    if (tagged) continue;
+    // UTF-8 decode one codepoint (ASCII is one byte, unchanged from before).
+    const unsigned char c = (unsigned char)seq[i];
+    unsigned int cp = c;
+    size_t len = 1;
+    if (c >= 0xF0) {
+      cp = c & 0x07; len = 4;
+    } else if (c >= 0xE0) {
+      cp = c & 0x0F; len = 3;
+    } else if (c >= 0xC0) {
+      cp = c & 0x1F; len = 2;
+    }
+    if (i + len > seq.size()) len = 1, cp = c;
+    for (size_t k = 1; k < len; ++k) cp = (cp << 6) | ((unsigned char)seq[i + k] & 0x3F);
+    out.push_back({TypeToken::Char, cp});
+    i += len;
+  }
+  return out;
+}
+
+// ENG-24: a multiline value prints on ONE log line ('\n' -> "\\n").
+static std::string EscapeNewlines(const std::string& v) {
+  std::string out;
+  for (char ch : v) {
+    if (ch == '\n') out += "\\n";
+    else out += ch;
+  }
+  return out;
+}
+
+// ENG-18: the windowed --type spec, set by main() before RunWindowed. File
+// scope (like gFontDirs) so RunWindowed's long positional signature does not
+// grow again. Empty = no windowed typing.
+static std::string gWindowedTypeSpec;
+
 #if RNI_WITH_WINDOW
 // The windowed repaint loop.
 //
@@ -310,7 +428,11 @@ int CountDistinctColors(const std::vector<rni::Px>& px) {
 // as compatible with a future mutation-driven skip-if-unchanged optimisation
 // as it is with staying vsync-driven forever, so nothing about P9-C is
 // foreclosed. See docs/STATE.md "Open questions" if that changes.
-int RunWindowed(const std::string& bundlePath, const std::string& appName,
+// parity item 14: defined below main()'s argv capture.
+[[noreturn]] static void ReexecForReload(const std::string& reason);
+static bool gFollowOsAppearance = false;  // SC-23
+
+int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                 std::string bundle, size_t nodeReportOnly, size_t bundleSize,
                 const std::string& colorScheme, const std::string& initialUrl,
                 int width, int height, float pointScale, bool logMutations,
@@ -324,17 +446,26 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
                 double scrollDx, double scrollDy,
                 int hoverAfterFrames,
                 const std::vector<std::pair<double, double>>& hoverPoints,
-                bool hoverLeaveAtEnd, int supersampleRnsvg,
+                bool hoverLeaveAtEnd,
+                int keyAfterFrames, const std::vector<KeySpec>& keySequence,
+                int charAfterFrames, const std::vector<CharSpec>& charSequence,
+                int mouseAfterFrames, const std::vector<MouseSpec>& mouseSequence,
+                int supersampleRnsvg,
                 bool idleSkip, double idleRunSec, int idleBudgetMs,
                 bool idleLog, int idleMutant, int idleOffthreadAfter) {
   (void)nodeReportOnly;
   (void)bundleSize;
   rni::GlfwSurface surface;
   std::string error;
+  surface.setTitle(gWindowTitle);  // before init: glfwCreateWindow takes it
+  std::printf("rn-impeller: window_title=%s\n", surface.title().c_str());
+  std::fflush(stdout);
   if (!surface.init(width, height, &error)) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
   }
+  // ENG-22: app fonts before the first measure (FabricHost is built below).
+  rni::RegisterFontDirs(surface.typography(), rni::FontDirsFrom(gFontDirs));
 
   // ⛔ THE WINDOW, NOT THE CLI, DECIDES THE PIXEL SIZE AND THE SCALE.
   // --width/--height went to glfwCreateWindow, which treats them as SCREEN
@@ -373,17 +504,59 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // layout uses, and re-set on every resize below, so a click can never be
   // converted with a scale the painter is no longer using.
   surface.setPointScale(pointScale);
-  rni::ReactHost host;
+  // parity item 24: a Metro-served bundle is debuggable (React Native DevTools).
+  rni::ReactHost host(/*withInspector*/ sourceUrl.rfind("http://", 0) == 0);
   host.setKnownComponents(rni::FabricHost::knownComponentNames());
+  // ENG-09 — the <world> painter reads pixel buffers the WorldRaster
+  // TurboModule writes; give the SceneGraph the same store the host owns.
+  sceneGraph.setWorldRasterStore(host.worldRasterStore());
   host.displayMetrics()->set((float)pxWidth / pointScale,
                              (float)pxHeight / pointScale, pointScale);
   host.appearance()->set(colorScheme);
   *host.initialUrl() = initialUrl;
+  // SC-23: report OS theme changes to JS. Declared after `host`, so it is
+  // joined before the host (and its device-event sink) is destroyed.
+  std::unique_ptr<rni::OsAppearanceWatcher> osWatcher;
+  if (gFollowOsAppearance) {
+    auto* hostPtr = &host;
+    osWatcher = std::make_unique<rni::OsAppearanceWatcher>(
+        colorScheme, true,
+        [hostPtr](const std::string& scheme) {
+          if (!hostPtr->appearance()->setSystem(scheme)) return;
+          printf("rn-impeller: appearance_changed scheme=%s source=os\n", scheme.c_str());
+          fflush(stdout);
+          hostPtr->deviceEvents()->emit(
+              "appearanceChanged", folly::dynamic::object("colorScheme", scheme));
+        });
+  }
 
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          logMutations, host.displayMetrics());
 
-  host.runScript(std::move(bundle), "file://" + bundlePath);
+  // item 5. A real GLFW window exists here, so wire the ClipboardBridge's
+  // "system backend" pair to the surface's glfwGetClipboardString/
+  // glfwSetClipboardString wrappers, and give it the wake callback so a
+  // request queued while the loop is parked in --idle-skip's
+  // glfwWaitEventsTimeout wakes it promptly. See ClipboardBridge.h.
+  auto clipboard = host.clipboard();
+  clipboard->setSystemBackend(
+      [&surface]() { return surface.getClipboardString(); },
+      [&surface](const std::string& s) { surface.setClipboardString(s); });
+  clipboard->setWake([&surface]() { surface.postEmptyEvent(); });
+  // item 7: windowed view commands run on this (main) thread.
+  fabric.enableMainQueue([&surface]() { surface.postEmptyEvent(); });
+  // The TextInput Copy/Cut/Paste shortcuts run ON THE MAIN THREAD (the GLFW
+  // key callback), so they read/write the clipboard DIRECTLY through the
+  // bridge's synchronous accessors rather than through the queue -- see
+  // FabricHost::setClipboardAccess's header comment.
+  fabric.setClipboardAccess(
+      [clipboard]() { return clipboard->getSystemNow(); },
+      [clipboard](const std::string& s) { clipboard->setSystemNow(s); });
+
+  // parity item 14: DevSettings.reload() re-execs (see ReexecForReload).
+  // Called on the JS thread; the re-exec replaces the whole process.
+  host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
+  host.runScript(std::move(bundle), sourceUrl);
   // ⛔ WINDOWED BOOT DRAINS THE JS QUEUE, IT DOES NOT WAIT FOR JS IDLE.
   // waitForJsIdle counts every pending one-shot timer, and RN core's
   // requestAnimationFrame is setTimeout(0). An app that starts a launch
@@ -396,6 +569,9 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // waitForJsIdle: its frames are deterministic snapshots, not a live clock.
   const int bootWaitStart = SinceLaunchMs();
   const bool bundleDrained = host.waitForJsQueueDrained(10000);
+  // parity item 14: a bundle from Metro starts HMR (Fast Refresh).
+  host.devServerSetup(sourceUrl);
+  host.connectInspector(sourceUrl, appName);  // parity item 24
   // startSurface takes DEVICE PIXELS and divides by pointScale itself
   // (FabricHost.cpp:279) — so it gets the framebuffer size, not the request.
   fabric.startSurface(appName, 1, (float)pxWidth, (float)pxHeight, pointScale);
@@ -412,6 +588,19 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // REACHED THE SCREEN. Declared before paintFrame because that lambda
   // captures it.
   int paintsTotal = 0;
+
+  // ⛔ WINDOWED CAPTURE READS BACK BEFORE THE PRESENT, NEVER AFTER IT.
+  // eglSwapBuffers hands the frame to the compositor and leaves the back
+  // buffer UNDEFINED (EGL_BUFFER_DESTROYED is the default swap behaviour). On
+  // ANGLE-Metal the next glReadPixels on fbo 0 gets a FRESH, CLEARED drawable:
+  // darwin windowed --screenshot / --screenshot-first came back as 3,072,000
+  // zero bytes at 1280x800 on every frame (ENG-10, 2026-09-26), while Mesa/X11
+  // happened to keep the old back buffer, so linux gates never saw it. The
+  // loop arms grabArmed for the frame it wants; paintFrame reads the pixels
+  // between drawDisplayList (which glFinish()es) and present().
+  bool grabArmed = false;
+  bool grabOk = false;
+  std::vector<rni::Px> grabPx;
 
   auto paintFrame = [&]() -> int {
     // ⛔ THE PAINT-IN-FLIGHT SCOPE GOES HERE, AT THE ONE SHARED BODY.
@@ -431,6 +620,10 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       ImpellerDisplayListRelease(dl);
     }
     ImpellerDisplayListBuilderRelease(builder);
+    if (grabArmed) {
+      grabOk = surface.readPixels(&grabPx);
+      grabArmed = false;
+    }
     surface.present();
     // ⛔ COUNTED HERE, AT THE PRESENT, NOT AT THE CALLER.
     // refreshPaints is derived from this counter, so "a frame was painted
@@ -597,14 +790,30 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // track, or a button pressed and slid off, lost the gesture.
     const int hit = down ? fabric.beginTouchCapture(x, y)
                          : fabric.endTouchCapture(x, y);
+    if (!down) fabric.endTextSelectionDrag();  // item 4b
+    // item 6: the left button ALSO gets W3C pointer events (button 0,
+    // detail = click count, live modifiers), alongside its RN touch.
+    {
+      const auto md = surface.lastMods();
+      fabric.dispatchPointerButton(x, y, down, 0, surface.heldButtonsMask(),
+                                   surface.lastClickCount(), md.shift, md.ctrl,
+                                   md.alt, md.meta);
+    }
     if (down) {
       // <TextInput>. ENG-01b. A press also (re)assigns keyboard focus: click a
       // field to edit it, click elsewhere to blur. This must run on the DOWN so
       // the caret appears on the same click that a user expects it to, and is
       // separate from the touch dispatch above -- a field both receives the
       // press (for onPressIn-style handlers) AND takes focus.
-      const int focused = fabric.focusTextInputAt(x, y);
-      printf("rn-impeller: textinput_focus=%d at=%.1f,%.1f\n", focused, x, y);
+      // item 4b: the click count (double = word, triple = line) and Shift
+      // (extend) come from the surface, which counted this press.
+      const int focused = fabric.focusTextInputAt(
+          x, y, surface.lastClickCount(), surface.lastPressShift());
+      // P1 item 15: the same press starts (or clears) a selectable-<Text>
+      // selection. A press that focused a field cannot also be on text.
+      if (focused == 0) fabric.beginTextSelection(x, y, surface.lastClickCount());
+      printf("rn-impeller: textinput_focus=%d at=%.1f,%.1f clicks=%d\n",
+             focused, x, y, surface.lastClickCount());
       ++touchDowns;
       if (hit) ++touchHits;
       // Machine-readable, and printed for the DOWN only: a gate asserting on
@@ -616,6 +825,16 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       fflush(stdout);
     }
   });
+
+  // item 6. Right/middle/back/forward: W3C pointer events ONLY. Deliberately
+  // no beginTouchCapture (no Pressable onPress) and no focusTextInputAt (a
+  // right click must not move the caret or steal focus).
+  surface.setExtraButtonHandler(
+      [&](const rni::GlfwSurface::ExtraButtonEvent& ev) {
+        fabric.dispatchPointerButton(ev.x, ev.y, ev.down, ev.button,
+                                     ev.buttons, ev.clickCount, ev.shift,
+                                     ev.ctrl, ev.alt, ev.meta);
+      });
 
   // <ScrollView>. ENG-02. Same shape and the same threading argument as the
   // touch handler above: dispatch and return, never block the event thread.
@@ -653,10 +872,15 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // fire pointerenter on whatever the cursor passes over. The cursor shape is
     // held at the drag's grabbing shape by the mac's NSCursor path (mac-patches
     // 2c0ed10); returning the last shape keeps this path from fighting it.
+    // item 4b: a drag that began in a TextInput extends its selection. Checked
+    // on its own, not only under isTouchCaptured(): a press on a field whose
+    // emitter took no touch capture must still drag-select.
+    const bool selectionDrag = fabric.dragTextSelection(x, y);
     if (fabric.isTouchCaptured()) {
       fabric.dispatchCapturedMove(x, y);
       return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
     }
+    if (selectionDrag) return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
     const auto r = fabric.dispatchHover(x, y);
     bool logged = false;
     if (r.left) {
@@ -671,10 +895,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // the transitions are: a gate wants "the shape became a hand", not a line
     // per pixel of travel. The names are the ones the peer's gate parses.
     if (r.cursorKind != lastLoggedCursor) {
-      const char* name = r.cursorKind == 1   ? "hand"
-                         : r.cursorKind == 2 ? "ibeam"
-                                             : "arrow";
-      printf("rn-impeller: cursor=%s\n", name);
+      printf("rn-impeller: cursor=%s\n", rni::CursorKindName(r.cursorKind));
       lastLoggedCursor = r.cursorKind;
       logged = true;
     }
@@ -731,15 +952,58 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     fflush(stdout);
   });
 
+  // desktop-input-gap P0 item 1. FULL keyboard forwarding to JS: every key
+  // press/repeat/release, with modifiers, routed into
+  // FabricHost::dispatchKeyEvent (onKeyPress on the focused TextInput, plus
+  // a generic keyDown/keyUp on whatever is focused or the surface root).
+  // Installed ALONGSIDE the legacy char/key handlers above, not instead of
+  // them: those still own Backspace/Enter single-line editing byte for byte
+  // (ci-textedit.sh's regression guard), and the char callback stays the
+  // ONLY source of typed characters. This handler's printed line is the one
+  // machine-readable proof a gate needs that a key of ANY kind, not just
+  // Backspace/Enter, reached the host at all.
+  surface.setFullKeyHandler([&](const rni::GlfwSurface::KeyEvent& ev) {
+    rni::FabricHost::KeyModifiers mods;
+    mods.shift = ev.shift;
+    mods.ctrl = ev.ctrl;
+    mods.alt = ev.alt;
+    mods.meta = ev.meta;
+    mods.capsLock = ev.capsLock;
+    const rni::FabricHost::KeyEventPhase phase =
+        ev.phase == rni::GlfwSurface::KeyPhase::Up
+            ? rni::FabricHost::KeyEventPhase::Up
+        : ev.phase == rni::GlfwSurface::KeyPhase::Repeat
+            ? rni::FabricHost::KeyEventPhase::Repeat
+            : rni::FabricHost::KeyEventPhase::Down;
+    const int tag = fabric.dispatchKeyEvent(ev.key, ev.code, phase, mods);
+    const char* typeStr = ev.phase == rni::GlfwSurface::KeyPhase::Up ? "up"
+                         : ev.phase == rni::GlfwSurface::KeyPhase::Repeat
+                             ? "repeat"
+                             : "down";
+    printf(
+        "rn-impeller: key_event type=%s key=%s code=%s "
+        "mods=shift:%d,ctrl:%d,alt:%d,meta:%d,caps:%d scancode=%d tag=%d\n",
+        typeStr, ev.key.c_str(), ev.code.c_str(), (int)ev.shift, (int)ev.ctrl,
+        (int)ev.alt, (int)ev.meta, (int)ev.capsLock, ev.scancode, tag);
+    fflush(stdout);
+  });
+
   // Reads the framebuffer and writes a PPM. Shared by the frame-0 and the
   // timed capture so the two images are produced by literally the same code
   // path -- if they differed in how they were read back, a difference between
   // them would not prove anything about repainting.
+  // The pixels come from grabPx, filled PRE-PRESENT inside paintFrame (see
+  // grabArmed above); reading fbo 0 here, after the swap, is the darwin
+  // all-zero bug.
   auto capture = [&](const std::string& path, const char* label) {
     if (path.empty()) return;
-    std::vector<rni::Px> px;
-    if (!surface.readPixels(&px)) return;
-    if (!rni::GlfwSurface::writePpm(path, px, surface.width(), surface.height()))
+    if (!grabOk) {
+      fprintf(stderr, "rn-impeller: WARN: %s readback failed (%s)\n", label,
+              path.c_str());
+      return;
+    }
+    if (!rni::GlfwSurface::writePpm(path, grabPx, surface.width(),
+                                    surface.height()))
       return;
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   std::chrono::steady_clock::now() - start)
@@ -763,6 +1027,16 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   if (idleSkip) {
     if (idleMutant != 3) {
       sceneGraph.setDamageWake([&surface]() { surface.postEmptyEvent(); });
+      // ENG-09: a WorldRaster.setPixels write is scene damage the version
+      // counter is otherwise blind to (it runs on the JS thread and never
+      // touches the scene graph). Route it through bumpVersion() — the SAME
+      // signal a Fabric commit uses — so the next frame is dirty AND a loop
+      // asleep in glfwWaitEventsTimeout wakes. Without this the animation
+      // freezes on the last painted frame under the default windowed idle-skip.
+      // Gated on mutant!=3 exactly like the wake above, so M3 (no wake) also
+      // covers the store path and its off-thread witness stalls the full budget.
+      host.worldRasterStore()->setDamageHook(
+          [&sceneGraph]() { sceneGraph.bumpVersion(); });
     } else {
       printf("rn-impeller: [idle] MUTANT M3: damage wake NOT installed\n");
       fflush(stdout);
@@ -777,6 +1051,38 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // dirty explicitly below.
   uint64_t lastPresentedVersion = 0;
 
+  // ENG-18: windowed --type. Settle the mount, focus the field at X,Y (layout
+  // points, the same coordinates headless --type takes), then feed ONE token
+  // per frame through the real windowed entry points: characters through
+  // GlfwSurface::synthesiseChar (the char callback's handler) and Enter /
+  // Shift+Enter / Backspace through GlfwSurface::synthesiseKey (the key
+  // callback's translation, so onKeyPress, keyDown and the editing handler
+  // all run exactly as for a real keystroke). Then print the same
+  // textinput_value + paragraph report headless prints, capture --screenshot
+  // two frames later, and exit unless --frames / --idle-run-sec ask for more.
+  std::vector<TypeToken> typeTokens;
+  float typeX = 0.0f, typeY = 0.0f;
+  const bool typePlan = !gWindowedTypeSpec.empty();
+  if (typePlan) {
+    const auto colon = gWindowedTypeSpec.find(':');
+    if (colon == std::string::npos ||
+        std::sscanf(gWindowedTypeSpec.substr(0, colon).c_str(), "%f,%f",
+                    &typeX, &typeY) != 2) {
+      fprintf(stderr, "rn-impeller: FATAL: --type wants X,Y:SEQ (got '%s')\n",
+              gWindowedTypeSpec.c_str());
+      return 1;
+    }
+    typeTokens = ParseTypeSeq(gWindowedTypeSpec.substr(colon + 1));
+    printf("rn-impeller: type_window tokens=%zu at=%.1f,%.1f\n",
+           typeTokens.size(), typeX, typeY);
+    fflush(stdout);
+  }
+  int typeFocusTag = -1;  // -1 = not focused yet
+  size_t typeNext = 0;
+  bool typeDone = !typePlan;
+  int typeDoneFrame = -1;
+  const auto typeStart = std::chrono::steady_clock::now();
+
   while (!surface.shouldClose()) {
     surface.pollEvents();
 
@@ -785,6 +1091,15 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // above is the path that runs when this loop is blocked inside
     // pollEvents(). Both go through applyResizeIfDirty, deliberately.
     applyResizeIfDirty();
+
+    // item 5. Drain the ClipboardBridge's queued main-thread tasks every
+    // iteration, same discipline as applyResizeIfDirty: a getString()/
+    // setString() call from the JS thread posts here and waits for this
+    // drain (or the bridge's wake, under --idle-skip) to run it.
+    clipboard->drainMain();
+    // item 7: view commands (scrollTo, focus, setTextAndSelection) queued by
+    // the JS thread; applied here, on the thread that owns input + paint.
+    fabric.drainMain();
 
     // Test hook: drive a resize from inside the process at a known frame.
     // There is no headless way to make a window manager resize a window, and
@@ -878,12 +1193,20 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
           (scrollAfterFrames > 0 && frameIndex <= scrollAfterFrames) ||
           (hoverAfterFrames > 0 &&
            frameIndex <= hoverAfterFrames + (int)hoverPoints.size()) ||
+          (keyAfterFrames > 0 &&
+           frameIndex <= keyAfterFrames + (int)keySequence.size()) ||
+          (charAfterFrames > 0 &&
+           frameIndex <= charAfterFrames + (int)charSequence.size()) ||
+          (mouseAfterFrames > 0 &&
+           frameIndex <= mouseAfterFrames + (int)mouseSequence.size()) ||
           (!screenshotFirstPath.empty() && !capturedFirst) ||
-          (!screenshotPath.empty() && !capturedTimed);
+          (!screenshotPath.empty() && !capturedTimed) ||
+          (typePlan && (!typeDone || frameIndex <= typeDoneFrame + 3));
       // A caret blink is a time-based clock nothing marks dirty: refuse the skip
       // while a field is focused or the cached frame would freeze mid-blink.
       const bool clockLive =
-          animatedThisFrame || sceneGraph.focusedTextInput() != 0;
+          animatedThisFrame || sceneGraph.focusedTextInput() != 0 ||
+          sceneGraph.spinnerAnimating();
       // First frame ALWAYS paints (lastPresentedVersion starts at 0 == the
       // initial version). M1 forces dirty every frame so the CPU gate fails,
       // proving the skip is load-bearing.
@@ -893,10 +1216,37 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       if (shouldPaint) lastPresentedVersion = curVersion;
     }
 
+    // Decide BEFORE the paint which captures this frame serves, and arm the
+    // pre-present readback for it. Deciding after the paint (as before) read
+    // fbo 0 post-swap -- all zeros on darwin.
+    const bool wantFirst = shouldPaint && !capturedFirst && frameIndex == 0 &&
+                           !screenshotFirstPath.empty();
+    const long long sinceStartMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count();
+    // ENG-18: with a windowed --type plan, --screenshot waits for the typing
+    // to finish (plus two frames for the JS re-render to mount), with or
+    // without --screenshot-after.
+    const bool typeCaptureReady =
+        typePlan && typeDone && frameIndex >= typeDoneFrame + 2;
+    const bool wantTimed =
+        shouldPaint && !screenshotPath.empty() && !capturedTimed &&
+        (typePlan ? (typeCaptureReady && (screenshotAfterMs < 0 ||
+                                          sinceStartMs >= screenshotAfterMs))
+                  : (screenshotAfterMs >= 0 &&
+                     sinceStartMs >= screenshotAfterMs));
+    grabOk = false;
+    grabArmed = wantFirst || wantTimed;
+
     int painted = shouldPaint ? paintFrame() : 0;
+    grabArmed = false;
     ++frameIndex;
-    if (shouldPaint && frameIndex == 1)
+    if (shouldPaint && frameIndex == 1) {
       printf("rn-impeller: painted_nodes=%d\n", painted);
+      printf("rn-impeller: world_sprites_drawn=%d\n",
+             sceneGraph.worldSpritesDrawn());
+    }
 
     // ⛔ SYNTHETIC-CLICK HOOK — AND IT IS DELIBERATELY THE WEAKER EVIDENCE.
     // This calls the handler through GlfwSurface::synthesiseClick, so it
@@ -972,6 +1322,167 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       }
     }
 
+    // desktop-input-gap P0 item 1. SYNTHETIC-KEY HOOK -- weaker evidence,
+    // exactly like the click/scroll/hover hooks above: it calls
+    // GlfwSurface::synthesiseKey, which enters the identical translation +
+    // dispatchKeyEvent path a real glfwSetKeyCallback does, but is NOT proof
+    // glfwSetKeyCallback is registered (deleting that registration leaves
+    // this hook passing). tools/ci-key-events.sh pairs it with a REAL XTest
+    // key event for the registration arm; this hook exists for modifier
+    // combinations some window managers refuse to let XTest deliver (Super)
+    // and so the gate is host-independent for the rest.
+    //
+    // One KeySpec is consumed per frame starting at keyAfterFrames, same
+    // one-per-frame discipline as the hover sequence above.
+    if (keyAfterFrames > 0 && frameIndex >= keyAfterFrames &&
+        !keySequence.empty()) {
+      const size_t idx = (size_t)(frameIndex - keyAfterFrames);
+      if (idx < keySequence.size()) {
+        const auto& ks = keySequence[idx];
+        rni::GlfwSurface::KeyMods mods;
+        mods.shift = ks.shift;
+        mods.ctrl = ks.ctrl;
+        mods.alt = ks.alt;
+        mods.meta = ks.meta;
+        mods.capsLock = ks.capsLock;
+        const rni::GlfwSurface::KeyPhase phase =
+            ks.phase == 2   ? rni::GlfwSurface::KeyPhase::Up
+            : ks.phase == 1 ? rni::GlfwSurface::KeyPhase::Repeat
+                            : rni::GlfwSurface::KeyPhase::Down;
+        printf("rn-impeller: key_requested key=%s phase=%d\n", ks.key.c_str(),
+               ks.phase);
+        fflush(stdout);
+        if (!surface.synthesiseKey(ks.key, phase, mods)) {
+          fprintf(stderr,
+                  "rn-impeller: FATAL: --key-after-frames key '%s' has no "
+                  "known GLFW mapping\n",
+                  ks.key.c_str());
+          return 1;
+        }
+        host.waitForJsIdle(5000);
+      }
+    }
+
+    // desktop-input-gap item 2a. SYNTHETIC-CHAR HOOK. One CharSpec consumed
+    // per frame starting at charAfterFrames -- same one-per-frame discipline
+    // as the key/hover sequences above, and the same "weaker evidence"
+    // caveat (GlfwSurface::synthesiseChar calls charHandler_ directly; it is
+    // NOT proof glfwSetCharCallback is registered -- that registration is
+    // already covered by ci-key-events.sh's real-XTest arm, whose Ctrl+A/
+    // Escape/Delete keys exercise the SAME callback-registration bug class).
+    if (charAfterFrames > 0 && frameIndex >= charAfterFrames &&
+        !charSequence.empty()) {
+      const size_t idx = (size_t)(frameIndex - charAfterFrames);
+      if (idx < charSequence.size()) {
+        const auto& cs = charSequence[idx];
+        printf("rn-impeller: char_requested cp=%u\n", cs.codepoint);
+        fflush(stdout);
+        if (!surface.synthesiseChar(cs.codepoint)) {
+          fprintf(stderr,
+                  "rn-impeller: FATAL: --char-after-frames: no char handler "
+                  "installed\n");
+          return 1;
+        }
+        host.waitForJsIdle(5000);
+      }
+    }
+
+    // ENG-18: the windowed --type plan (see its state above the loop).
+    if (typePlan && !typeDone && frameIndex >= 2) {
+      if (typeFocusTag < 0) {
+        // Same mount settle as headless --type: poll for a REAL TextInput
+        // under the point, bounded, so a never-mounting field fails loudly.
+        const long long waited =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - typeStart)
+                .count();
+        if (!fabric.isTextInputAt(typeX, typeY) && waited < 10000) {
+          host.waitForJsIdle(200);
+        } else {
+          printf("rn-impeller: type_mount_settle_ms=%lld field=%d\n", waited,
+                 (int)fabric.isTextInputAt(typeX, typeY));
+          typeFocusTag = fabric.focusTextInputAt(typeX, typeY);
+          printf("rn-impeller: type_focus=%d at=%.1f,%.1f\n", typeFocusTag,
+                 typeX, typeY);
+          fflush(stdout);
+          host.waitForJsIdle(5000);
+        }
+      } else if (typeNext < typeTokens.size()) {
+        const TypeToken& tk = typeTokens[typeNext++];
+        auto pressKey = [&](const char* name, bool shift) {
+          rni::GlfwSurface::KeyMods mods;
+          mods.shift = shift;
+          surface.synthesiseKey(name, rni::GlfwSurface::KeyPhase::Down, mods);
+          surface.synthesiseKey(name, rni::GlfwSurface::KeyPhase::Up, mods);
+        };
+        switch (tk.kind) {
+          case TypeToken::Char:
+            surface.synthesiseChar(tk.codepoint);
+            break;
+          case TypeToken::Backspace:
+            pressKey("Backspace", false);
+            break;
+          case TypeToken::Enter:
+            pressKey("Enter", false);
+            break;
+          case TypeToken::ShiftEnter:
+            pressKey("Enter", true);
+            break;
+          case TypeToken::SelectAll:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
+            break;
+          case TypeToken::Copy:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Copy, 0);
+            break;
+          case TypeToken::Cut:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
+            break;
+        }
+        host.waitForJsIdle(5000);
+      } else {
+        host.waitForJsIdle(5000);
+        // Read the field the plan focused, even if Enter blurred it since.
+        const int tag = typeFocusTag;
+        const std::string v = sceneGraph.textInputValueFor(tag);
+        const size_t caret = sceneGraph.textInputCaretFor(tag);
+        printf("rn-impeller: textinput_value tag=%d len=%zu caret=%zu v=%s\n",
+               tag, v.size(), caret, EscapeNewlines(v).c_str());
+        fputs(sceneGraph.paragraphTextReport().c_str(), stdout);
+        printf("rn-impeller: type_done frame=%d\n", frameIndex);
+        fflush(stdout);
+        typeDone = true;
+        typeDoneFrame = frameIndex;
+      }
+    }
+
+
+    // item 4b. SYNTHETIC MOUSE HOOK: one press/release/move per frame through
+    // GlfwSurface::synthesiseMouse (the same dispatchCursorPoint /
+    // dispatchHoverPoint the real callbacks use, so click counting and drag
+    // routing are exercised). Weaker evidence than a real XTest drag, which
+    // ci-select-mouse.sh also runs.
+    if (mouseAfterFrames > 0 && frameIndex >= mouseAfterFrames &&
+        !mouseSequence.empty()) {
+      const size_t idx = (size_t)(frameIndex - mouseAfterFrames);
+      if (idx < mouseSequence.size()) {
+        const auto& ms = mouseSequence[idx];
+        printf("rn-impeller: mouse_requested op=%d at=%.1f,%.1f shift=%d\n",
+               ms.op, ms.x, ms.y, ms.shift ? 1 : 0);
+        fflush(stdout);
+        if (ms.button >= 0 && ms.op != 2) {
+          surface.synthesiseMouseButton(ms.button, ms.op == 0, ms.x, ms.y,
+                                        ms.shift, ms.ctrl, ms.alt, ms.meta);
+        } else {
+          surface.synthesiseMouse(ms.op, ms.x, ms.y, ms.shift);
+        }
+        // Wait for JS only after the LAST event. Waiting after each one
+        // spaced presses ~450 ms apart, at the edge of the 500 ms
+        // double-click interval, which a real mouse never does (GLFW
+        // callbacks do not wait for JS). One event per frame (~16 ms) keeps
+        // a synthetic double click as tight as a human one.
+        if (idx + 1 == mouseSequence.size()) host.waitForJsIdle(5000);
+      }
+    }
 
     // ⛔ The frame-0 capture is what makes an animation gate possible at all.
     // A single timed screenshot proves only that SOMETHING was drawn; it
@@ -983,19 +1494,15 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
     // at frame 1, so with no --screenshot-first the windowed run tried to write
     // a file named "". Also: the flag is now honoured in the HEADLESS path too
     // (see the frame loop in main()), which is where CI can actually use it.
-    if (!capturedFirst && frameIndex == 1 && !screenshotFirstPath.empty()) {
+    if (!capturedFirst && frameIndex == 1 && !screenshotFirstPath.empty() &&
+        wantFirst) {
       capture(screenshotFirstPath, "screenshot_first");
       capturedFirst = true;
     }
 
-    if (!screenshotPath.empty() && screenshotAfterMs >= 0 && !capturedTimed) {
-      auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - start)
-                           .count();
-      if (elapsedMs >= screenshotAfterMs) {
-        capture(screenshotPath, "screenshot");
-        capturedTimed = true;
-      }
+    if (wantTimed && !capturedTimed) {
+      capture(screenshotPath, "screenshot");
+      capturedTimed = true;
     }
 
     // ── P12-01: off-thread repaint witness + idle sleep + run-window exit ─────
@@ -1051,6 +1558,25 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
       }
     }
 
+    // ENG-18: a --type plan holds the run open until the typing and its
+    // capture are done (30 s wall cap), then ends it unless --frames or
+    // --idle-run-sec ask for a longer run.
+    if (typePlan) {
+      const bool typeFinished = typeDone && frameIndex > typeDoneFrame + 2 &&
+                                (screenshotPath.empty() || capturedTimed);
+      const double typeWall = std::chrono::duration<double>(
+                                  std::chrono::steady_clock::now() - typeStart)
+                                  .count();
+      if (!typeFinished && typeWall > 30.0) {
+        fprintf(stderr,
+                "rn-impeller: FATAL: windowed --type did not finish in 30 s "
+                "(focus=%d, %zu/%zu tokens)\n",
+                typeFocusTag, typeNext, typeTokens.size());
+        break;
+      }
+      if (!typeFinished) continue;
+      if (frames <= 0 && idleRunSec <= 0.0) break;
+    }
     if (frames > 0 && frameIndex >= frames) break;
   }
 
@@ -1065,6 +1591,7 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // glfwDestroyWindow can dispatch a queued button event, and a click landing
   // after ~FabricHost would dispatch a touch into freed memory.
   surface.setMouseButtonHandler(nullptr);
+  surface.setExtraButtonHandler(nullptr);  // item 6
   // <ScrollView>. ENG-02. Same lifetime argument again: the scroll handler
   // captures `fabric`, and a queued wheel event delivered by glfwDestroyWindow
   // would dispatch into freed memory.
@@ -1080,6 +1607,8 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
   // event, which would dispatch an edit into freed memory.
   surface.setCharHandler(nullptr);
   surface.setKeyHandler(nullptr);
+  // desktop-input-gap P0 item 1. Same lifetime argument again.
+  surface.setFullKeyHandler(nullptr);
   // P12-01: drop the damage wake before teardown. It captures `surface` by
   // reference; clearing it here means no late off-thread bump can post an event
   // to a window mid-destruction. Safe even though the JS thread is already torn
@@ -1112,17 +1641,43 @@ int RunWindowed(const std::string& bundlePath, const std::string& appName,
 
   printf("RN_IMPELLER_WINDOW_OK app=%s frames=%d\n", appName.c_str(), frameIndex);
   fflush(stdout);
+  // ENG-18: an unfinished --type plan is a failed run, not a quiet exit.
+  if (typePlan && !typeDone) return 4;
   return 0;
 }
 #endif  // RNI_WITH_WINDOW
 
+// parity item 14: the original argv, for DevSettings.reload's re-exec.
+static std::vector<std::string> gArgv;
+
+// parity item 14. Replace this process with a fresh copy of itself, same
+// argv. Never returns on success.
+[[noreturn]] static void ReexecForReload(const std::string& reason) {
+  printf("rn-impeller: reload_reexec reason=%s\n", reason.c_str());
+  fflush(stdout);
+  fflush(stderr);
+  std::vector<char*> args;
+  for (auto& a : gArgv) args.push_back(const_cast<char*>(a.c_str()));
+  args.push_back(nullptr);
+#if defined(_WIN32)
+  _execv(args[0], args.data());
+#else
+  execv("/proc/self/exe", args.data());  // linux: robust to a relative argv[0]
+  execv(args[0], args.data());            // darwin / fallback
+#endif
+  fprintf(stderr, "rn-impeller: FATAL: reload re-exec failed\n");
+  _exit(1);
+}
+
 int main(int argc, char** argv) {
+  for (int i = 0; i < argc; ++i) gArgv.emplace_back(argv[i]);
   // MUST be first: ReactNativeFeatureFlags::override() throws once any flag has
   // been read, and plenty of construction paths read one.
   rni::installFeatureFlags();
 
   std::string bundlePath, appName, screenshot;
   std::string colorScheme = "light";
+  bool colorSchemeGiven = false;
   std::string initialUrl;
   bool headless = false;
   bool probeBanner = true;
@@ -1154,7 +1709,8 @@ int main(int argc, char** argv) {
   // SAME FabricHost::focusTextInputAt / dispatchKey path the GLFW callbacks use,
   // so the whole editing loop (focus -> keystroke -> buffer -> onChange) is
   // gate-provable with no window. SEQ is literal ASCII plus the escapes <BS>
-  // (backspace) and <CR> (submit/Enter). Exists for exactly the reason --tap
+  // (backspace), <CR> (submit/Enter), and <SA>/<COPY>/<CUT> (select all,
+  // copy, cut; style audit item 11). Exists for exactly the reason --tap
   // does: the geometry and event wiring are platform-independent and gating them
   // on a working macOS window would leave the input tier unverified on Linux.
   std::string typeSpec;
@@ -1200,6 +1756,20 @@ int main(int argc, char** argv) {
   int hoverAfterFrames = 0;
   std::vector<std::pair<double, double>> hoverPoints;
   bool hoverLeaveAtEnd = false;
+  // desktop-input-gap P0 item 1. Windowed keyboard test hook state (KeySpec
+  // is file-scope, above RunWindowed). See the flag parser below for the
+  // "--key-after-frames N:KEY:PHASE[:MODS];..." syntax.
+  int keyAfterFrames = 0;
+  std::vector<KeySpec> keySequence;
+  // desktop-input-gap item 2a. Windowed synthetic-char test hook state
+  // (CharSpec is file-scope, above RunWindowed). See the flag parser below
+  // for the "--char-after-frames N:CP1;CP2;..." syntax.
+  int charAfterFrames = 0;
+  std::vector<CharSpec> charSequence;
+  // item 4b. "--mouse-after-frames N:OP@X,Y;..." OP = down|up|move|sdown
+  // (sdown = press with Shift). One event per frame from frame N.
+  int mouseAfterFrames = 0;
+  std::vector<MouseSpec> mouseSequence;
   int width = 400, height = 300;
   // ⛔ WINDOWED DEFAULT IS THE DISPLAY, NOT THESE NUMBERS — SEE GlfwSurface::init.
   // 400x300 is the HEADLESS default and every headless gate depends on it byte
@@ -1469,14 +2039,245 @@ int main(int argc, char** argv) {
         return 2;
       }
     }
+    // desktop-input-gap P0 item 1. Windowed keyboard test hook:
+    // "--key-after-frames N:KEY1:PHASE1[:MODS1];KEY2:PHASE2[:MODS2];..."
+    // synthesises one key event per segment, one per frame starting at frame
+    // N, through GlfwSurface::synthesiseKey -- the SAME translation the real
+    // glfwSetKeyCallback uses (see dispatchKeyEvent's header comment), so
+    // this hook exercises the conversion + dispatch on hosts where XTest
+    // cannot reach every modifier (some window managers refuse to let XTest
+    // set the Super/Meta bit). KEY is a W3C key name (ArrowLeft, Tab, a, ...);
+    // PHASE is down/repeat/up; MODS is a comma list of shift,ctrl,alt,meta,
+    // capslock (omit for none). Named to match the other frame-anchored
+    // hooks (--click-after-frames, --hover-after-frames).
+    else if (a == "--key-after-frames") {
+      std::string spec = next("--key-after-frames");
+      auto colon = spec.find(':');
+      if (colon == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --key-after-frames wants N:KEY:PHASE[:MODS]... "
+                "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      keyAfterFrames = atoi(spec.substr(0, colon).c_str());
+      if (keyAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --key-after-frames needs N > 0 (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      std::string rest = spec.substr(colon + 1);
+      size_t pos = 0;
+      while (pos < rest.size()) {
+        size_t semi = rest.find(';', pos);
+        std::string seg = rest.substr(
+            pos, semi == std::string::npos ? std::string::npos : semi - pos);
+        if (!seg.empty()) {
+          KeySpec ks;
+          size_t c1 = seg.find(':');
+          size_t c2 = c1 == std::string::npos ? std::string::npos
+                                              : seg.find(':', c1 + 1);
+          if (c1 == std::string::npos) {
+            fprintf(stderr,
+                    "rn-impeller: --key-after-frames segment wants "
+                    "KEY:PHASE[:MODS] (got %s)\n",
+                    seg.c_str());
+            return 2;
+          }
+          ks.key = seg.substr(0, c1);
+          std::string phaseStr =
+              seg.substr(c1 + 1, c2 == std::string::npos ? std::string::npos
+                                                         : c2 - c1 - 1);
+          if (phaseStr == "down") ks.phase = 0;
+          else if (phaseStr == "repeat") ks.phase = 1;
+          else if (phaseStr == "up") ks.phase = 2;
+          else {
+            fprintf(stderr,
+                    "rn-impeller: --key-after-frames phase must be "
+                    "down/repeat/up (got %s)\n",
+                    phaseStr.c_str());
+            return 2;
+          }
+          if (c2 != std::string::npos) {
+            std::string mods = seg.substr(c2 + 1);
+            size_t mp = 0;
+            while (mp < mods.size()) {
+              size_t mc = mods.find(',', mp);
+              std::string m = mods.substr(
+                  mp, mc == std::string::npos ? std::string::npos : mc - mp);
+              if (m == "shift") ks.shift = true;
+              else if (m == "ctrl") ks.ctrl = true;
+              else if (m == "alt") ks.alt = true;
+              else if (m == "meta") ks.meta = true;
+              else if (m == "capslock") ks.capsLock = true;
+              else if (!m.empty()) {
+                fprintf(stderr,
+                        "rn-impeller: --key-after-frames unknown modifier "
+                        "'%s'\n",
+                        m.c_str());
+                return 2;
+              }
+              if (mc == std::string::npos) break;
+              mp = mc + 1;
+            }
+          }
+          keySequence.push_back(ks);
+        }
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+      }
+      if (keySequence.empty()) {
+        fprintf(stderr,
+                "rn-impeller: --key-after-frames needs at least one "
+                "KEY:PHASE segment (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
+    // desktop-input-gap item 2a. Windowed synthetic-char test hook:
+    // "--char-after-frames N:CP1;CP2;..." synthesises one CHARACTER event
+    // per segment, one per frame starting at frame N, through
+    // GlfwSurface::synthesiseChar -- the same charHandler_ a real
+    // glfwSetCharCallback delivers to. CP is a decimal codepoint or
+    // "U+XXXX" hex (e.g. "233" or "U+E9" for e-acute, "U+1F600" for an
+    // emoji) -- accepting hex makes a gate's intent legible (U+1F600 reads
+    // as "grinning face", 128512 does not) without adding a second field.
+    // Exists because XTest cannot easily synthesise a raw keysym for
+    // characters with no physical key on the host's layout (emoji, most
+    // accented letters), so a gate needs an in-process path to prove
+    // InsertChar's UTF-8 handling independent of key-event delivery.
+    else if (a == "--mouse-after-frames") {
+      std::string spec = next("--mouse-after-frames");
+      auto colon = spec.find(':');
+      mouseAfterFrames =
+          colon == std::string::npos ? 0 : atoi(spec.substr(0, colon).c_str());
+      if (mouseAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --mouse-after-frames wants N:OP@X,Y;... with "
+                "N > 0 (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      std::string rest = spec.substr(colon + 1);
+      size_t pos = 0;
+      while (pos < rest.size()) {
+        size_t semi = rest.find(';', pos);
+        std::string seg = rest.substr(
+            pos, semi == std::string::npos ? std::string::npos : semi - pos);
+        if (!seg.empty()) {
+          MouseSpec ms;
+          auto at = seg.find('@');
+          auto comma = seg.find(',', at == std::string::npos ? 0 : at);
+          std::string op = seg.substr(0, at);
+          // item 6: optional "+mod,mod" suffix (shift, ctrl, alt, meta) and
+          // button-prefixed ops: r (right), m (middle), b4 (back), b5
+          // (forward), l (left, explicit) -- e.g. rdown+ctrl,shift@X,Y.
+          std::string modStr;
+          if (auto plus = op.find('+'); plus != std::string::npos) {
+            modStr = op.substr(plus + 1);
+            op = op.substr(0, plus);
+          }
+          int button = -1;
+          if (op.rfind("b4", 0) == 0) { button = 3; op = op.substr(2); }
+          else if (op.rfind("b5", 0) == 0) { button = 4; op = op.substr(2); }
+          else if (op == "rdown" || op == "rup") { button = 2; op = op.substr(1); }
+          else if (op == "mdown" || op == "mup") { button = 1; op = op.substr(1); }
+          else if (op == "ldown" || op == "lup") { button = 0; op = op.substr(1); }
+          bool badMod = false;
+          for (size_t mp = 0; mp < modStr.size();) {
+            size_t mc = modStr.find(',', mp);
+            const std::string md = modStr.substr(
+                mp, mc == std::string::npos ? std::string::npos : mc - mp);
+            if (md == "shift") ms.shift = true;
+            else if (md == "ctrl") ms.ctrl = true;
+            else if (md == "alt") ms.alt = true;
+            else if (md == "meta") ms.meta = true;
+            else if (!md.empty()) badMod = true;
+            if (mc == std::string::npos) break;
+            mp = mc + 1;
+          }
+          if (at == std::string::npos || comma == std::string::npos ||
+              badMod ||
+              (op != "down" && op != "up" && op != "move" && op != "sdown")) {
+            fprintf(stderr,
+                    "rn-impeller: --mouse-after-frames bad event '%s' (want "
+                    "[r|m|l|b4|b5]down|up|move|sdown[+mods]@X,Y)\n",
+                    seg.c_str());
+            return 2;
+          }
+          ms.op = op == "up" ? 1 : op == "move" ? 2 : 0;
+          if (op == "sdown") ms.shift = true;
+          // A modifier on a plain down/up routes through the full-modifier
+          // path as an explicit left-button event.
+          if (button < 0 && (ms.ctrl || ms.alt || ms.meta) && ms.op != 2)
+            button = 0;
+          ms.button = button;
+          ms.x = atof(seg.substr(at + 1, comma - at - 1).c_str());
+          ms.y = atof(seg.substr(comma + 1).c_str());
+          mouseSequence.push_back(ms);
+        }
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+      }
+    }
+    else if (a == "--char-after-frames") {
+      std::string spec = next("--char-after-frames");
+      auto colon = spec.find(':');
+      if (colon == std::string::npos) {
+        fprintf(stderr,
+                "rn-impeller: --char-after-frames wants N:CP[;CP...] "
+                "(got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      charAfterFrames = atoi(spec.substr(0, colon).c_str());
+      if (charAfterFrames <= 0) {
+        fprintf(stderr,
+                "rn-impeller: --char-after-frames needs N > 0 (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+      std::string rest = spec.substr(colon + 1);
+      size_t pos = 0;
+      while (pos < rest.size()) {
+        size_t semi = rest.find(';', pos);
+        std::string seg = rest.substr(
+            pos, semi == std::string::npos ? std::string::npos : semi - pos);
+        if (!seg.empty()) {
+          CharSpec cs;
+          if (seg.size() > 2 && (seg[0] == 'U' || seg[0] == 'u') &&
+              seg[1] == '+') {
+            cs.codepoint =
+                (unsigned int)strtoul(seg.c_str() + 2, nullptr, 16);
+          } else {
+            cs.codepoint = (unsigned int)strtoul(seg.c_str(), nullptr, 10);
+          }
+          charSequence.push_back(cs);
+        }
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+      }
+      if (charSequence.empty()) {
+        fprintf(stderr,
+                "rn-impeller: --char-after-frames needs at least one CP "
+                "segment (got %s)\n",
+                spec.c_str());
+        return 2;
+      }
+    }
     else if (a == "--log-mutations") logMutations = true;
     else if (a == "--list-modules") listModules = true;
     else if (a == "--test-openurl") testOpenUrl = true;
     else if (a == "--test-pointscale") testPointScale = true;
     else if (a == "--test-caret-blink") testCaretBlink = true;
+    // ENG-22: a dir of .ttf/.otf/.ttc files to register (repeatable; also
+    // RNI_FONT_DIRS, colon-separated). Faces register under their own family.
+    else if (a == "--font-dir") gFontDirs.push_back(next("--font-dir"));
+    else if (a == "--title") gWindowTitle = next("--title");
     else if (a == "--test-urlparse") testUrlParse = true;
     else if (a == "--test-http") testHttp = true;
-    else if (a == "--color-scheme") colorScheme = next("--color-scheme");
+    else if (a == "--color-scheme") { colorScheme = next("--color-scheme"); colorSchemeGiven = true; }
     else if (a == "--initial-url") initialUrl = next("--initial-url");
     else if (a == "--probe-banner") probeBanner = (next("--probe-banner") != "off");
     else if (a == "--width") { width = atoi(next("--width").c_str()); widthGiven = true; }
@@ -1566,21 +2367,61 @@ int main(int argc, char** argv) {
     Usage();
     return 2;
   }
-  if (!IsAbsolute(bundlePath)) {
-    fprintf(stderr,
-            "rn-impeller: FATAL: --bundle must be an ABSOLUTE path "
-            "(no CWD fallback exists)\n");
-    return 1;
-  }
-
+  // parity item 13. --bundle may be a Metro URL
+  // (http://host:8081/index.bundle?platform=impeller&dev=true). The bundle is
+  // fetched over the same transport as fetch() (NetworkingModule's
+  // performRequest), and the URL itself becomes the script's source URL, so
+  // SourceCode.scriptURL / getDevServer() report it: bundleLoadedFromServer
+  // is true and HMR + symbolication know which server to talk to.
+  const bool bundleIsUrl = bundlePath.rfind("http://", 0) == 0 ||
+                           bundlePath.rfind("https://", 0) == 0;
   std::string bundle;
-  if (!ReadFile(bundlePath, &bundle)) {
-    fprintf(stderr, "rn-impeller: FATAL: cannot read bundle at %s\n",
-            bundlePath.c_str());
-    return 1;
+  if (bundleIsUrl) {
+    const rni::ParsedUrl purl = rni::parseUrl(bundlePath);
+    if (!purl.valid) {
+      fprintf(stderr, "rn-impeller: FATAL: bad --bundle URL: %s\n",
+              purl.error.c_str());
+      return 1;
+    }
+    printf("rn-impeller: bundle_fetch url=%s\n", bundlePath.c_str());
+    fflush(stdout);
+    // Metro builds the bundle on first request: allow it time.
+    const rni::HttpResponse res =
+        rni::performRequest("GET", purl, {{"Accept", "*/*"}}, "", 120000.0);
+    if (!res.ok || res.status != 200) {
+      fprintf(stderr,
+              "rn-impeller: FATAL: cannot fetch bundle from %s (status %d%s%s)\n",
+              bundlePath.c_str(), res.status, res.error.empty() ? "" : ": ",
+              res.error.c_str());
+      return 1;
+    }
+    bundle = res.body;
+  } else {
+    if (!IsAbsolute(bundlePath)) {
+      fprintf(stderr,
+              "rn-impeller: FATAL: --bundle must be an ABSOLUTE path or an "
+              "http:// URL (no CWD fallback exists)\n");
+      return 1;
+    }
+    if (!ReadFile(bundlePath, &bundle)) {
+      fprintf(stderr, "rn-impeller: FATAL: cannot read bundle at %s\n",
+              bundlePath.c_str());
+      return 1;
+    }
   }
+  const std::string sourceUrl =
+      bundleIsUrl ? bundlePath : "file://" + bundlePath;
   const bool shimOk = bundle.find(kShimMarker) != std::string::npos;
   const size_t bundleSize = bundle.size();  // captured before the move below
+  // SC-23: with no --color-scheme the host follows the OS (windowed) or the
+  // test hook (any mode); the flag and Appearance.setColorScheme override it.
+  if (!colorSchemeGiven) {
+    const std::string os = rni::ResolveSystemScheme(windowMode);
+    if (!os.empty()) colorScheme = os;
+    gFollowOsAppearance = windowMode;
+  }
+  printf("rn-impeller: color_scheme=%s source=%s\n", colorScheme.c_str(),
+         colorSchemeGiven ? "flag" : (rni::OsAppearanceHookActive() ? "hook" : (windowMode ? "os" : "default")));
   printf("rn-impeller: app=%s\n", appName.c_str());
   printf("rn-impeller: bundle=%s (%zu bytes)\n", bundlePath.c_str(), bundle.size());
   printf("rn-impeller: shim_marker=%s\n", shimOk ? "PRESENT" : "MISSING");
@@ -1596,7 +2437,8 @@ int main(int argc, char** argv) {
     // handsPending guard keeps every frame-anchored windowed gate (resize/click/
     // scroll/hover/stall/screenshot/--frames) painting on schedule regardless.
     if (!idleSkipSet && frames == 0) idleSkip = true;
-    return RunWindowed(bundlePath, appName, std::move(bundle), 0, bundleSize,
+    gWindowedTypeSpec = typeSpec;  // ENG-18
+    return RunWindowed(sourceUrl, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl,
                        widthGiven ? width : 0, heightGiven ? height : 0,
                        pointScale,
@@ -1606,6 +2448,9 @@ int main(int argc, char** argv) {
                        clickAfterFrames, clickX, clickY,
                        scrollAfterFrames, scrollX, scrollY, scrollDx, scrollDy,
                        hoverAfterFrames, hoverPoints, hoverLeaveAtEnd,
+                       keyAfterFrames, keySequence,
+                       charAfterFrames, charSequence,
+                       mouseAfterFrames, mouseSequence,
                        supersampleRnsvg,
                        idleSkip, idleRunSec, idleBudgetMs, idleLog, idleMutant,
                        idleOffthreadAfter);
@@ -1632,6 +2477,8 @@ int main(int argc, char** argv) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
   }
+  // ENG-22: app fonts before the first measure (FabricHost is built below).
+  rni::RegisterFontDirs(surface.typography(), rni::FontDirsFrom(gFontDirs));
   // A degraded surface (main FBO unavailable under GPU pressure, or
   // RNI_FORCE_FBO_FAIL) mounts and walks the tree for counts but has no
   // drawable. Every pixel-dependent step below is gated on this; the run still
@@ -1648,8 +2495,11 @@ int main(int argc, char** argv) {
     sceneGraph.setSupersample(supersampleRnsvg);
     // ENG item 2b — root supersample offscreen size, device pixels.
     sceneGraph.setSurfaceSize(width, height);
-    rni::ReactHost host;
+    // parity item 24: a Metro-served bundle is debuggable.
+    rni::ReactHost host(/*withInspector*/ sourceUrl.rfind("http://", 0) == 0);
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
+    // ENG-09 — wire the world raster store, same as the primary path.
+    sceneGraph.setWorldRasterStore(host.worldRasterStore());
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
     // Dimensions/PixelRatio read this. RN code branches on PixelRatio.get()
     // for asset selection (@2x/@3x) and hairline widths, so reporting 1 while
@@ -1670,7 +2520,10 @@ int main(int argc, char** argv) {
     rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                            logMutations, host.displayMetrics());
 
-    host.runScript(std::move(bundle), "file://" + bundlePath);
+    host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
+    host.runScript(std::move(bundle), sourceUrl);
+    host.devServerSetup(sourceUrl);  // parity item 14 (no-op for file://)
+    host.connectInspector(sourceUrl, appName);  // parity item 24
     // Let the bundle finish evaluating (AppRegistry.registerComponent) before
     // asking for the surface, otherwise runApplication names a module that is
     // not registered yet.
@@ -1785,11 +2638,18 @@ int main(int argc, char** argv) {
       int downTag = fabric.beginTouchCapture(pts.front().first, pts.front().second);
       printf("rn-impeller: drag_down_tag=%d at=%.1f,%.1f\n", downTag,
              pts.front().first, pts.front().second);
+      // P1 item 15: the SAME press-path the windowed mouse handler runs, so a
+      // headless drag across a <Text selectable> selects exactly as a real
+      // one does (the Mac audit's probe://select scene drives this).
+      fabric.beginTextSelection(pts.front().first, pts.front().second);
       // Every intermediate point is a held move; the LAST point is the release.
       // Report the tag each move reached: it MUST equal downTag for the whole
       // drag, including a waypoint outside the control's bounds.
       int lastMoveTag = downTag;
       for (size_t i = 1; i + 1 < pts.size(); ++i) {
+        // P1 item 15: the windowed hover handler extends a held selection
+        // FIRST (dragTextSelection), then routes the captured move; mirror it.
+        fabric.dragTextSelection(pts[i].first, pts[i].second);
         int mt = fabric.dispatchCapturedMove(pts[i].first, pts[i].second);
         lastMoveTag = mt;
         printf("rn-impeller: drag_move_tag=%d at=%.1f,%.1f\n", mt, pts[i].first,
@@ -1802,14 +2662,32 @@ int main(int argc, char** argv) {
       // plain tap. This move is at the release point, which is the off-control
       // location the gate places to catch a re-hit-test.
       if (pts.size() == 2) {
+        fabric.dragTextSelection(pts.back().first, pts.back().second);
         int mt = fabric.dispatchCapturedMove(pts.back().first, pts.back().second);
         lastMoveTag = mt;
         printf("rn-impeller: drag_move_tag=%d at=%.1f,%.1f\n", mt,
                pts.back().first, pts.back().second);
+      } else {
+        // A real pointer reaches the release point through a cursor move
+        // first; extend a held text selection to it the same way.
+        fabric.dragTextSelection(pts.back().first, pts.back().second);
       }
       int upTag = fabric.endTouchCapture(pts.back().first, pts.back().second);
+      fabric.endTextSelectionDrag();  // the windowed release does the same
       printf("rn-impeller: drag_up_tag=%d at=%.1f,%.1f\n", upTag,
              pts.back().first, pts.back().second);
+      // P1 item 15: RNI_DRAG_COPY=1 presses the platform Copy chord after the
+      // release, through dispatchKeyEvent (the real key path), so a gate can
+      // prove a selectable <Text>'s selection reaches the clipboard.
+      if (const char* dc = std::getenv("RNI_DRAG_COPY"); dc && dc[0] == '1') {
+        rni::FabricHost::KeyModifiers cm{};
+#if defined(__APPLE__)
+        cm.meta = true;
+#else
+        cm.ctrl = true;
+#endif
+        fabric.dispatchKeyEvent("c", "KeyC", rni::FabricHost::KeyEventPhase::Down, cm);
+      }
       // After release the capture MUST be clear: a move now is a hover, not a
       // drag. captured=0 here proves endTouchCapture reset the state -- a stuck
       // capture would silently swallow every later click as a drag move.
@@ -1875,17 +2753,54 @@ int main(int argc, char** argv) {
       printf("rn-impeller: type_focus=%d at=%.1f,%.1f\n", focused, fx, fy);
       host.waitForJsIdle(5000);
       const std::string seq = typeSpec.substr(colon + 1);
-      for (size_t i = 0; i < seq.size();) {
-        if (seq.compare(i, 4, "<BS>") == 0) {
-          fabric.dispatchKey(rni::FabricHost::KeyAction::Backspace, 0);
-          i += 4;
-        } else if (seq.compare(i, 4, "<CR>") == 0) {
-          fabric.dispatchKey(rni::FabricHost::KeyAction::Submit, 0);
-          i += 4;
-        } else {
-          fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar,
-                             (unsigned char)seq[i]);
-          i += 1;
+      // ENG-18: the same token list the windowed --type hook consumes.
+      // ENG-24: Enter / Shift+Enter / Backspace also send the key event a
+      // real key does first (onKeyPress, keyDown), then the edit, then the
+      // release -- the order GlfwSurface::dispatchKeyEvent runs them in.
+      auto keyEvent = [&](const char* key, bool shift,
+                          rni::FabricHost::KeyEventPhase phase) {
+        rni::FabricHost::KeyModifiers mods;
+        mods.shift = shift;
+        fabric.dispatchKeyEvent(key, key, phase, mods);
+      };
+      for (const TypeToken& tk : ParseTypeSeq(seq)) {
+        const bool keyed = tk.kind == TypeToken::Backspace ||
+                           tk.kind == TypeToken::Enter ||
+                           tk.kind == TypeToken::ShiftEnter;
+        const char* keyName =
+            tk.kind == TypeToken::Backspace ? "Backspace" : "Enter";
+        const bool keyShift = tk.kind == TypeToken::ShiftEnter;
+        if (keyed) {
+          keyEvent(keyName, keyShift, rni::FabricHost::KeyEventPhase::Down);
+        }
+        switch (tk.kind) {
+          case TypeToken::Backspace:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Backspace, 0);
+            break;
+          case TypeToken::Enter:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Submit, 0);
+            break;
+          case TypeToken::ShiftEnter:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Newline, 0);
+            break;
+          case TypeToken::SelectAll:
+            // Style audit item 11 gate: select all, then <COPY>/<CUT>, so a
+            // headless run can prove a secure field refuses the clipboard.
+            fabric.dispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
+            break;
+          case TypeToken::Copy:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Copy, 0);
+            break;
+          case TypeToken::Cut:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
+            break;
+          case TypeToken::Char:
+            fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar,
+                               tk.codepoint);
+            break;
+        }
+        if (keyed) {
+          keyEvent(keyName, keyShift, rni::FabricHost::KeyEventPhase::Up);
         }
         host.waitForJsIdle(5000);
       }
@@ -1896,7 +2811,7 @@ int main(int argc, char** argv) {
       std::string v = sceneGraph.textInputValueFor(focused);
       size_t caret = sceneGraph.textInputCaretFor(focused);
       printf("rn-impeller: textinput_value tag=%d len=%zu caret=%zu v=%s\n",
-             focused, v.size(), caret, v.c_str());
+             focused, v.size(), caret, EscapeNewlines(v).c_str());
       // The JS-side truth: every Paragraph's painted text. The fixture's
       // controlled label renders `len=N v=...`, so this line proves onChangeText
       // actually ran in JS and re-rendered -- not merely that the native buffer
@@ -1982,6 +2897,9 @@ int main(int argc, char** argv) {
 
     ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
     painted = sceneGraph.paint(builder, pointScale);
+    // ENG-10: GPU sprite quads actually issued this paint (gate arm).
+    printf("rn-impeller: world_sprites_drawn=%d\n",
+           sceneGraph.worldSpritesDrawn());
     if (probeBanner) {
       DrawProbeBanner(builder, shimOk, bundleSize, width, height);
     }

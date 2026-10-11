@@ -1,0 +1,39 @@
+RNI: emulate decal in the gaussian blur downsample on GLES without border clamp.
+
+ANGLE-Metal exposes no GL_EXT_texture_border_clamp. The scale >= 0.5 downsample
+drew with the plain texture pipeline, which then clamps to edge and smears the
+edge texels into the blur halo gutter (darwin blur and drop-shadow). Take the
+GLES downsample pipeline (decal in the shader) with a single tap instead.
+
+diff --git a/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.cc b/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.cc
+index 917c11d3..d1f5f85b 100644
+--- a/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.cc
++++ b/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.cc
+@@ -421,6 +421,15 @@ fml::StatusOr<RenderTarget> MakeDownsampleSubpass(
+       (pass_args.effective_scalar.x >= 0.5f ||
+        (!input_texture->NeedsMipmapGeneration() &&
+         input_texture->GetTextureDescriptor().mip_count > 1));
++  // RNI: without border clamp (ANGLE-Metal) the texture pipeline clamps to
++  // edge and smears the edge texels into the halo gutter; take the GLES
++  // downsample pipeline, which emulates decal in the shader.
++  bool emulate_decal =
++      tile_mode == Entity::TileMode::kDecal &&
++      !renderer.GetDeviceCapabilities().SupportsDecalSamplerAddressMode();
++  if (emulate_decal) {
++    may_reuse_mipmap = false;
++  }
+   if (may_reuse_mipmap) {
+     ContentContext::SubpassCallback subpass_callback =
+         [&](const ContentContext& renderer, RenderPass& pass) {
+@@ -476,6 +485,11 @@ fml::StatusOr<RenderTarget> MakeDownsampleSubpass(
+       edge = 3.0;
+       ratio = 1.0f / 16.0f;
+     }
++    if (emulate_decal && pass_args.effective_scalar.x >= 0.5f) {
++      // RNI: one bilinear tap, as the texture pipeline above would take.
++      edge = 0.0;
++      ratio = 1.0;
++    }
+     ContentContext::SubpassCallback subpass_callback =
+         [&](const ContentContext& renderer, RenderPass& pass) {
+           HostBuffer& data_host_buffer = renderer.GetTransientsDataBuffer();

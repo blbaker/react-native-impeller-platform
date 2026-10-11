@@ -33,8 +33,10 @@
 // JNI-backed managers. But the flavour choice is about the METHOD MAP only:
 // every constant below describes THIS platform, not iOS.
 #pragma once
+#include <functional>
 
 #include <FBReactNativeSpecJSI.h>
+#include <react/renderer/graphics/PlatformColorTable.h>
 
 #include <cstdio>
 #include <memory>
@@ -55,14 +57,49 @@ namespace jsi = facebook::jsi;
 struct AppearanceState {
   std::mutex mutex;
   std::string colorScheme{"light"};
+  // ENG-17: the host's own scheme (--color-scheme), what 'unspecified' returns
+  // to. An app override never changes it.
+  std::string systemScheme{"light"};
+  bool appOverride{false};  // Appearance.setColorScheme('light'|'dark') is active
 
   std::string get() {
     std::lock_guard<std::mutex> lock(mutex);
     return colorScheme;
   }
+  // The HOST's scheme (startup flag): sets the system value and the current one.
   void set(std::string scheme) {
     std::lock_guard<std::mutex> lock(mutex);
+    systemScheme = scheme;
     colorScheme = std::move(scheme);
+    appOverride = false;
+    publishScheme();
+  }
+  // SC-23: the OS changed. An app override keeps winning; returns true when
+  // the EFFECTIVE scheme changed (the caller then emits appearanceChanged).
+  bool setSystem(const std::string& scheme) {
+    std::lock_guard<std::mutex> lock(mutex);
+    systemScheme = scheme;
+    if (appOverride || colorScheme == scheme) return false;
+    colorScheme = scheme;
+    publishScheme();
+    return true;
+  }
+  // ENG-17: an app override (Appearance.setColorScheme). 'unspecified' drops
+  // the override and goes back to the system scheme. Returns true when the
+  // EFFECTIVE scheme changed; `effective` gets the new value either way.
+  bool override(const std::string& requested, std::string& effective) {
+    std::lock_guard<std::mutex> lock(mutex);
+    effective = requested == "unspecified" ? systemScheme : requested;
+    appOverride = requested != "unspecified";
+    if (effective == colorScheme) return false;
+    colorScheme = effective;
+    publishScheme();
+    return true;
+  }
+
+  // PlatformColor props resolve against this when they are parsed.
+  void publishScheme() {
+    facebook::react::impeller_platform_color::darkScheme().store(colorScheme == "dark");
   }
 };
 
@@ -81,8 +118,23 @@ class AppearanceModule
     return jsi::String::createFromUtf8(rt, state_->get());
   }
 
+  // ENG-17. iOS: setColorScheme sets overrideUserInterfaceStyle, the trait
+  // change fires, and RCTAppearance emits `appearanceChanged`. Appearance.js
+  // only re-emits its 'change' (what useColorScheme subscribes to) from that
+  // native event, so storing the value alone left every subscriber stale.
+  // Emitted only when the effective scheme changes, like the trait change.
   void setColorScheme(jsi::Runtime& rt, jsi::String scheme) {
-    state_->set(scheme.utf8(rt));
+    std::string effective;
+    if (!state_->override(scheme.utf8(rt), effective)) return;
+    std::printf("rn-impeller: appearance_changed scheme=%s\n", effective.c_str());
+    std::fflush(stdout);
+    emitDeviceEvent("appearanceChanged",
+                    [effective](jsi::Runtime& rt2, std::vector<jsi::Value>& args) {
+                      jsi::Object prefs(rt2);
+                      prefs.setProperty(rt2, "colorScheme",
+                                        jsi::String::createFromUtf8(rt2, effective));
+                      args.emplace_back(std::move(prefs));
+                    });
   }
 
   void addListener(jsi::Runtime&, jsi::String) {}
@@ -178,11 +230,18 @@ class DevSettingsModule
     : public facebook::react::NativeDevSettingsCxxSpec<DevSettingsModule> {
  public:
   explicit DevSettingsModule(
-      std::shared_ptr<facebook::react::CallInvoker> jsInvoker)
-      : NativeDevSettingsCxxSpec(std::move(jsInvoker)) {}
+      std::shared_ptr<facebook::react::CallInvoker> jsInvoker,
+      std::shared_ptr<std::function<void(const std::string&)>> reload = nullptr)
+      : NativeDevSettingsCxxSpec(std::move(jsInvoker)),
+        reload_(std::move(reload)) {}
 
-  void reload(jsi::Runtime&) {}
-  void reloadWithReason(jsi::Runtime&, jsi::String) {}
+  // parity item 14. Reload = the host re-fetches the bundle (from Metro when
+  // it came from a URL) and runs it in a fresh React instance. Without a
+  // host hook (headless one-shot runs) it is a logged no-op, never silent.
+  void reload(jsi::Runtime&) { requestReload("reload"); }
+  void reloadWithReason(jsi::Runtime& rt, jsi::String reason) {
+    requestReload(reason.utf8(rt));
+  }
   void onFastRefresh(jsi::Runtime&) {}
   void setHotLoadingEnabled(jsi::Runtime&, bool) {}
   void setProfilingEnabled(jsi::Runtime&, bool) {}
@@ -192,6 +251,15 @@ class DevSettingsModule
   void addListener(jsi::Runtime&, jsi::String) {}
   void removeListeners(jsi::Runtime&, double) {}
   void setIsShakeToShowDevMenuEnabled(jsi::Runtime&, bool) {}
+
+ private:
+  void requestReload(const std::string& reason) {
+    std::printf("rn-impeller: devsettings_reload reason=%s hook=%d\n",
+                reason.c_str(), reload_ && *reload_ ? 1 : 0);
+    std::fflush(stdout);
+    if (reload_ && *reload_) (*reload_)(reason);
+  }
+  std::shared_ptr<std::function<void(const std::string&)>> reload_;
 };
 
 // ---------------------------------------------------------------------------

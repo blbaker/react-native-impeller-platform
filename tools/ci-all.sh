@@ -254,6 +254,37 @@ bash tools/ci-usesym.sh | grep -E "USESYM_GATE_PASS|control=|scaled_"
 echo "### gate 24: canvas draw path -- offscreen atlas, blit, rect volume"
 bash tools/ci-canvas.sh | grep -E "CANVAS_GATE_PASS|blit site differs|CANVAS_BENCH steady|CANVAS_BENCH burst"
 
+# Headless, prebuilt bundle (no npm). lineHeight must drive BOTH the measured
+# box (TextLayoutManager) and the painted line pitch (SceneGraph): fixing only
+# one half lets ink overflow its box. Mutants: mutation-verify-line-height.sh.
+echo "### gate 24b: <Text> lineHeight reaches measure AND paint (ENG-23)"
+bash tools/ci-line-height.sh | grep -E "LINE_HEIGHT_GATE_PASS|OK [A-D]:"
+
+# Headless, prebuilt bundle. A <world> set to setSampling 'nearest' must keep
+# terrain AND sprite texels hard (CPU nearest composite), and a world left at
+# the default must stay linear. Mutants: mutation-verify-world-nearest.sh.
+echo "### gate 24c: <world> nearest-neighbour sampling (ENG-21)"
+bash tools/ci-world-nearest.sh | grep -E "WORLD_NEAREST_GATE_PASS|OK [A-D]"
+
+# Headless, prebuilt bundle. A multiline TextInput starts at the TOP of its
+# content box; textAlignVertical top/center/bottom are honoured; single-line
+# stays centred. Mutants: mutation-verify-textinput-valign.sh.
+echo "### gate 24d: TextInput vertical placement (ENG-16)"
+bash tools/ci-textinput-valign.sh | grep -E "TEXTINPUT_VALIGN_GATE_PASS|OK [A-E]:"
+
+# Headless, prebuilt bundle. The Mac's 66-cell style-audit grid: every landed
+# audit item must PASS (shadows, boxShadow, elevation so far) and every tile
+# the audit found working must STAY passing. Mutants:
+# mutation-verify-style-audit.sh.
+echo "### gate 24e: style audit grid (shadows + keep-green regression)"
+bash tools/ci-style-audit.sh | grep -E "STYLE_AUDIT_GATE_PASS|item [0-9]+:"
+
+# Windowed (xvfb on linux), prebuilt bundle. --type types into a WINDOWED run
+# through the real char/key entry points and --screenshot shows the result.
+# Mutants: mutation-verify-window-type.sh.
+echo "### gate 24f: windowed --type (ENG-18)"
+bash tools/ci-window-type.sh | grep -E "WINDOW_TYPE_PASS|NL field"
+
 # ⛔ THE NETWORKING GATE EXISTED FOR A DAY AND WAS NEVER IN THIS FILE.
 # tools/ci-p10.sh was written with the Networking TurboModule (c4e59e1) and TLS
 # (a932ded) and is only referenced by tools/mutation-verify-p10.sh — so the ONLY

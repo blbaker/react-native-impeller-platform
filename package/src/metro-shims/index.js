@@ -18,6 +18,7 @@
 // So: let the upstream resolver do its job, then inspect the file it landed on and
 // swap it. The `SHIM_TARGETS` suffixes below are matched against that resolved path.
 
+const fs = require('fs');
 const path = require('path');
 
 const SHIM_DIR = path.join(__dirname, 'shims');
@@ -32,6 +33,37 @@ const SHIM_TARGETS = {
   // shims/Alert.impeller.js for the full note; this is a distinct failure from
   // the self-resolving RCTAlertManager.js stub below, and BOTH had to be fixed.
   'react-native/Libraries/Alert/Alert.js': 'Alert.impeller.js',
+  // desktop-input-gap P0 item 1. Bare BaseViewConfig.js is ALSO covered by
+  // the PLATFORM_FORKED ios-stub redirect below (it is a genuine ios-stub-
+  // disease file, unrelated to this entry), but SHIM_TARGETS is consulted
+  // FIRST in shimForResolvedPath -- see below -- so this entry wins and the
+  // PLATFORM_FORKED one is inert for this specifier. Kept that way
+  // deliberately (not removed from PLATFORM_FORKED) so it stays the ios-stub-
+  // disease REFERENCE case the P2 gate's mutation suite targets, and this
+  // shim is additive on top of it (see shims/BaseViewConfig.impeller.js for
+  // why): the ios-stub-disease fix is still exactly what runs underneath.
+  'react-native/Libraries/NativeComponent/BaseViewConfig.js':
+    'BaseViewConfig.impeller.js',
+  // desktop-input-gap item 6. RN core's ConditionallyIgnoredEventHandlers
+  // strips onClick/onPointerDown/onPointerUp/... from validAttributes unless
+  // Platform.OS === 'ios' -- see shims/ViewConfigIgnore.impeller.js for the
+  // full "native fires, JS never hears" story.
+  'react-native/Libraries/NativeComponent/ViewConfigIgnore.js':
+    'ViewConfigIgnore.impeller.js',
+  // parity item 7. TextInputState.js sends focus/blur commands only on ios/
+  // android, behind a Platform.OS check Metro inlines to 'impeller' at build
+  // time, so ref.focus()/ref.blur() never reached native. See the shim.
+  'react-native/Libraries/Components/TextInput/TextInputState.js':
+    'TextInputState.impeller.js',
+  // parity item 12. Image.js self re-exports to undefined on impeller; in a
+  // __DEV__ bundle that crashed LogBox on its first warning. SC-30: the shim
+  // now mounts the real RCTImageView host component. See the shim.
+  'react-native/Libraries/Image/Image.js': 'Image.impeller.js',
+  // SC-18. Adds a fontFamily processor (array -> CSS stack); see the shim.
+  'react-native/Libraries/Components/View/ReactNativeStyleAttributes.js':
+    'ReactNativeStyleAttributes.impeller.js',
+  // SC-24. Button branches on Platform.OS ios/android, both false here.
+  'react-native/Libraries/Components/Button.js': 'Button.impeller.js',
 };
 
 // ---------------------------------------------------------------------------
@@ -176,6 +208,31 @@ function shimForResolvedPath(filePath) {
   return null;
 }
 
+// parity item 20. Self re-export files redirected to their .ios.js sibling
+// (see resolveRequest). Only files measured to break are listed; the others
+// under Libraries/ are either already shimmed or render fine.
+const SELF_REEXPORTS = [
+  'react-native/Libraries/StyleSheet/PlatformColorValueTypes.js',
+  'react-native/Libraries/Utilities/BackHandler.js',
+  'react-native/Libraries/Components/AccessibilityInfo/legacySendAccessibilityEvent.js',
+];
+
+function selfReexportSibling(filePath) {
+  const posix = toPosix(filePath);
+  if (!SELF_REEXPORTS.some((rel) => posix.endsWith(rel))) return null;
+  const ios = filePath.replace(/\.js$/, '.ios.js');
+  return fs.existsSync(ios) ? ios : null;
+}
+
+// parity item 20. See shims/ReactNativeFeatureFlags.impeller.js.
+const FEATURE_FLAGS_SUFFIX =
+  'react-native/src/private/featureflags/ReactNativeFeatureFlags.js';
+const FEATURE_FLAGS_SHIM = 'ReactNativeFeatureFlags.impeller.js';
+
+// ENG-19. See resolveRequest and shims/reanimated.impeller.js.
+const REANIMATED = 'react-native-reanimated';
+const REANIMATED_SHIM = 'reanimated.impeller.js';
+
 function withImpeller(config = {}) {
   const resolver = config.resolver || {};
   const existingPlatforms = resolver.platforms || ['ios', 'android', 'native'];
@@ -185,19 +242,69 @@ function withImpeller(config = {}) {
 
   const priorResolveRequest = resolver.resolveRequest;
 
-  function resolveRequest(context, moduleName, platform) {
-    const resolution = priorResolveRequest
+  function baseResolve(context, moduleName, platform) {
+    return priorResolveRequest
       ? priorResolveRequest(context, moduleName, platform)
       : context.resolveRequest(context, moduleName, platform);
+  }
+
+  function resolveRequest(context, moduleName, platform) {
+    // ENG-19. react-native-reanimated: the engine vends no Reanimated/Worklets
+    // native module, and an app that does not install the package cannot even
+    // bundle (react-native-css requires it from native/reanimated.js). When
+    // the app has NOT installed it, resolve to the package's inert stub
+    // (shims/reanimated.impeller.js). An app that installs the real package
+    // keeps it: that is a deliberate choice, and hiding it would be a lie.
+    if (platform === 'impeller' && moduleName === REANIMATED) {
+      try {
+        return baseResolve(context, moduleName, platform);
+      } catch (error) {
+        return {type: 'sourceFile', filePath: path.join(SHIM_DIR, REANIMATED_SHIM)};
+      }
+    }
+    let resolution;
+    try {
+      resolution = baseResolve(context, moduleName, platform);
+    } catch (error) {
+      // parity item 20. RN ships some modules ONLY as .ios.js + .android.js
+      // with no platform-neutral file, so resolving them for 'impeller'
+      // THROWS. ReactDevToolsSettingsManager (reached from setUpReactDevTools
+      // in every __DEV__ bundle) is one: no dev bundle could even be built.
+      // Retry as ios, and ONLY on a throw: a module that resolves to an ios
+      // stub exporting undefined is a different defect, and a blanket
+      // redirect would hide it. (Moved here from HostApp's metro.config.js.)
+      if (platform !== 'impeller') throw error;
+      resolution = baseResolve(context, moduleName, 'ios');
+    }
 
     if (platform !== 'impeller' || !resolution || resolution.type !== 'sourceFile') {
       return resolution;
+    }
+    // parity item 20. Self re-export files: RN ships a few `Foo.js` whose body
+    // is `import Foo from './Foo'; export default Foo;`, meant to resolve
+    // through a .ios.js/.android.js sibling. On impeller there is no sibling,
+    // the import resolves back to ITSELF, and the default export is
+    // undefined. Measured in HostApp (Gluestack Popover): BackHandler ("Cannot
+    // read property 'addEventListener' of undefined") and
+    // legacySendAccessibilityEvent ("0,s.default is not a function").
+    const selfReexport = selfReexportSibling(resolution.filePath);
+    if (selfReexport) return {type: 'sourceFile', filePath: selfReexport};
+    // parity item 20. Feature-flags redirect (see the shim), except for the
+    // shim's own require of the real module.
+    const origin = toPosix(context.originModulePath || '');
+    if (
+      toPosix(resolution.filePath).endsWith(FEATURE_FLAGS_SUFFIX) &&
+      !origin.endsWith('/' + FEATURE_FLAGS_SHIM)
+    ) {
+      return {type: 'sourceFile', filePath: path.join(SHIM_DIR, FEATURE_FLAGS_SHIM)};
     }
     // Origin-scoped first: it is the narrower rule, and the only one that can
     // return a DIFFERENT Platform than the global shim.
     const originShim = shimForOrigin(context.originModulePath, resolution.filePath);
     if (originShim) return {type: 'sourceFile', filePath: originShim};
     const shim = shimForResolvedPath(resolution.filePath);
+    // A shim that wraps the real module requires it by path; do not loop it back.
+    if (shim && origin === toPosix(shim)) return resolution;
     return shim ? {type: 'sourceFile', filePath: shim} : resolution;
   }
 

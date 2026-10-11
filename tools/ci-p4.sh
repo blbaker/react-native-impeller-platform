@@ -199,6 +199,16 @@ const SPEC_FOR = {
   // THIS spec. Mapping to the Turbo flavour would check the method map the
   // engine does not serve -- green or red for the wrong reason either way.
   NativeAnimatedModule: 'src/private/specs_DEPRECATED/modules/NativeAnimatedModule.js',
+  // desktop-input item 5. RN's own Clipboard spec; the engine module
+  // subclasses NativeClipboardCxxSpec (getString/setString).
+  Clipboard:          'src/private/specs_DEPRECATED/modules/NativeClipboard.js',
+  // parity item 12. RN's WebSocket spec; the engine module subclasses
+  // NativeWebSocketModuleCxxSpec.
+  WebSocketModule:    'src/private/specs_DEPRECATED/modules/NativeWebSocketModule.js',
+  // ENG-14. RN's iOS accessibility spec; AccessibilityInfo's non-Android arm
+  // reads it, and the engine module subclasses NativeAccessibilityManagerCxxSpec.
+  AccessibilityManager: 'src/private/specs_DEPRECATED/modules/NativeAccessibilityManager.js',
+  ImageLoader:        'src/private/specs_DEPRECATED/modules/NativeImageLoaderIOS.js',
 };
 
 // ⛔ SOME MODULES HAVE NO RN CORE SPEC, AND THAT IS NOT AN ESCAPE HATCH.
@@ -217,6 +227,8 @@ const SPEC_FOR = {
 // declaration was supposed to come from RN or from us.
 const OWN_SPEC_FOR = {
   AppStorage: 'src/storage/index.js',
+  // ENG-09/10. Our own module: its JS half is package/src/worldraster.
+  WorldRaster: 'src/worldraster/index.js',
 };
 // Where OWN_SPEC_FOR paths resolve: our installed package, not react-native.
 const OWN_PKG = 'node_modules/@react-native-impeller/core';

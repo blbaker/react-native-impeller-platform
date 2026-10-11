@@ -98,6 +98,33 @@ else()
 endif()
 set(IMPELLER_SDK "${_impeller_sdk_default}"
     CACHE PATH "Unzipped Impeller standalone SDK (tools/sdk-fetch.sh, sdk-fetch-win.sh, sdk-fetch-darwin.sh)")
+# SC-32 custom SDK (letter/word spacing, font features, placeholders; built by
+# tools/impeller-sdk-custom-build.sh). RNI_IMPELLER_SDK_DIR (env or -D) picks
+# any SDK dir; otherwise each desktop takes its custom SDK (impeller-sdk-custom,
+# -custom-darwin, -custom-win; SC-35) when it is built and the stock SDK when it
+# is not. Re-derived on every configure because IMPELLER_SDK is a cache
+# variable. Android passes IMPELLER_SDK itself.
+if(WIN32)
+  set(_impeller_sdk_custom "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-custom-win")
+elseif(APPLE)
+  set(_impeller_sdk_custom "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-custom-darwin")
+else()
+  set(_impeller_sdk_custom "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-custom")
+endif()
+if(NOT "$ENV{RNI_IMPELLER_SDK_DIR}" STREQUAL "")
+  set(RNI_IMPELLER_SDK_DIR "$ENV{RNI_IMPELLER_SDK_DIR}")
+endif()
+if(RNI_IMPELLER_SDK_DIR)
+  get_filename_component(_rni_sdk "${RNI_IMPELLER_SDK_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}/..")
+  set(IMPELLER_SDK "${_rni_sdk}" CACHE PATH "" FORCE)
+elseif(NOT ANDROID)
+  if(EXISTS "${_impeller_sdk_custom}/include/impeller.h")
+    set(IMPELLER_SDK "${_impeller_sdk_custom}" CACHE PATH "" FORCE)
+  else()
+    set(IMPELLER_SDK "${_impeller_sdk_default}" CACHE PATH "" FORCE)
+  endif()
+endif()
+message(STATUS "Impeller SDK: ${IMPELLER_SDK}")
 if(NOT EXISTS "${IMPELLER_SDK}/include/impeller.h")
   message(FATAL_ERROR "Impeller SDK not found at ${IMPELLER_SDK}. Run: bash tools/sdk-fetch.sh (or sdk-fetch-win.sh / sdk-fetch-darwin.sh)")
 endif()
@@ -208,6 +235,8 @@ endif()
 add_executable(rn-impeller
   host/main.cpp
   host/Pixel.cpp
+  host/OsAppearance.cpp
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/OsAppearanceDarwin.mm>
   # The offscreen surface, one implementation per platform. Selected here rather
   # than with #ifdefs inside one file: the two share no context-acquisition code
   # at all (Mesa surfaceless EGL vs ANGLE-over-D3D11 loaded by LoadLibrary).
@@ -220,11 +249,39 @@ add_executable(rn-impeller
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwCocoaView.mm>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
+  runtime/InspectorHost.cpp
   modules/PlatformModules.cpp
+  # ENG-14: the host's accessibility settings. darwin windowed builds read
+  # NSWorkspace (Cocoa is linked only there); every other build answers false.
+  modules/AccessibilitySettings.cpp
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/modules/AccessibilitySettingsDarwin.mm>
   modules/NetworkingModule.cpp
+  modules/ImageLoaderModule.cpp
+  modules/WebSocketModule.cpp
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
+  scenegraph/Shadows.cpp
+  scenegraph/BackgroundLayers.cpp
+  scenegraph/BackgroundTiles.cpp
+  scenegraph/BorderRounded.cpp
+  scenegraph/Outline.cpp
+  scenegraph/ScrollIndicators.cpp
+  scenegraph/ActivityIndicator.cpp
+  scenegraph/Modal.cpp
+  scenegraph/ImagePaint.cpp
+  scenegraph/ImageEvents.cpp
+  scenegraph/TextInputStyle.cpp
+  scenegraph/ColorMatrixFilter.cpp
+  scenegraph/ContentFilters.cpp
+  scenegraph/BlendGroup.cpp
+  scenegraph/EllipsizeText.cpp
+  scenegraph/BorderCurve.cpp
+  scenegraph/BorderDashRounded.cpp
   text/ImpellerTextLayoutManager.cpp
+  text/FontRegistry.cpp
+  text/FontFamily.cpp
+  text/FontFallback.cpp
+  fabric/platform/impeller/PlatformColorTable.cpp
 )
 
 target_include_directories(rn-impeller PRIVATE
@@ -442,6 +499,7 @@ elseif(APPLE)
     "${ANGLE_DIR}/libEGL.dylib"
     "${ANGLE_DIR}/libGLESv2.dylib"
     "-framework CoreFoundation"
+    "-framework CoreText"
     "-framework Foundation")
 else()
   target_link_libraries(rn-impeller PRIVATE EGL GLESv2)

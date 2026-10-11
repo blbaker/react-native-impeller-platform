@@ -44,6 +44,13 @@ class GlfwSurface {
   // HeadlessSurface's contract.
   bool init(int width, int height, std::string* error);
 
+  // --title: the string handed to glfwCreateWindow (window title bar, macOS
+  // Window menu). Call BEFORE init(); an empty string keeps the default.
+  void setTitle(const std::string& title) {
+    if (!title.empty()) title_ = title;
+  }
+  const std::string& title() const { return title_; }
+
   ImpellerContext context() const { return context_; }
   ImpellerSurface surface() const { return surface_; }
   ImpellerTypographyContext typography() const { return typography_; }
@@ -121,9 +128,69 @@ class GlfwSurface {
   // the boundary, where a second caller would get it wrong independently.
   //
   // `down` distinguishes press from release: the host maps that to
-  // TouchPhase::Down/Up. Buttons other than the left one are not forwarded;
-  // there is no RN touch concept for them.
+  // TouchPhase::Down/Up.
+  //
+  // ⛔ ITEM 6: ONLY THE LEFT BUTTON EVER REACHES THIS HANDLER, STILL.
+  // Right/middle/back/forward now reach JS too, but through
+  // setExtraButtonHandler below, NEVER through here — there is no RN touch
+  // concept for them (no onPress, no focus/caret change), and routing them
+  // through this handler would be the exact regression M3 of
+  // tools/mutation-verify-mouse-buttons.sh exists to catch (a non-left press
+  // starting a touch). Left's behaviour is BYTE-IDENTICAL to before item 6.
   void setMouseButtonHandler(std::function<void(float x, float y, bool down)> handler);
+
+  // desktop-input-gap item 6. Event for a right/middle/back/forward press or
+  // release, delivered in LAYOUT POINTS through the SAME one-place
+  // conversion dispatchCursorPoint uses. No RN touch concept applies to
+  // these buttons: main.cpp routes every one straight to
+  // FabricHost::dispatchPointerButton and NEVER to
+  // beginTouchCapture/endTouchCapture/focusTextInputAt — see
+  // setMouseButtonHandler above for why that separation is load-bearing.
+  struct ExtraButtonEvent {
+    float x{0.0f};
+    float y{0.0f};
+    bool down{false};
+    // W3C `button`: 1 middle, 2 right, 3 back, 4 forward. 0 (left) never
+    // appears here.
+    int button{0};
+    // W3C `buttons` bitmask AFTER this event is applied: 1 left, 2 right,
+    // 4 middle, 8 back, 16 forward. Shared with the left button's bitmask —
+    // see lastMods()/heldButtonsMask() below — so a left press while a right
+    // press is held reports buttons=3, not 1.
+    int buttons{0};
+    // W3C `detail`: consecutive click count for THIS button, same 500ms /
+    // 4px rule as item 4b's left-button clickCount_, but tracked
+    // independently per button so a right double-click cannot complete a
+    // left double-click or vice versa.
+    int clickCount{1};
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};
+  };
+  // Fires for GLFW_MOUSE_BUTTON_RIGHT/MIDDLE/4/5 press and release (and for
+  // a Ctrl+left press on __APPLE__, remapped to RIGHT before this fires —
+  // see the callback in the .cpp). Never fires for a plain left press.
+  void setExtraButtonHandler(std::function<void(const ExtraButtonEvent&)> handler);
+
+  // The held-button bitmask (1 left, 2 right, 4 middle, 8 back, 16 forward),
+  // valid inside EITHER mouse handler. Read by main.cpp to fill in `buttons`
+  // on the LEFT button's own new W3C pointer events (see dispatchCursorPoint
+  // in the .cpp); the extra-button path already gets it via ExtraButtonEvent.
+  int heldButtonsMask() const { return heldButtons_; }
+
+  // item 6. Full modifier state as of the most recent press OR release of
+  // ANY button, left included — unlike lastPressShift() above (item 4b),
+  // which freezes at PRESS time for the selection/click-count logic that
+  // predates this item, this updates on every call so a RELEASE event (e.g.
+  // onPointerUp, onClick) reports the modifiers live at that moment.
+  struct Mods {
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};
+  };
+  Mods lastMods() const { return lastMods_; }
 
   // <ScrollView>. ENG-02. Wheel/trackpad scroll, delivered as LAYOUT POINTS at
   // the cursor's LAYOUT POINT position -- the same conversion, in the same one
@@ -170,20 +237,89 @@ class GlfwSurface {
   //     glfwSetCharCallback), which is the ONLY correct source of a typed
   //     character: it honours the keyboard layout and dead keys, whereas
   //     mapping GLFW_KEY_* to ASCII hardcodes a US QWERTY layout.
-  //   - the KEY handler receives Backspace/Enter, which are NOT characters and
-  //     never reach the char callback at all.
+  //   - the KEY handler (below) receives EVERY key, including the control
+  //     keys that never reach the char callback at all.
   void setCharHandler(std::function<void(unsigned int codepoint)> handler);
-  // The editing control keys the single-line field acts on. GLFW_KEY_* codes
-  // are translated to this NEUTRAL enum inside GlfwSurface.cpp (the only TU that
-  // includes <GLFW/glfw3.h>), so the host never names a GLFW symbol -- the same
-  // encapsulation the forward-declared GLFWwindow keeps for the window handle.
+
+  // desktop-input-gap P0 item 1. Full keyboard forwarding: every key
+  // press/repeat/release, with modifiers and a scancode, translated to W3C
+  // `key`/`code` strings HERE -- the only TU with <GLFW/glfw3.h> in scope --
+  // so the host never names a GLFW symbol. Until this, the key callback
+  // (GlfwSurface.cpp ~line 470) forwarded ONLY Backspace/Enter press/repeat
+  // and silently dropped every other key, every release, and every modifier
+  // except Shift. That made Escape/Delete/arrows/Tab/letters-while-not-typing
+  // and ctrl/alt/meta/capsLock all invisible to JS: a <View onKeyDown> could
+  // never fire, and a focused TextInput's onKeyPress never saw a modifier.
+  enum class KeyPhase { Down, Repeat, Up };
+  struct KeyEvent {
+    // W3C-shaped strings (ArrowLeft, Home, Delete, Escape, Tab, F1, "a",
+    // "A", "1", ...). Built from GLFW_KEY_* plus glfwGetKeyName for the
+    // layout-correct printable case; see the translation table in the .cpp.
+    std::string key;
+    // W3C `code` (physical position: KeyA, Digit1, ArrowLeft, ...), derived
+    // from the GLFW_KEY_* token itself (layout-independent), NOT from the
+    // scancode -- glfwGetKeyName gives the layout-correct *character*, which
+    // is what `key` wants, but `code` names the PHYSICAL key regardless of
+    // layout, so it is built from the same GLFW_KEY_* table as `key`'s
+    // non-printable branch.
+    std::string code;
+    KeyPhase phase{KeyPhase::Down};
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};       // GLFW_MOD_SUPER (Cmd on macOS, Super/Win elsewhere)
+    bool capsLock{false};
+    int scancode{0};
+  };
+  // Fires for EVERY key press, repeat AND release (release was previously
+  // dropped entirely). Printable characters still do NOT come through here --
+  // they arrive layout-decoded via the char handler above; this is for
+  // key identity + modifiers + phase, which the char callback cannot carry.
+  void setFullKeyHandler(std::function<void(const KeyEvent&)> handler);
+
+  // Backward-compatible editing-control shape, kept ONLY so the existing
+  // Backspace/Enter single-line edit path (FabricHost::dispatchKey) stays
+  // byte-for-byte unchanged and ci-textedit.sh needs no edits. Derived from
+  // the SAME full KeyEvent the callback above just built -- not a second,
+  // independent translation -- so the two handlers cannot disagree about
+  // what GLFW reported. Fires on Down/Repeat only, matching the old
+  // behaviour (release was, and remains, not an edit).
   enum class EditKey { Backspace, Enter };
-  // Fires only for the editing control keys above, on press/repeat (release is
-  // dropped so one keypress is one edit). `shift` carries the Shift modifier so
-  // the host can distinguish a submit from a multiline newline. Printable
-  // characters do NOT come through here -- they arrive layout-decoded via the
-  // char handler above.
   void setKeyHandler(std::function<void(EditKey key, bool shift)> handler);
+
+  // Neutral modifier set for synthesiseKey, below -- NOT a GLFW_MOD_* bitmask,
+  // so a caller (main.cpp's CLI test hooks) never has to name one. GlfwSurface
+  // is the only TU allowed to know GLFW_MOD_* exists.
+  struct KeyMods {
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};
+    bool capsLock{false};
+  };
+  // Synthesises a key event by its W3C `key` NAME (e.g. "ArrowLeft", "a",
+  // "Tab"), through the EXACT SAME reverse-lookup + dispatch path the real
+  // glfwSetKeyCallback forward-translation uses (see the .cpp), for gates on
+  // hosts where XTest cannot reach every modifier combination (Super is
+  // refused by some window managers) or to pin a case independent of keyboard
+  // layout. Returns false if `key` has no known GLFW mapping (a typo in a
+  // gate, not a silent no-op). NOT proof the registration exists -- see the
+  // synthesiseClick warning above, same reasoning applies: this calls the
+  // handler directly.
+  bool synthesiseKey(const std::string& key, KeyPhase phase,
+                     const KeyMods& mods);
+
+  // desktop-input-gap item 2a. Synthesises a CHARACTER event -- a decoded
+  // Unicode codepoint -- through the exact charHandler_ callback a real
+  // glfwSetCharCallback delivers, for gates typing non-ASCII (e-acute,
+  // emoji) where XTest cannot easily synthesise the raw keysym. Unlike
+  // synthesiseKey there is no reverse GLFW table to consult: GLFW's char
+  // callback is already keyed by codepoint, so this calls charHandler_
+  // directly with no translation at all. Same caveat as synthesiseKey: NOT
+  // proof glfwSetCharCallback is registered, only that InsertChar's codepoint
+  // handling + the dispatch plumbing downstream of it are correct. Returns
+  // false if no char handler is installed.
+  bool synthesiseChar(unsigned int codepoint);
 
   // The effective layout scale, kept in sync by the host on every resize so the
   // cursor conversion cannot drift from the painter's root transform. Set from
@@ -226,9 +362,46 @@ class GlfwSurface {
   // event; this hook covers the transition logic where there is no display.
   void synthesiseHover(double screenX, double screenY);
 
+  // item 4b. One synthetic mouse event through the SAME entry points the real
+  // callbacks use: op 0 = left press, 1 = left release (dispatchCursorPoint,
+  // so click counting and the Shift state apply), 2 = move
+  // (dispatchHoverPoint, so a move while pressed is a drag).
+  void synthesiseMouse(int op, double screenX, double screenY, bool shift);
+
+  // desktop-input-gap item 6. Synthesises ANY button (left included) with
+  // FULL modifiers, through dispatchCursorPoint (button 0) or
+  // dispatchExtraButton (1/2/3/4) — the SAME entry points the real GLFW
+  // callback uses after the __APPLE__ Ctrl+left remap, so a synthetic gate
+  // exercises identical dispatch, click counting and the buttons bitmask.
+  // `w3cButton`: 0 left, 1 middle, 2 right, 3 back, 4 forward.
+  void synthesiseMouseButton(int w3cButton, bool down, double screenX,
+                             double screenY, bool shift, bool ctrl, bool alt,
+                             bool meta);
+
+  // item 4b. State of the most recent left PRESS, valid inside the
+  // mouse-button handler. clickCount: 1 single, 2 double, 3 triple (keeps
+  // counting on further quick clicks). A press counts as the next click when
+  // it lands within kMultiClickMs and kMultiClickSlopPx of the previous
+  // press, the same rule macOS (NSEvent.doubleClickInterval) and Windows
+  // (GetDoubleClickTime / SM_CXDOUBLECLK) use with their default settings.
+  int lastClickCount() const { return clickCount_; }
+  bool lastPressShift() const { return pressShift_; }
+
   // ENG-09 hover/cursor. Synthesises the cursor LEAVING the window, entering
   // the same cursor-leave handler the real GLFW cursor-enter callback does.
   void synthesiseCursorLeave();
+
+  // item 5. System clipboard, wrapping glfwGetClipboardString/
+  // glfwSetClipboardString. ⛔ MAIN-THREAD ONLY, same restriction every other
+  // GLFW call in this class has -- see ClipboardBridge.h for why the caller
+  // (main.cpp) must only ever invoke these from the main thread, through the
+  // bridge's queue or its direct getSystemNow()/setSystemNow() (both of
+  // which assume they are already running on the right thread). Returns ""
+  // when GLFW has nothing to report (empty clipboard, or a backend that
+  // refuses UTF-8) rather than a null-deref -- glfwGetClipboardString can
+  // return nullptr.
+  std::string getClipboardString() const;
+  void setClipboardString(const std::string& s);
 
   // Drives a resize from inside the process, for gates. Produces the SAME
   // framebuffer-size callback a user drag produces; it is the identical code
@@ -304,6 +477,8 @@ class GlfwSurface {
   void present();  // glfwSwapBuffers
 
  private:
+  std::string title_ = "React Native (Impeller)";
+
 #if defined(__APPLE__)
   // Builds the ANGLE display/context and the window surface bound to the
   // Cocoa view. Split out because it is the entire darwin-only story.
@@ -315,7 +490,8 @@ class GlfwSurface {
   // real GLFW mouse-button callback and synthesiseClick() both route through
   // it, so a gate driving a synthetic click exercises the same arithmetic a
   // human click does rather than a parallel copy of it.
-  void dispatchCursorPoint(double screenX, double screenY, bool down);
+  void dispatchCursorPoint(double screenX, double screenY, bool down,
+                           int glfwMods = 0);
 
   // <ScrollView>. ENG-02. Same role for scroll that dispatchCursorPoint plays
   // for clicks: the ONE place the screen->points conversion AND the GLFW sign
@@ -333,6 +509,30 @@ class GlfwSurface {
   // `kind` (0 arrow, 1 hand, 2 ibeam), skipping the GLFW call when it is
   // already that shape so a per-move stream does not thrash the cursor.
   void applyCursorKind(int kind);
+
+  // desktop-input-gap P0 item 1. Builds a KeyEvent from a GLFW key/scancode/
+  // action/mods tuple and fires fullKeyHandler_ + (on Down/Repeat) the
+  // legacy keyHandler_. The ONE place this translation happens, shared by
+  // the real glfwSetKeyCallback and synthesiseKey(), so a synthetic gate
+  // exercises the identical table a real keypress does.
+  void dispatchKeyEvent(int key, int scancode, int action, int mods);
+
+  // desktop-input-gap item 6. The ONE place a right/middle/back/forward GLFW
+  // button tuple becomes an ExtraButtonEvent, shared by the real
+  // glfwSetMouseButtonCallback (after its __APPLE__ Ctrl+left remap) and
+  // synthesiseMouseButton(). Tracks a PER-BUTTON click count (same 500ms/4px
+  // rule as the left button's clickCount_ in dispatchCursorPoint, but kept
+  // in its own small table so a right double-click cannot complete a left
+  // double-click) and updates heldButtons_/lastMods_ before firing the
+  // handler.
+  void dispatchExtraButton(double screenX, double screenY, bool down,
+                           int w3cButton, int glfwMods);
+  // item 6. Routes one W3C button event (after GLFW -> W3C mapping) to the
+  // left touch path or the extra-button path, applying the darwin Ctrl+left
+  // -> secondary-click remap. Shared by the real callback and
+  // synthesiseMouseButton.
+  void routeButton(double screenX, double screenY, bool down, int w3cButton,
+                   int glfwMods);
 
   int width_{0};
   int height_{0};
@@ -370,6 +570,9 @@ class GlfwSurface {
   // JS thread inside them.
   std::function<void(unsigned int)> charHandler_;
   std::function<void(EditKey, bool)> keyHandler_;
+  // desktop-input-gap P0 item 1. Full keyboard forwarding. Same threading
+  // discipline as charHandler_/keyHandler_ above.
+  std::function<void(const KeyEvent&)> fullKeyHandler_;
   // ENG-09 hover/cursor. The three standard cursors, created ONCE at init()
   // and destroyed in the destructor. arrowCursor_ is applied on creation and
   // whenever a point resolves to arrow; keeping the objects rather than
@@ -379,6 +582,8 @@ class GlfwSurface {
   GLFWcursor* arrowCursor_{nullptr};
   GLFWcursor* handCursor_{nullptr};
   GLFWcursor* ibeamCursor_{nullptr};
+  // The other standard shapes, indexed by rni::CursorKind (null = unused).
+  GLFWcursor* shapeCursors_[12]{};
   // The cursor kind currently applied to the window, so a per-move stream that
   // stays over one shape does not call glfwSetCursor every frame. -1 means
   // "never set", forcing the first apply through.
@@ -387,6 +592,45 @@ class GlfwSurface {
   // pointScale; kept here so the conversion happens once, at the callback,
   // rather than at every caller.
   float pointScale_{1.0f};
+  // item 4b: multi-click counting (see lastClickCount()).
+  static constexpr double kMultiClickMs = 500.0;
+  static constexpr double kMultiClickSlopPx = 4.0;
+  double lastPressMs_{-1e9};
+  double lastPressX_{0.0};
+  double lastPressY_{0.0};
+  int clickCount_{0};
+  bool pressShift_{false};
+  // desktop-input-gap item 6. Held-button bitmask (1 left, 2 right, 4 middle,
+  // 8 back, 16 forward), kept current on every press/release of ANY button
+  // so `buttons` on a pointer event reflects what is ACTUALLY down, not just
+  // the button the current event is about -- the item 6(h) bitmask arm.
+  int heldButtons_{0};
+  // item 6 (__APPLE__): the current left press was a Ctrl+left secondary
+  // click, so its release also goes to the right-button path.
+  bool ctrlLeftIsRight_{false};
+  // item 6. Modifiers as of the most recent press OR release, left included
+  // -- unlike pressShift_ above (item 4b), which freezes at the left
+  // button's PRESS for the click-count/selection logic that predates this
+  // item, this updates on every event so a release reports live modifiers.
+  Mods lastMods_{};
+  // item 6. Per-button click-count state (right, middle, back, forward --
+  // never left, which keeps its own clickCount_/lastPressX_/Y_/Ms_ above
+  // unchanged). Indexed by W3C button number 1..4; button 0 (left) is never
+  // stored here. A SEPARATE table, not a shared one, so a right click
+  // immediately after a left click is never miscounted as the left button's
+  // second click or vice versa.
+  struct ExtraClickState {
+    double lastPressMs{-1e9};
+    double lastPressX{0.0};
+    double lastPressY{0.0};
+    int clickCount{0};
+  };
+  ExtraClickState extraClick_[5]{};
+  // desktop-input-gap item 6. Invoked from the GLFW mouse-button callback for
+  // a right/middle/back/forward press or release, and from the __APPLE__
+  // Ctrl+left remap. NEVER for a plain left button -- see the header on
+  // setExtraButtonHandler for why that separation matters.
+  std::function<void(const ExtraButtonEvent&)> extraButtonHandler_;
   // ⛔ REENTRANCY GUARD, AND IT IS NOT THEORETICAL.
   // Set by PaintScope around EVERY paint (see PaintScope above), not merely
   // while inside the refresh handler. The handler paints and presents; on

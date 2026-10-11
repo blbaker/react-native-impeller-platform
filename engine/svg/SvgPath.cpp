@@ -94,12 +94,11 @@ class Tokenizer {
 // converted straight to a sequence of cubic Beziers (F.13.1's cubic
 // approximation, split at <= 90 degree segments so the approximation error
 // stays small).
-void ArcToCubics(ImpellerPathBuilder builder, double x0, double y0, double rx,
+void ArcToCubics(SvgPathSink& sink, double x0, double y0, double rx,
                   double ry, double xRotDeg, bool largeArc, bool sweep,
                   double x1, double y1) {
   if (rx == 0.0 || ry == 0.0) {
-    ImpellerPoint p = {(float)x1, (float)y1};
-    ImpellerPathBuilderLineTo(builder, &p);
+    sink.lineTo((float)x1, (float)y1);
     return;
   }
   rx = std::fabs(rx);
@@ -176,14 +175,14 @@ void ArcToCubics(ImpellerPathBuilder builder, double x0, double y0, double rx,
     ImpellerPoint p2 = mapPoint(c2 + t * s2, s2 - t * c2);
     ImpellerPoint end = mapPoint(c2, s2);
 
-    ImpellerPathBuilderCubicCurveTo(builder, &p1, &p2, &end);
+    sink.cubicTo(p1.x, p1.y, p2.x, p2.y, end.x, end.y);
     theta = theta2;
   }
 }
 
 }  // namespace
 
-bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
+bool ParseSvgPath(const std::string& d, SvgPathSink& sink) {
   Tokenizer tok(d);
   double curX = 0, curY = 0;       // current point
   double startX = 0, startY = 0;   // subpath start, for Z
@@ -217,7 +216,7 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
           curX = x; curY = y;
           startX = x; startY = y;
           ImpellerPoint p = {(float)x, (float)y};
-          ImpellerPathBuilderMoveTo(builder, &p);
+          sink.moveTo(p.x, p.y);
           haveSubpath = true;
           parsedAny = true;
           if (!first) { /* stays 'M' semantics only for first pair */ }
@@ -230,7 +229,7 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
           if (relative) { x += curX; y += curY; }
           curX = x; curY = y;
           ImpellerPoint p = {(float)x, (float)y};
-          ImpellerPathBuilderLineTo(builder, &p);
+          sink.lineTo(p.x, p.y);
           parsedAny = true;
           break;
         }
@@ -240,7 +239,7 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
           if (relative) x += curX;
           curX = x;
           ImpellerPoint p = {(float)x, (float)curY};
-          ImpellerPathBuilderLineTo(builder, &p);
+          sink.lineTo(p.x, p.y);
           parsedAny = true;
           break;
         }
@@ -250,7 +249,7 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
           if (relative) y += curY;
           curY = y;
           ImpellerPoint p = {(float)curX, (float)y};
-          ImpellerPathBuilderLineTo(builder, &p);
+          sink.lineTo(p.x, p.y);
           parsedAny = true;
           break;
         }
@@ -261,7 +260,7 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
           ImpellerPoint cp1 = {(float)x1, (float)y1};
           ImpellerPoint cp2 = {(float)x2, (float)y2};
           ImpellerPoint end = {(float)x, (float)y};
-          ImpellerPathBuilderCubicCurveTo(builder, &cp1, &cp2, &end);
+          sink.cubicTo(cp1.x, cp1.y, cp2.x, cp2.y, end.x, end.y);
           lastCtrlX = x2; lastCtrlY = y2;
           curX = x; curY = y;
           parsedAny = true;
@@ -281,7 +280,7 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
           ImpellerPoint cp1 = {(float)x1, (float)y1};
           ImpellerPoint cp2 = {(float)x2, (float)y2};
           ImpellerPoint end = {(float)x, (float)y};
-          ImpellerPathBuilderCubicCurveTo(builder, &cp1, &cp2, &end);
+          sink.cubicTo(cp1.x, cp1.y, cp2.x, cp2.y, end.x, end.y);
           lastCtrlX = x2; lastCtrlY = y2;
           curX = x; curY = y;
           parsedAny = true;
@@ -293,7 +292,7 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
           if (relative) { x1 += curX; y1 += curY; x += curX; y += curY; }
           ImpellerPoint cp = {(float)x1, (float)y1};
           ImpellerPoint end = {(float)x, (float)y};
-          ImpellerPathBuilderQuadraticCurveTo(builder, &cp, &end);
+          sink.quadTo(cp.x, cp.y, end.x, end.y);
           lastCtrlX = x1; lastCtrlY = y1;
           curX = x; curY = y;
           parsedAny = true;
@@ -312,7 +311,7 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
           }
           ImpellerPoint cp = {(float)x1, (float)y1};
           ImpellerPoint end = {(float)x, (float)y};
-          ImpellerPathBuilderQuadraticCurveTo(builder, &cp, &end);
+          sink.quadTo(cp.x, cp.y, end.x, end.y);
           lastCtrlX = x1; lastCtrlY = y1;
           curX = x; curY = y;
           parsedAny = true;
@@ -328,13 +327,13 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
             goto done;
           }
           if (relative) { x += curX; y += curY; }
-          ArcToCubics(builder, curX, curY, rx, ry, xrot, largeArc, sweep, x, y);
+          ArcToCubics(sink, curX, curY, rx, ry, xrot, largeArc, sweep, x, y);
           curX = x; curY = y;
           parsedAny = true;
           break;
         }
         case 'Z': {
-          ImpellerPathBuilderClose(builder);
+          sink.close();
           curX = startX; curY = startY;
           parsedAny = true;
           break;
@@ -350,6 +349,42 @@ bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
   }
 done:
   return parsedAny;
+}
+
+namespace {
+
+// The original target: every call lands on the Impeller builder unchanged.
+class BuilderSink final : public SvgPathSink {
+ public:
+  explicit BuilderSink(ImpellerPathBuilder b) : b_(b) {}
+  void moveTo(float x, float y) override {
+    ImpellerPoint p = {x, y};
+    ImpellerPathBuilderMoveTo(b_, &p);
+  }
+  void lineTo(float x, float y) override {
+    ImpellerPoint p = {x, y};
+    ImpellerPathBuilderLineTo(b_, &p);
+  }
+  void quadTo(float cx, float cy, float x, float y) override {
+    ImpellerPoint c = {cx, cy}, e = {x, y};
+    ImpellerPathBuilderQuadraticCurveTo(b_, &c, &e);
+  }
+  void cubicTo(float c1x, float c1y, float c2x, float c2y, float x,
+               float y) override {
+    ImpellerPoint c1 = {c1x, c1y}, c2 = {c2x, c2y}, e = {x, y};
+    ImpellerPathBuilderCubicCurveTo(b_, &c1, &c2, &e);
+  }
+  void close() override { ImpellerPathBuilderClose(b_); }
+
+ private:
+  ImpellerPathBuilder b_;
+};
+
+}  // namespace
+
+bool ParseSvgPathToBuilder(const std::string& d, ImpellerPathBuilder builder) {
+  BuilderSink sink(builder);
+  return ParseSvgPath(d, sink);
 }
 
 }  // namespace rni

@@ -5,7 +5,10 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -102,6 +105,10 @@ class FabricHost {
   int dispatchCapturedMove(float x, float y);
   int endTouchCapture(float x, float y);
   bool isTouchCaptured() const;
+  // ENG-15. Flip an enabled <Switch> (UISwitch's optimistic local toggle) and
+  // send SwitchEventEmitter::onChange({value, target}) to JS. Returns the new
+  // value (1/0), or -1 when `tag` is not an enabled Switch.
+  int toggleSwitch(std::int32_t tag);
 
   // <ScrollView>. ENG-02. Applies `dy` POINTS of scroll at (x, y) in points --
   // the same coordinate space dispatchTouch takes -- and returns the tag of the
@@ -145,16 +152,124 @@ class FabricHost {
   // <TextInput>. ENG-01b. Focus the field under (x, y) in POINTS, or blur if
   // the point is over no TextInput. Returns the focused tag, or 0. Focusing
   // seeds the edit buffer from the field's value and schedules onFocus.
-  int focusTextInputAt(float x, float y);
+  // item 3: the caret goes to the glyph boundary nearest x (click-to-caret),
+  // onSelectionChange fires, and clicking the already-focused field only
+  // moves the caret (no re-seed, no second onFocus).
+  // item 4b: clickCount 2 selects the word, 3 the line; shift extends an
+  // existing selection on the focused field. Every press arms a drag.
+  int focusTextInputAt(float x, float y, int clickCount = 1,
+                       bool shift = false);
+  // item 4b: extend the selection while the button is held after a press in a
+  // TextInput. Returns true when the move was handled as a selection drag.
+  // P1 item 15: also extends a selectable-<Text> drag begun by
+  // beginTextSelection.
+  bool dragTextSelection(float x, float y);
+  // P1 item 15: a press on a <Text selectable> starts a selection there
+  // (clickCount 2 = word, 3+ = whole text); a press anywhere else clears it.
+  // Returns the paragraph tag, or 0. Called on EVERY left press by both the
+  // windowed host and the headless --drag probe, so the two cannot diverge.
+  int beginTextSelection(float x, float y, int clickCount = 1);
+  // P1 item 15: put the selectable-<Text> selection on the clipboard (the
+  // same clipboardSet_ a field's Copy uses). Logs `clipboard op=copy-text
+  // bytes=N`; returns false (and writes nothing) when nothing is selected.
+  bool copyTextSelection();
 
-  // A single editing keystroke, applied to the focused field's buffer. `phase`
-  // is one of the KeyAction values below; for InsertChar, `codepoint` is the
-  // ASCII character to insert at the caret. Returns the focused tag the edit
-  // was applied to, or 0 if nothing is focused. Mutates the SceneGraph edit
-  // buffer AND schedules the matching JS event (onChange/onChangeText on an
-  // edit, onSubmitEditing on Enter) so the pixels and the JS state agree.
-  enum class KeyAction { InsertChar, Backspace, Submit, Newline };
-  int dispatchKey(KeyAction action, unsigned int codepoint);
+  // item 11. Moves keyboard focus to the next (forward) or previous element
+  // in SceneGraph::tabOrder(), wrapping. Blurs the old element; a TextInput
+  // gets focus with ALL its text selected, a View gets focus + a focus ring.
+  // Returns the newly focused tag.
+  // item 7. One view command (UIManager dispatchCommand / RN refs:
+  // ScrollView scrollTo/scrollToEnd, TextInput focus/blur/
+  // setTextAndSelection). Args are pre-split by JSON type, in order.
+  struct ViewCommand {
+    int tag{0};
+    std::string name;
+    std::vector<double> nums;
+    std::vector<bool> bools;
+    bool hasText{false};
+    std::string text;
+  };
+  // Called on the JS thread by the scheduler delegate. Windowed: queued for
+  // the main thread (drainMain); headless: run inline.
+  void postCommand(ViewCommand cmd);
+  // Windowed host: enable the main-thread queue and its wake.
+  void enableMainQueue(std::function<void()> wake);
+  void drainMain();
+
+  int moveFocus(bool forward);
+  void blurFocusedView();
+
+  // item 6. W3C pointer events for ANY mouse button (0 left, 1 middle,
+  // 2 right, 3 back, 4 forward) on the hit-tested tag: onPointerDown/Up, plus
+  // onClick (left) or auxClick (others) when the release lands on the press's
+  // tag. Never starts a touch and never moves TextInput focus.
+  int dispatchPointerButton(float x, float y, bool down, int button,
+                            int buttons, int clickCount, bool shift, bool ctrl,
+                            bool alt, bool meta);
+  void endTextSelectionDrag();
+
+  // A single editing keystroke, applied to the focused field's buffer AT THE
+  // PERSISTED CARET (SceneGraph::textInputCaretFor), not always at the end --
+  // item 2a. `codepoint` is a full Unicode scalar value for InsertChar
+  // (encoded to UTF-8 here; see FabricHost.cpp's Utf8Encode), ignored by
+  // every other action. Returns the focused tag the edit/move was applied
+  // to, or 0 if nothing is focused. Mutates the SceneGraph edit buffer (for
+  // the actions that change it) and the caret (every action), then schedules
+  // onSelectionChange (every action that reaches the field) and onChange
+  // (only when the text actually changed) so the pixels and the JS state
+  // agree.
+  //
+  // item 4a: `extendSelection` is Shift's effect on a caret-MOVE action
+  // (MoveLeft/Right/Word*/Home/End) -- true EXTENDS the selection from the
+  // current anchor (the caret moves, the anchor does not); false COLLAPSES
+  // any existing selection, landing a plain Left/Right at the selection's
+  // near boundary rather than one further step from the old caret (matching
+  // macOS/Windows: the first plain arrow after a selection lands ON its
+  // edge). Ignored by InsertChar/Backspace/DeleteForward/Submit/Newline/
+  // SelectAll -- InsertChar/Backspace/DeleteForward instead consult whether
+  // a selection is ALREADY active and replace/delete that range rather than
+  // acting at the caret alone (a selection always collapses after an edit,
+  // same as every desktop text field). Defaults to false so every existing
+  // call site (the legacy Backspace/Submit/Newline path, the char handler)
+  // keeps its old collapse-only behaviour with no source change.
+  //
+  // ⛔ ONE EDITING PATH. MoveLeft/Right/Word*/Home/End/DeleteForward/
+  // SelectAll are reached ONLY from FabricHost::dispatchKeyEvent (the full
+  // key path) -- see its header. Backspace/Submit/Newline stay reachable
+  // ONLY from the LEGACY GlfwSurface::keyHandler_ path (main.cpp's
+  // setKeyHandler), which dispatchKeyEvent's editing branch deliberately
+  // does NOT re-handle, so a single physical keystroke can never mutate the
+  // buffer twice.
+  enum class KeyAction {
+    InsertChar,
+    Backspace,
+    Submit,
+    Newline,
+    MoveLeft,
+    MoveRight,
+    MoveWordLeft,
+    MoveWordRight,
+    MoveHome,
+    MoveEnd,
+    // ENG-25. Up/Down a wrapped line in a MULTILINE field only.
+    MoveUp,
+    MoveDown,
+    DeleteForward,
+    // item 4a. Anchor -> 0, caret -> end, value unchanged. Cmd+A on
+    // __APPLE__, Ctrl+A elsewhere (platform dispatch is dispatchKeyEvent's
+    // job, same as the word-move modifier split).
+    SelectAll,
+    // item 5. Copy/Cut read or erase the current selection and write the
+    // system clipboard; Paste inserts the clipboard content (replacing a
+    // selection, or at the caret). All three are no-ops with nothing
+    // focused (dispatchKey already returns 0 then); Copy/Cut with an EMPTY
+    // selection do nothing at all -- no clipboard write, no buffer change.
+    Copy,
+    Cut,
+    Paste,
+  };
+  int dispatchKey(KeyAction action, unsigned int codepoint,
+                  bool extendSelection = false);
 
   // True when a field is focused, so the windowed host knows whether to route a
   // character/key event here at all.
@@ -162,6 +277,47 @@ class FabricHost {
   // Non-mutating probe: is a real TextInput field under (x,y)? Used by the
   // --type harness to settle the mount before the first focus. See the .cpp.
   bool isTextInputAt(float x, float y);
+
+  // desktop-input-gap P0 item 1. Full keyboard forwarding to JS, delivered
+  // to the focused tag (falling back to the surface root when nothing is
+  // focused, so the event has somewhere to land) via TWO channels:
+  //   (a) if the focused tag is a TextInput, TextInputEventEmitter::onKeyPress
+  //       (RN 0.86 core; KeyPressMetrics) on Down/Repeat -- NOT on Up, which
+  //       onKeyPress has no concept of.
+  //   (b) EventEmitter::dispatchEvent(name, payload) with a generic
+  //       'keyDown'/'keyUp' event on EVERY key (focused TextInput or not),
+  //       because RN 0.86's C++ BaseViewEventEmitter has no onKeyDown/onKeyUp
+  //       method at all -- see docs/eng/desktop-input-gap.md. Payload shape
+  //       follows react-native-windows: key, code, altKey, ctrlKey, metaKey,
+  //       shiftKey (+ capsLockKey, repeat, which neither fork's payload
+  //       carries but the gap doc's ask requires).
+  // Returns the tag the event was delivered to (focused tag or root), or 0 if
+  // nothing has mounted at all.
+  struct KeyModifiers {
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    bool meta{false};
+    bool capsLock{false};
+  };
+  enum class KeyEventPhase { Down, Repeat, Up };
+  int dispatchKeyEvent(const std::string& key, const std::string& code,
+                       KeyEventPhase phase, const KeyModifiers& mods);
+
+  // item 5. Wired by main.cpp to the ClipboardBridge's synchronous
+  // getSystemNow()/setSystemNow() -- NOT to the bridge's queueing
+  // postToMain(), because dispatchKeyEvent itself already runs ON THE MAIN
+  // thread (the GLFW key callback / main.cpp's --key-after-frames hook), so
+  // there is no thread-safety reason to queue and every reason not to: a
+  // Ctrl+C immediately followed by Ctrl+V in the same key sequence must see
+  // the write synchronously, not after a drain that has not happened yet.
+  // FabricHost.cpp must never include GLFW directly (hence `std::function`
+  // rather than naming ClipboardBridge/GLFW here).
+  void setClipboardAccess(std::function<std::string()> get,
+                          std::function<void(const std::string&)> set) {
+    clipboardGet_ = std::move(get);
+    clipboardSet_ = std::move(set);
+  }
 
   // The component names this host can actually mount. Handed to ReactHost so
   // RN's NativeComponentRegistry and this registry cannot drift apart.
@@ -191,6 +347,23 @@ class FabricHost {
   // endTouchCapture to route Move/Up WITHOUT re-hit-testing, cleared on release.
   // Accessed only from the event thread (all callers are), same as hoveredTag_.
   int capturedTag_{0};
+  // item 4b: mouse text-selection drag state (0 = no drag).
+  // item 6: tag each button was pressed on (0 = none), for click pairing.
+  int pointerPressTag_[5]{};
+  int dragTag_{0};
+  int dragUnit_{1};
+  size_t dragAnchorLo_{0};
+  size_t dragAnchorHi_{0};
+  // P1 item 15: the selectable <Text> a held press is dragging over (0 none),
+  // and the byte offset the press landed at.
+  int textDragTag_{0};
+  size_t textDragAnchor_{0};
+  // ENG-25: Up/Down column memory. Valid only while the field and caret are
+  // exactly where the last vertical move left them; any other move or edit
+  // changes the caret, which discards it.
+  int vertGoalTag_{0};
+  size_t vertGoalCaret_{0};
+  float vertGoalX_{-1.0f};
 
   // <TextInput>. ENG-01b. Monotonic native event counter. RN's TextInput.js
   // discards a native onChange whose eventCount is <= the last it saw, to drop
@@ -198,6 +371,34 @@ class FabricHost {
   // increase across every event this field emits, so it lives on the host, not
   // per-dispatch.
   int tiEventCount_{0};
+  void runCommand(const ViewCommand& cmd);
+  void emitScroll(int tag, float offsetX, float offsetY, float contentW,
+                  float contentH, float containerW, float containerH);
+  // item 7: main-thread command queue (see postCommand).
+  std::mutex mainMutex_;
+  std::vector<ViewCommand> mainQueue_;
+  bool mainQueueEnabled_{false};
+  std::function<void()> mainWake_;
+  // item 7: eventCount of the last onChange per field. A setTextAndSelection
+  // carrying an OLDER count is stale (the user typed since JS rendered) and
+  // its text is dropped, the same rule RN Android applies.
+  std::map<int, int> lastChangeEventCount_;
+  void emitTextInputFocusEvent(int tag, bool focus);
+  // ENG-24: fire onContentSizeChange when the field's content size (see
+  // SceneGraph::textInputContentSize) differs from the last one sent for it.
+  // Called after every native edit, every JS value change and every focus.
+  void emitContentSizeIfChanged(int tag);
+  std::map<int, std::pair<float, float>> lastContentSize_;
+  void emitViewFocusEvent(int tag, bool focus);
+
+  // item 5. Wired by main.cpp's setClipboardAccess; see that method's header
+  // comment for why these are called DIRECTLY (not through
+  // ClipboardBridge::postToMain) from dispatchKeyEvent's Copy/Cut/Paste
+  // handling. Null until main.cpp wires them (headless runs with no window
+  // never call the Copy/Cut/Paste branch's clipboard access because no key
+  // events reach dispatchKeyEvent in a headless run at all).
+  std::function<std::string()> clipboardGet_;
+  std::function<void(const std::string&)> clipboardSet_;
 
   // ENG-09. Emits a pointerenter or pointerleave to `tag` through its
   // TouchEventEmitter, hopping to the JS thread exactly as dispatchTouch does.

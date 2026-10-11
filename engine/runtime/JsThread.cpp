@@ -165,7 +165,17 @@ void JsThread::cancelAllTimers() {
 
 bool JsThread::isIdle() {
   std::lock_guard<std::mutex> lock(mutex_);
-  return queue_.empty() && timers_.empty() && !busy_;
+  if (!queue_.empty() || busy_) return false;
+  // parity item 14. A pending ONE-SHOT timer is work that will finish
+  // (setTimeout(fn, 400) must be waited for). A REPEATING timer never
+  // finishes, so it must not count: Metro's HMR client installs a 20 s ping
+  // interval, and counting it made every waitForJsIdle() in a dev session
+  // run out its whole timeout (10 s stalls after boot, 5 s per synthetic
+  // input event).
+  for (const auto& entry : timers_) {
+    if (!entry.second.repeat) return false;
+  }
+  return true;
 }
 
 size_t JsThread::pendingTasks() {
@@ -175,13 +185,23 @@ size_t JsThread::pendingTasks() {
 
 std::string JsThread::debugStats() {
   std::lock_guard<std::mutex> lock(mutex_);
+  // Pending timers with their period and repeat flag (diagnostic only).
+  std::string timerList;
+  for (const auto& [id, t] : timers_) {
+    char tb[64];
+    std::snprintf(tb, sizeof(tb), " %u:%lldms%s", id,
+                  (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                      t.interval).count(),
+                  t.repeat ? "r" : "");
+    timerList += tb;
+  }
   char buf[256];
   std::snprintf(buf, sizeof(buf),
                 "queue=%zu timers=%zu busy=%d enq=%llu ran=%llu fired=%llu",
                 queue_.size(), timers_.size(), busy_ ? 1 : 0,
                 (unsigned long long)enqueued_, (unsigned long long)ran_,
                 (unsigned long long)timersFired_);
-  return std::string(buf);
+  return std::string(buf) + timerList;
 }
 
 }  // namespace rni

@@ -5,6 +5,7 @@
 // the surface. One mutex guards the tree, so a paint mid-commit sees a
 // consistent tree rather than a half-applied transaction.
 #pragma once
+#include "BackgroundLayers.h"
 
 #include <react/renderer/components/scrollview/ScrollViewProps.h>
 #include <react/renderer/components/text/ParagraphProps.h>
@@ -25,8 +26,48 @@
 #include <vector>
 
 #include "impeller.h"
+#include "modules/WorldRasterStore.h"
+#include "scenegraph/ImageEvents.h"
+#include "scenegraph/ImagePaint.h"
+#include "scenegraph/Shadows.h"
+#include "scenegraph/TextInputStyle.h"
 
 namespace rni {
+
+// P1 item 14 (nested Text runs). One entry per non-attachment fragment of a
+// Paragraph's AttributedString, in order. These are the same fragments
+// ImpellerTextLayoutManager pushes one style each for at MEASURE. The old paint
+// path drew the concatenated string in ONE style (the last fragment's colour,
+// size and family), so the box was measured per run and painted as one.
+struct TextRun {
+  std::string text;  // fragment.string with ITS textTransform applied (as measure)
+  float fontSize{14};
+  std::string fontFamily;
+  float lineHeight{0.0f};
+  int fontWeight{0};
+  bool italic{false};
+  float letterSpacing{0.0f};  // SC-33, px
+  int fontVariant{0};         // SC-33, react::FontVariant bits
+  float opacity{1.0f};  // nested <Text style={{opacity}}>, multiplies the colour alpha
+  // textShadow*: a blurred, offset copy of this run's glyphs under the text (SC-15).
+  bool hasShadow{false};
+  float shadowOffX{0}, shadowOffY{0}, shadowSigma{0};
+  float shadowColor[4]{0, 0, 0, 1};
+  int decoLine{0};
+  int decoStyle{0};
+  bool hasDecoColor{false};
+  float decoColor[4]{0, 0, 0, 1};
+  float color[4]{0, 0, 0, 1};  // RN's default foreground is black
+  // A nested <Text style={{backgroundColor}}>. The ROOT Text's backgroundColor
+  // never lands here: BaseParagraphProps clears it from textAttributes because
+  // the Paragraph's own View background paints it.
+  bool hasBackground{false};
+  float background[4]{0, 0, 0, 0};
+  // SC-34: an inline <View> attachment; text is empty, the size is the box
+  // RN measured for the child (same source as measure's placeholder).
+  bool attachment{false};
+  float attachW{0}, attachH{0};
+};
 
 // Everything we need to paint one node, snapshotted from its ShadowView. We
 // copy rather than hold Props::Shared so paint never dereferences a prop
@@ -50,6 +91,13 @@ struct SceneNode {
   // completely reasonable in a screenshot and is wrong for every app that sets
   // a single edge. Order below is top, right, bottom, left throughout.
   float borderWidths[4]{0, 0, 0, 0};
+  // Style audit items 10 + 25: react::BorderStyle of the whole border
+  // (0 Solid, 1 Dotted, 2 Dashed). RN iOS draws one style for all edges.
+  int borderStyle{0};
+  // A3 outline: react::OutlineStyle (0 solid, 1 dotted, 2 dashed).
+  float outlineWidth{0}, outlineOffset{0};
+  int outlineStyle{0};
+  float outlineColor[4]{0, 0, 0, 1};
   bool hasBorderColors[4]{false, false, false, false};
   float borderColors[4][4]{};
 
@@ -57,22 +105,42 @@ struct SceneNode {
   // clockwise). P2 collapsed these to a single `all` value, so one rounded
   // corner drew as four.
   float borderRadii[4]{0, 0, 0, 0};
+  // Vertical radius per corner, same order; differs from borderRadii for '50%' etc.
+  float borderRadiiV[4]{0, 0, 0, 0};
+  bool borderContinuous{false};  // borderCurve 'continuous' on any corner
 
-  // Linear gradient (`experimental_backgroundImage`). Painted UNDER the
-  // background colour rule: when a gradient is present it replaces the flat
-  // fill, matching CSS painting order.
-  bool hasGradient{false};
-  float gradStart[2]{0, 0};  // in node-local coordinates
-  float gradEnd[2]{0, 0};
-  std::vector<float> gradStops;         // 0..1, ascending
-  std::vector<std::array<float, 4>> gradColors;
+  // experimental_backgroundImage layers, first listed on top; painted over backgroundColor.
+  std::vector<BgLayer> bgLayers;
 
   // Resolved transform matrix (column-major 4x4, RN's own layout), already
   // including transform-origin. Identity when the node has no transform.
   bool hasTransform{false};
+  // backfaceVisibility 'hidden' and the transform turns the node away.
+  bool backfaceHidden{false};
+  // mixBlendMode (A2) and isolation:isolate; see BlendGroup.h.
+  facebook::react::BlendMode mixBlend{facebook::react::BlendMode::Normal};
+  bool isolate{false};
+  // CSS `filter` colour-matrix functions composed into one 4x5 matrix (ColorMatrixFilter.h).
+  bool hasFilterMatrix{false};
+  std::array<float, 20> filterMatrix{};
+  // CSS blur() sigma and drop-shadow() list, and the iOS shadow* spec. A view
+  // with no background casts its iOS shadow from its content (ContentFilters.h).
+  float blurSigma{0.0f};
+  std::vector<ShadowSpec> dropShadows;
+  bool hasLayerShadow{false};
+  ShadowSpec layerShadow;
   std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
 
   bool overflowHidden{false};
+  // Style audit items 1-4 (scenegraph/Shadows.h). `shadows` holds the iOS
+  // shadow* props (as one spec) and every boxShadow entry, in paint order.
+  // elevation is Android's material shadow, painted by DrawShadow.
+  std::vector<ShadowSpec> shadows;
+  float elevation{0.0f};
+  float elevationColor[4]{0, 0, 0, 1};
+  // parity item 9: RN `pointerEvents` (0 auto, 1 none, 2 box-none,
+  // 3 box-only), mirrored from PointerEventsMode. Hit testing honours it.
+  int pointerEvents{0};
 
   // ENG-09 hover/cursor. The RN `cursor` ViewProp, collapsed to the three
   // shapes this host has standard GLFW cursors for. NOT a bool "is hoverable":
@@ -112,16 +180,46 @@ struct SceneNode {
   // at paint/mutation time so clamping does not have to walk the tree from the
   // event thread.
   float scrollContentHeight{0.0f};
+  // A21: indicator flags and style (react::ScrollViewIndicatorStyle), plus the
+  // last contentOffset prop applied so only a CHANGE of the prop moves the list.
+  bool showsVerticalScrollIndicator{true};
+  bool showsHorizontalScrollIndicator{true};
+  int scrollIndicatorStyle{0};
+  bool contentOffsetSeen{false};
+  float contentOffsetPropX{0.0f}, contentOffsetPropY{0.0f};
 
   // Text (Paragraph nodes). Laid out at mount time from ParagraphState so the
   // painted text is the same object that was measured.
   bool isParagraph{false};
   std::string text;
   float fontSize{14};
+  // ENG-22: the run's TextAttributes::fontFamily, the SAME string
+  // ImpellerTextLayoutManager measures with. Empty = Impeller's default face.
+  // Painting without it measured the box in one face and drew the glyphs in
+  // the fallback, so a mono label overflowed or collided with its neighbour.
+  std::string fontFamily;
+  // ENG-23: TextAttributes::lineHeight in points (0 = unset). Applied at paint
+  // with the SAME setter measure uses (text/LineHeight.h), so the box height
+  // and the painted line pitch agree.
+  float lineHeight{0.0f};
+  // Style audit items 5, 7, 9 (text/TextStyle.h). Same last-fragment-wins rule
+  // as fontSize. fontWeight is also applied at MEASURE; align and decoration
+  // are paint-only (they do not change the measured box).
+  int fontWeight{0};        // react::FontWeight 100..900, 0 = unset
+  int textAlign{0};         // react::TextAlignment, 0 = Natural
+  int writingDirection{0};  // react::WritingDirection, 0 = Natural
+  int textVAlign{0};        // react::TextAlignmentVertical: 0 Auto/Top, 1 Top, 2 Bottom, 3 Center
+  int decoLine{0};          // react::TextDecorationLineType, 0 = None
+  int decoStyle{0};         // react::TextDecorationStyle, 0 = Solid
+  bool hasDecoColor{false};
+  float decoColor[4]{0, 0, 0, 1};
   float textColor[4]{0, 0, 0, 1};
   // numberOfLines. Must be applied at PAINT time as well as measure time, or a
   // clamped label measures one line and paints three.
   int maxLines{0};
+  // adjustsFontSizeToFit / minimumFontScale (SC-17), applied at measure and paint.
+  bool adjustsFit{false};
+  float minFontScale{0.0f};
   // ellipsizeMode. RN default is Tail. Only meaningful together with maxLines >
   // 0 (an unclamped paragraph never truncates), and applied at PAINT time via
   // ImpellerParagraphStyleSetEllipsis so a clamped line ends in "…" rather than
@@ -131,6 +229,14 @@ struct SceneNode {
   // measured string and the painted string are the same object — measuring the
   // raw case and painting the transformed case would disagree on width.
   int textTransform{0};  // react::TextTransform: 0 None,1 Upper,2 Lower,3 Capitalize,4 Unset
+  // P1 item 14: per-fragment styles. Paint draws THESE; node.text is their
+  // concatenation (paragraph_text reports, the selectable-Text copy string).
+  std::vector<TextRun> runs;
+  // P1 item 15: <Text selectable>. ParagraphProps::isSelectable (RN keeps the
+  // plain Paragraph component unless enablePreparedTextLayout is on, so the
+  // prop rides on the same descriptor). A press-drag over a selectable
+  // paragraph selects a byte range of `text`; see SceneGraph::textSel*_.
+  bool selectable{false};
 
   // <TextInput>. ENG-01b. A TextInput is NOT a Paragraph: it paints a single
   // editable line from a native-held buffer, a placeholder when that buffer is
@@ -138,13 +244,79 @@ struct SceneNode {
   // paint path (which reads ParagraphState, a state a TextInput does not carry)
   // is never entered for it.
   bool isTextInput{false};
+  // <Switch>. ENG-15. RN iOS UISwitch: a rounded track filled with onTintColor
+  // when ON and tintColor when OFF, and a round thumb at the right (ON) or left
+  // (OFF) end. `swValue` is what PAINTS: a press flips it optimistically
+  // (FabricHost::toggleSwitch) and onChange tells JS. `swPropValue` is the
+  // `value` prop as last committed; like RCTSwitchComponentView, only a CHANGE
+  // of the prop moves the painted value, so an unrelated re-render does not
+  // undo a press. JS's revert path is the setValue command (setSwitchValue).
+  bool isSwitch{false};
+  // A20: <ActivityIndicator>. Colour defaults to iOS gray (#999) when unset.
+  bool isSpinner{false};
+  // A19: <Image> ("Image" from RCTImageView). Sources as JS sent them (uri,
+  // scale, size in points); the painter picks one per frame size.
+  bool isImage{false};
+  struct ImageSrc {
+    std::string uri;
+    float scale{1.0f};
+    float width{0.0f};
+    float height{0.0f};
+  };
+  std::vector<ImageSrc> imgSources;
+  // SC-31: painted while the source has no pixels (loading or failed).
+  std::string imgDefaultUri;
+  // SC-31: load events for the node's current ImageRequest.
+  std::shared_ptr<rni::ImageEventBinding> imgEvents;
+  int imgResizeMode{0};
+  bool imgHasTint{false};
+  float imgTint[4]{0, 0, 0, 0};
+  // A22: <Modal> (ModalHostView). Skipped in the tree walk; painted and
+  // hit-tested after the app root at window (0,0). modalShown = onShow sent.
+  bool isModal{false};
+  bool modalVisible{true};
+  bool modalTransparent{false};
+  bool modalShown{false};
+  bool spAnimating{true};
+  bool spHidesWhenStopped{true};
+  float spColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
+  bool swValue{false};
+  bool swPropValue{false};
+  bool swHasProp{false};
+  bool swDisabled{false};
+  // Defaults are iOS's: systemGreen on, light grey off, white thumb.
+  float swOnColor[4]{0.20392157f, 0.78039216f, 0.34901961f, 1.0f};
+  float swOffColor[4]{0.91372549f, 0.91372549f, 0.92156863f, 1.0f};
+  float swThumbColor[4]{1.0f, 1.0f, 1.0f, 1.0f};
+  // item 11: keyboard focus. `focusable` is the View prop (View.js turns
+  // tabIndex into it: tabIndex 0 -> true, -1 -> false); TextInput.js always
+  // sends it too. `tiEditable` is TextInput's `editable` prop.
+  bool focusable{false};
+  bool tiEditable{true};
   // The controlled `value`/`defaultValue` prop, captured at mutation time. The
   // LIVE edited string during focus is held by FabricHost and pushed in through
   // setTextInputEdit; this is the fallback the paint uses when the field is not
   // being edited, so an unfocused controlled field still shows its value.
   std::string tiValue;
   std::string tiPlaceholder;
+  // ENG-16: multiline + textAlignVertical (react::TextAlignmentVertical:
+  // 0 Auto, 1 Top, 2 Bottom, 3 Center). Auto = top for multiline (UITextView)
+  // and centre for single-line (UITextField), measured from contentInsets.
+  bool tiMultiline{false};
+  // Style audit item 11: TextInputTraits::secureTextEntry. Painted as bullets
+  // (text/SecureText.h); Copy/Cut refused by FabricHost.
+  bool tiSecure{false};
+  int tiAlignVertical{0};
+  // ENG-24: RN's resolved submitBehavior (see textInputKeyTraits).
+  int tiSubmitBehavior{2};
   float tiPlaceholderColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
+  // item 4a: selection highlight fill. Defaults to rgba(51,144,255,0.35) (a
+  // common desktop selection blue) when the field sets no `selectionColor`
+  // prop, overwritten at mutation time exactly like tiPlaceholderColor above.
+  float tiSelectionColor[4]{0.2f, 0.56470588f, 1.0f, 0.35f};
+  // SC-20: textAlign, fontWeight, fontStyle, decoration, textTransform,
+  // cursorColor, caretHidden.
+  rni::TextInputFace tiFace;
 
   // RNSVGPath (P9-B2). `d` is re-parsed into geometry only when it changes —
   // see SvgPath.h. fillOpacity is kept SEPARATE from node.opacity (which
@@ -168,6 +340,10 @@ struct SceneNode {
   int svgStrokeLinecap{0};   // 0 butt, 1 round, 2 square  (rnsvg encoding)
   int svgStrokeLinejoin{0};  // 0 miter, 1 round, 2 bevel  (rnsvg encoding)
   float svgStrokeMiterlimit{4.0f};
+  // ENG-13: strokeDasharray, normalised (even count, all >= 0, sum > 0);
+  // empty = solid. strokeDashoffset may be any sign (it wraps).
+  std::vector<float> svgStrokeDash;
+  float svgStrokeDashOffset{0.0f};
 
   // ⛔ SVG's transform is a 2D AFFINE OF SIX FLOATS, not the 16-float 4x4 the
   // View `transform` prop carries. react-native-svg's extractTransform()
@@ -263,6 +439,14 @@ struct SceneNode {
   std::string svgRootAlign;
   int svgRootMeetOrSlice{0};
 
+  // <world> ENG-09. `name` keys WorldRasterStore -- the SAME string
+  // JS passed to WorldRaster.setPixels(id, ...). Empty means either not a
+  // <world> node or a <world> whose `name` prop has not been set yet (the
+  // painter then has nothing to look up and paints nothing, matching an
+  // unset RNSVGImage `name`/uri: silent, not a crash).
+  bool isWorldRaster{false};
+  std::string worldRasterName;
+
 
   std::vector<facebook::react::Tag> children;
   facebook::react::Tag parent{};
@@ -302,6 +486,21 @@ class SceneGraph {
   // framebuffer; a stale size would supersample into the wrong extent.
   void setSurfaceSize(int pxW, int pxH) { surfacePxW_ = pxW; surfacePxH_ = pxH; }
 
+  // <world> ENG-09. Wires the SAME WorldRasterStore the WorldRaster
+  // TurboModule writes into (ReactHost::worldRasterStore()) so paintWorldNode
+  // reads what JS actually published. Null (the default) makes every <world>
+  // node paint nothing -- the "not wired" state, same shape as
+  // renderContext_ being null for supersampling.
+  void setWorldRasterStore(std::shared_ptr<WorldRasterStore> store) {
+    worldRasterStore_ = std::move(store);
+  }
+  // ENG-10. Sprite quads the <world> painter actually issued as GPU
+  // DrawTextureRect calls during the LAST paint(). Reset per paint(). The gate
+  // asserts this equals the drawSprites list length -- proof the quads went
+  // through the GPU path, not a silent no-op or a per-sprite node fallback.
+  int worldSpritesDrawn() const { return spritesDrawn_; }
+
+
   // Applies one MountingTransaction's mutations, in order.
   struct ScrollResult {
     facebook::react::Tag tag{0};
@@ -324,6 +523,16 @@ class SceneGraph {
   // failure looks like "the list is blank" long after the wheel stopped.
   facebook::react::Tag scrollViewAt(float x, float y);
   ScrollResult scrollBy(float x, float y, float dx, float dy);
+
+  // item 7. View commands. Absolute scroll of ScrollView `tag` to (x, y),
+  // clamped to its content extent; end=true scrolls to the far end of the
+  // overflowing axis (scrollToEnd). Returns tag=0 if `tag` is not a
+  // ScrollView.
+  ScrollResult scrollTo(facebook::react::Tag tag, float x, float y,
+                        bool toEnd);
+  // item 7. Sets an UNFOCUSED field's displayed value (setTextAndSelection
+  // on a field that is not being edited).
+  void setTextInputValue(facebook::react::Tag tag, const std::string& value);
 
   void applyMutations(const facebook::react::ShadowViewMutation::List& mutations,
                       bool log = false);
@@ -390,11 +599,40 @@ class SceneGraph {
   // makes text and vector geometry rasterise at full device resolution rather
   // than being upscaled after the fact.
   int paint(ImpellerDisplayListBuilder builder, float pointScaleFactor = 1.0f);
+  // A22: the topmost visible modal (0 if none) and its emitter, for Escape.
+  facebook::react::Tag topModal(facebook::react::EventEmitter::Shared* emitter);
 
   // Diagnostics: node count and root tag, for gates that need to distinguish
   // "no tree" from "tree present but invisible".
   size_t nodeCount();
   std::string describe();
+
+  // desktop-input-gap P0 item 1. The first mounted surface root tag, or 0 if
+  // nothing has mounted yet. Used as the keyDown/keyUp fallback target when
+  // no TextInput (or other view) is focused, so a key event has SOMEWHERE to
+  // land rather than being silently swallowed the instant nothing has focus
+  // -- the same "nothing focused is a no-op, but the event still exists"
+  // shape dispatchKey's TextInput path already draws, just for the case
+  // where there is no focus target at all.
+  facebook::react::Tag rootTag();
+
+  // item 11. Tab order: every keyboard-focusable node in depth-first tree
+  // order (children in paint order), skipping zero-size / display:none
+  // subtrees. A TextInput is focusable when editable and its `focusable` prop
+  // is true; any other View when its `focusable` prop is true.
+  std::vector<facebook::react::Tag> tabOrder();
+  bool isTextInputTag(facebook::react::Tag tag);
+  // ENG-15. True for a mounted <Switch>.
+  bool isSwitchTag(facebook::react::Tag tag);
+  // ENG-15: flip a mounted, enabled <Switch>'s painted value. Returns the NEW
+  // value (1 on / 0 off), or -1 when `tag` is not an enabled Switch.
+  int toggleSwitch(facebook::react::Tag tag);
+  // ENG-15: the setValue view command. Returns the value set, or -1.
+  int setSwitchValue(facebook::react::Tag tag, bool value);
+  // item 11. The View (not TextInput) that has keyboard focus: painted with a
+  // focus ring. 0 = none.
+  void setFocusedView(facebook::react::Tag tag);
+  facebook::react::Tag focusedView();
 
   // One `node_frame=<Component>,<tag>,<x>,<y>,<w>,<h>` line per node.
   //
@@ -449,12 +687,37 @@ class SceneGraph {
   void setTextInputFocus(facebook::react::Tag tag);
   void setTextInputEdit(facebook::react::Tag tag, const std::string& value,
                         size_t caret);
+  // item 4a: keyboard text selection. Sets the buffer, caret AND the
+  // selection anchor independently -- setTextInputEdit above always
+  // COLLAPSES the selection (anchor==caret), which is correct for the click
+  // path (item 3; mouse-drag selection is item 4b) and for any edit that
+  // leaves no selection behind. A caret move that EXTENDS a selection (Shift
+  // held) or a Select-All needs the anchor and caret to differ, which is
+  // what this entry point is for. `anchor` and `caret` are both clamped to
+  // value.size() defensively, exactly as setTextInputEdit's caret already is.
+  void setTextInputSelection(facebook::react::Tag tag,
+                             const std::string& value, size_t anchor,
+                             size_t caret);
   void clearTextInputFocus();
   facebook::react::Tag focusedTextInput();
+  // A20: true when the last paint drew a spinner that is animating, so the
+  // idle-skip loop keeps repainting.
+  bool spinnerAnimating() const { return spinnerAnimating_.load(std::memory_order_relaxed); }
   // The value a field should display: the live edit buffer if it is focused,
   // else its controlled tiValue prop. Used by the paint and returned to
   // FabricHost so a click that focuses an already-populated field seeds its
   // edit buffer from the value already on screen.
+  // Style audit item 11: true for a secureTextEntry field (Copy/Cut refused).
+  bool isSecureTextInput(facebook::react::Tag tag);
+  // ENG-24: the field's Enter traits. `submitBehavior` is RN's resolved
+  // react::SubmitBehavior (1 Submit, 2 BlurAndSubmit, 3 Newline;
+  // BaseTextInputProps::getNonDefaultSubmitBehavior, so Default never shows).
+  bool textInputKeyTraits(facebook::react::Tag tag, bool* multiline,
+                          int* submitBehavior);
+  // ENG-24: onContentSizeChange's contentSize, in points: the laid-out text
+  // (the live buffer while focused, else the value; one line minimum) plus
+  // the field's padding. Multiline wraps at the box; single-line never wraps.
+  bool textInputContentSize(facebook::react::Tag tag, float* w, float* h);
   std::string textInputValueFor(facebook::react::Tag tag);
   // The caret index within the focused field's edit buffer. Returns 0 when the
   // tag is not the focused field (an unfocused field paints no caret). Exposed
@@ -462,15 +725,92 @@ class SceneGraph {
   // that the buffer changed -- a buffer that grows while the caret stays at 0
   // is a real editing bug the value-only check cannot see.
   size_t textInputCaretFor(facebook::react::Tag tag);
+
+  // item 4a: the UTF-8 byte offset of the SELECTION ANCHOR (the end that does
+  // NOT move under a Shift+caret-move) for the focused field. Equal to
+  // textInputCaretFor's return when the selection is collapsed -- callers
+  // needing "is there a selection" compare the two. Returns 0 when `tag` is
+  // not the focused field, matching textInputCaretFor's own convention.
+  size_t textInputSelectionAnchorFor(facebook::react::Tag tag);
+
+  // desktop-input-gap item 3. Click-to-caret: the UTF-8 BYTE OFFSET of the
+  // codepoint boundary nearest (screenX, screenY) inside `tag`'s displayed
+  // text (the live edit buffer if focused, else its controlled tiValue).
+  // Uses the EXACT SAME prefix-width paragraph measurement paintNode's caret
+  // branch already performs to place the painted bar -- see
+  // glyphBoundariesFor's header -- so a click and the caret it produces can
+  // never disagree about where a boundary sits. (screenX, screenY) are in the
+  // SAME coordinate space hitTest/paintNode use (layout points; identical to
+  // screen pixels on a 1x host with no --scale override -- see
+  // host/PointScale.h). `y` is currently unused (single-line fields only; a
+  // future multiline field would use it to pick the line first).
+  //
+  // Returns 0 when `tag` is not a text field, has no typography context, or
+  // its displayed text is empty -- 0 is the only sensible caret for an empty
+  // field, matching setTextInputFocus's own seed for that case.
+  size_t caretIndexForClick(facebook::react::Tag tag, float screenX,
+                            float screenY);
+
+  // desktop-input-gap item 3 debug/gate hook. One
+  // `rn-impeller: ti_glyph_x tag=<t> xs=<x0>,<x1>,...` line giving the SCREEN
+  // x (see caretIndexForClick's coordinate-space note) of EVERY codepoint
+  // boundary in `tag`'s displayed text -- so a gate can aim a REAL XTest
+  // click at the midpoint between two boundaries instead of guessing font
+  // metrics. Empty string if `tag` is not a text field with displayed text.
+  std::string glyphBoundaryReportFor(facebook::react::Tag tag);
+  // ENG-25. True for a <TextInput multiline>.
+  bool isMultilineTextInput(facebook::react::Tag tag);
+  // ENG-25. Up (dir < 0) / Down (dir > 0) from byte offset `caret` in a
+  // MULTILINE field, through the same wrapped layout paint draws. Returns
+  // the new caret. `goalX` in/out: the screen x to aim at (< 0 = the
+  // caret's own), so repeated moves hold their column. Non-multiline fields
+  // return `caret` unchanged.
+  size_t textInputVerticalMove(facebook::react::Tag tag, size_t caret, int dir,
+                               float* goalX);
   // One `paragraph_text tag=<t> "<text>"` line per Paragraph node, for the
   // ENG-01b edit gate: the fixture's controlled label renders `len=N v=...`, so
   // this exposes the JS re-render result to a headless assertion.
   std::string paragraphTextReport();
 
+  // P1 item 15: <Text selectable>. One selection at a time across all
+  // paragraphs (like a TextInput's focus): tag + [anchor, caret) UTF-8 byte
+  // offsets into that paragraph's node.text. 0 = none.
+  // selectableTextAt: the tag of a SELECTABLE paragraph under (x,y), or 0.
+  facebook::react::Tag selectableTextAt(float x, float y);
+  // The UTF-8 byte offset in `tag`'s text nearest (x,y), measured with the
+  // SAME per-run paragraph paint draws (so a wrapped or mixed-size paragraph
+  // maps a point to the glyph actually painted there).
+  size_t textOffsetAt(facebook::react::Tag tag, float x, float y);
+  void setTextSelection(facebook::react::Tag tag, size_t anchor, size_t caret);
+  void clearTextSelection();
+  facebook::react::Tag textSelectionTag();
+  // The selected bytes of the selected paragraph ("" when collapsed/none).
+  std::string selectedText();
+  // The string a selectable paragraph PAINTS (its runs joined, each with its
+  // own textTransform). Selection offsets index into this, not node.text.
+  std::string selectableTextFor(facebook::react::Tag tag);
+
  private:
+  // ENG-24: the TextInput paragraph paintNode draws (see the .cpp).
+  ImpellerParagraph buildTextInputParagraphLocked(const SceneNode& node,
+                                                  const std::string& raw,
+                                                  float boxW);
+  // item 3. Codepoint-boundary byte offsets of `tag`'s displayed text and the
+  // SCREEN x (layout points) of each, measured with the SAME prefix-width
+  // paragraph build paintNode uses for the caret. Caller holds mutex_.
+  // Returns false when `tag` is not a text field or typography is missing.
+  bool glyphBoundariesLocked(facebook::react::Tag tag,
+                             std::vector<size_t>* offsets,
+                             std::vector<float>* xs);
+  // item 3. Absolute origin of `tag`, walked exactly as hitTestNode does
+  // (sum of frame origins, minus each ScrollView ancestor's scroll offset).
+  // Caller holds mutex_.
+  bool absoluteOriginLocked(facebook::react::Tag tag, float* ox, float* oy);
   // Returns the hit tag, or 0. `originX/originY` accumulate exactly as in
   // paintNode: frames are PARENT-RELATIVE, so absolute position is the running
   // sum down the tree, never the node's own frame alone.
+  void tabOrderWalk(const SceneNode& node,
+                    std::vector<facebook::react::Tag>* out);
   facebook::react::Tag hitTestNode(const SceneNode& node,
                                    float originX,
                                    float originY,
@@ -524,6 +864,22 @@ class SceneGraph {
   // Releases) or null. Does NOT release `src`.
   ImpellerTexture halveTexture(ImpellerTexture src, int srcW, int srcH,
                                int dstW, int dstH);
+  // <world> ENG-09. Reads WorldRasterStore by node.worldRasterName and paints
+  // the RGBA buffer into (x,y,w,h) as a textured rect. Returns false (paints
+  // nothing) when the store is unwired, the name is empty, or nothing has
+  // ever been set for it -- all silent-no-op, never a crash, matching the
+  // "unset image source" convention the rest of this file uses.
+  bool paintWorldNode(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                      float x, float y, float w, float h);
+  // <world> ENG-10. Paints the store's drawSprites list for node.worldRasterName
+  // OVER the world buffer, back-to-front, one DrawTextureRect per sprite from
+  // the textureId-keyed atlas cache. Returns false when there is no list.
+  bool paintWorldSprites(ImpellerDisplayListBuilder builder,
+                         const SceneNode& node, float x, float y, float w,
+                         float h);
+  // <world> ENG-21. Nearest when JS set WorldRaster.setSampling(name,
+  // 'nearest'), else linear. Shared by terrain and sprites.
+  ImpellerTextureSampling worldSampling(const SceneNode& node) const;
   // Content key for the per-icon texture cache: every input that changes the
   // rasterised pixels. Two icons with the same key reuse one ImpellerTexture.
   std::string svgSubtreeCacheKey(const SceneNode& node, int pxW, int pxH) const;
@@ -554,6 +910,24 @@ class SceneGraph {
   ImpellerColorSource makeGradientSource(const SceneNode* def, float x, float y,
                                          float w, float h, float alpha) const;
   int painted_{0};  // reset per paint(); incremented in paintNode()
+  // A22 (Modal.cpp). paintNode/hitTestNode enter only the modal named by
+  // modalWalk_; the modal passes run after the app root, at window (0,0).
+  facebook::react::Tag modalWalk_{0};
+  int paintLocked(ImpellerDisplayListBuilder builder, float pointScaleFactor,
+                  std::vector<facebook::react::EventEmitter::Shared>* shows);
+  void collectModalsLocked(facebook::react::Tag tag,
+                           std::vector<facebook::react::Tag>* out) const;
+  void paintModalsLocked(ImpellerDisplayListBuilder builder);
+  void collectModalShowsLocked(std::vector<facebook::react::EventEmitter::Shared>* shows);
+  facebook::react::Tag hitTestLocked(float x, float y);
+  // The node whose content-shadow pass is being painted (paintNode skips its
+  // transform/opacity/filter layers, already open, and its content shadows).
+  const SceneNode* shadowPassNode_{nullptr};
+  void paintContentShadows(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                           float originX, float originY);
+  // The paint's point->pixel scale, for DrawShadow's device_pixel_ratio
+  // (style audit item 4, elevation). Set at the top of paint().
+  float pointScale_{1.0f};
 
   // ENG item 2 — supersample state.
   // renderContext_ is the ImpellerContext whose GL sharegroup the offscreen FBO
@@ -589,12 +963,47 @@ class SceneGraph {
   static constexpr size_t kSvgCacheMax = 256;
   std::unordered_map<std::string, SvgCacheEntry> svgCache_;
   std::vector<std::string> svgCacheOrder_;  // LRU: front = oldest
+  // <world> ENG-09. The store paintWorldNode reads by node name; wired by
+  // setWorldRasterStore(), null until a host calls it.
+  std::shared_ptr<WorldRasterStore> worldRasterStore_;
+  // Per-node-tag GL texture cache for <world>, keyed by react::Tag (each
+  // <world> instance owns exactly one texture -- unlike svgCache_, there is no
+  // content-sharing across different <world> nodes with the same name, since
+  // each may be at a different size/frame). Re-uploaded (glTexSubImage2D) when
+  // the store's version for that node's name advances past what was last
+  // uploaded; fully reallocated (glTexImage2D) on the first frame or a
+  // width/height change.
+  struct WorldTextureEntry {
+    ImpellerTexture texture{nullptr};
+    // GL texture handle -- stored as uint32_t (GLuint's real underlying type
+    // on every platform this engine targets) so this header does not need to
+    // pull in a GL headers just to declare the cache; GLES3/gl3.h is only
+    // ever included from the .cpp, and only on the two platforms
+    // RNI_SUPERSAMPLE_GL covers.
+    uint32_t glTex{0};
+    int texW{0};
+    int texH{0};
+    uint64_t uploadedVersion{0};
+  };
+  std::unordered_map<facebook::react::Tag, WorldTextureEntry> worldTextureCache_;
+  // <world> ENG-10. Sprite-atlas GPU textures keyed by textureId (NOT by node
+  // tag -- one peep texture is shared by every sprite and every <world> that
+  // references it). Uploaded once per registerSprite version; drawSprites
+  // frames only re-reference. Released in the destructor.
+  std::unordered_map<std::string, WorldTextureEntry> spriteTextureCache_;
+  int spritesDrawn_{0};  // reset per paint(); see worldSpritesDrawn()
   // ENG-06. Count of PROPS applied by updateViewProps(), not calls made.
   unsigned long directPropUpdates_{0};
   // P12-01: idle-frame damage revision, bumped by bumpVersion(). Atomic so an
   // off-thread producer (JS applyMutations / updateViewProps) can bump it while
   // the GLFW loop reads it on the main thread with no scene lock held.
   std::atomic<uint64_t> version_{0};
+  std::atomic<bool> spinnerAnimating_{false};
+  std::chrono::steady_clock::time_point spinnerEpoch_{std::chrono::steady_clock::now()};
+  // A19: <Image> textures, one per decoded source.
+  rni::ImageTextures imageTextures_;
+  // SC-31: a finished image load repaints through this (cleared on teardown).
+  std::shared_ptr<rni::ImageDamageSink> imageDamage_ = std::make_shared<rni::ImageDamageSink>();
   // P12-01: the wake fired by bumpVersion(). Guarded by its OWN mutex (never
   // mutex_) so applyMutations — which bumps while holding mutex_ — cannot invert
   // the lock order. Null until a windowed idle-skip loop installs it.
@@ -611,6 +1020,34 @@ class SceneGraph {
   facebook::react::Tag tiFocused_{0};
   std::string tiEditValue_;
   size_t tiCaret_{0};
+  // item 4a: the UTF-8 byte offset of the selection's FIXED end (the end
+  // Shift+move does not touch). Equal to tiCaret_ when the selection is
+  // collapsed -- "is there a selection" is `tiSelAnchor_ != tiCaret_`, never
+  // a separate bool, so the two can never disagree about the collapsed case.
+  size_t tiSelAnchor_{0};
+  // ENG-24: the focused field's text scroll, in points. Sideways for a
+  // single-line field, vertical for a multiline one. Set by paintNode so the
+  // caret stays inside the box; reset on every focus change; subtracted by
+  // the click-to-caret mapping so a click lands on the glyph it painted over.
+  float tiScrollX_{0.0f};
+  float tiScrollY_{0.0f};
+  // P1 item 15: the selectable-Text selection (see selectableTextAt). Kept
+  // separate from tiSel*: a paragraph is never focused or edited, and a click
+  // into a TextInput must not inherit a paragraph's byte offsets.
+  facebook::react::Tag textSelTag_{0};
+  size_t textSelAnchor_{0};
+  size_t textSelCaret_{0};
+  // Builds `node`'s paragraph exactly as paintNode draws it (one style per
+  // run) at layout width `w`. Caller owns the result. Caller holds mutex_.
+  // shadow >= 0 builds the silhouette for that run's shadow group (SC-15): runs of
+  // other groups keep their advance but paint nothing.
+  ImpellerParagraph buildRunParagraph(const SceneNode& node, float w, int shadow = -1);
+  ImpellerParagraph buildRunParagraphFrom(const SceneNode& node, const std::vector<TextRun>& runs,
+                                          float w, int shadow);
+  void paintTextShadows(ImpellerDisplayListBuilder builder, const SceneNode& node, float w,
+                        float px, float py);
+  // item 11: focused non-TextInput View (focus ring). 0 = none.
+  facebook::react::Tag focusedView_{0};
   // <TextInput>. ENG-01b item 5: caret blink. The steady_clock instant the
   // caret was last RESET to visible -- set on focus, on a click into the field,
   // and on EVERY keystroke. paintNode blinks the caret from the time elapsed
