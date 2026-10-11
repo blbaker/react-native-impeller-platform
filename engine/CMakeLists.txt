@@ -499,6 +499,7 @@ elseif(APPLE)
     "${ANGLE_DIR}/libEGL.dylib"
     "${ANGLE_DIR}/libGLESv2.dylib"
     "-framework CoreFoundation"
+    "-framework CoreText"
     "-framework Foundation")
 else()
   target_link_libraries(rn-impeller PRIVATE EGL GLESv2)

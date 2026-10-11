@@ -23,6 +23,9 @@ def _mono(ctl, feat, x1=90):
         return False, "no ink"
     c = _glyph_centres(pts)
     if len(c) != 4:
+        # darwin Menlo: the i's foot serif touches the M at the AA threshold; split on dark cores.
+        c = _glyph_centres(_ink(feat, -22, x1, thresh=60))
+    if len(c) != 4:
         return False, f"{len(c)} glyph groups, want 4 (i i M M): {c}"
     gaps = [c[k + 1] - c[k] for k in range(3)]
     if max(gaps) - min(gaps) > 2:

@@ -67,23 +67,33 @@ if [ "$WINDOWED" = 1 ]; then
   echo "== render windowed probe://interact =="
   if [ "$OS" = Darwin ]; then WRAP=(); elif command -v xvfb-run >/dev/null; then
     WRAP=(xvfb-run -a -s "-screen 0 1280x1024x24"); else WRAP=(); export DISPLAY="${DISPLAY:-:0}"; fi
+  # Hooks fire at frame 200: ~0.2 s on xvfb, ~3.3 s on a 60 Hz vsynced darwin window.
+  if [ "$OS" = Darwin ]; then SHOT_MS=6000; else SHOT_MS=2500; fi
+  # macOS ships no timeout(1); perl's alarm survives exec.
+  run_to() { if command -v timeout >/dev/null; then timeout "$@"; else perl -e 'alarm shift; exec @ARGV' "$@"; fi; }
   wrun() {  # case [input hook args...]
     local c="$1"; shift
     set +e
-    ( cd "$(dirname "$BIN")" && timeout 120 "${WRAP[@]}" "$BIN" --bundle "$NW_BUNDLE" \
+    ( cd "$(dirname "$BIN")" && run_to 120 ${WRAP[@]+"${WRAP[@]}"} "$BIN" --bundle "$NW_BUNDLE" \
         --app-name Eng19NativeWind --window --scale 1 --width 400 --height 300 \
         --initial-url probe://interact --supersample-rnsvg "$SS" --frames 4000 \
-        --screenshot-after 2500 "$@" --screenshot "$WORK/i-$c.ppm" ) > "$WORK/i-$c.log" 2>&1
+        --screenshot-after "$SHOT_MS" "$@" --screenshot "$WORK/i-$c.ppm" ) > "$WORK/i-$c.log" 2>&1
     local rc=$?
     set -e
     [ "$rc" -eq 0 ] && [ -s "$WORK/i-$c.ppm" ] || { tail -8 "$WORK/i-$c.log" >&2; fail "windowed $c rc=$rc / no screenshot"; }
     ARGS+=(interact-"$c"="$WORK/i-$c.ppm")
   }
   wrun idle
-  wrun hover --hover-after-frames 200:60,60
-  wrun groupHover --hover-after-frames 200:260,60
-  wrun active --mouse-after-frames "200:down@160,60"
-  wrun focus --click-after-frames 200:100,140
+  # Input hooks take SCREEN coords; at --scale 1 a Retina backing store maps them x2, so divide.
+  BS="$(sed -n 's/.*backing_scale=\([0-9.]*\).*/\1/p' "$WORK/i-idle.log" | head -1)"
+  BS="${BS:-1}"
+  at() { awk -v s="$BS" -v p="$1" 'BEGIN { n = split(p, a, /[:,@]/); printf "%s:%g,%g", a[1], a[n-1] / s, a[n] / s }'; }
+  [ "$BS" = "1.00" ] || [ "$BS" = 1 ] || echo "   backing scale $BS: input points divided by it"
+  wrun hover --hover-after-frames "$(at 200:60,60)"
+  wrun groupHover --hover-after-frames "$(at 200:260,60)"
+  A="$(at 200:160,60)"
+  wrun active --mouse-after-frames "${A%%:*}:down@${A#*:}"
+  wrun focus --click-after-frames "$(at 200:100,140)"
 fi
 
 python3 "$ROOT/tools/style-coverage-measure.py" "${ARGS[@]}" > "$WORK/tiles.txt"

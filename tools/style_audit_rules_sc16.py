@@ -1,25 +1,32 @@
 """SC-16 strict rules for grid 1 (tools/style-audit-measure.py): ellipsizeMode head
 and middle. 'ABCDEFGHIJKLMNOP' at 14 pt in an 80 pt box (x 30..109), one line.
-Ink is split into glyph groups (runs of columns with ink)."""
+Ink is split into glyph groups (8-connected components)."""
 
 
-def _ink(p): return p != (255, 255, 255)
+# Not just non-white: darwin AA leaves 251-254 fringes that bridge the ellipsis dots.
+def _ink(p): return sum(p) < 3 * 240
 
 
 def _groups(px):
-    cols = {}
-    for (x, y), v in px.items():
-        if _ink(v):
-            cols.setdefault(x, []).append(y)
-    out, cur = [], None
-    for x in sorted(cols):
-        if cur and x == cur["x1"] + 1:
-            cur["x1"] = x
-            cur["ys"] += cols[x]
-        else:
-            cur = {"x0": x, "x1": x, "ys": list(cols[x])}
-            out.append(cur)
-    return out
+    """8-connected ink components, left to right (column runs merge a glyph whose
+    bowl overhangs the next dot's columns, as darwin's 'D' does)."""
+    todo = {k for k, v in px.items() if _ink(v)}
+    out = []
+    while todo:
+        stack = [todo.pop()]
+        comp = []
+        while stack:
+            x, y = stack.pop()
+            comp.append((x, y))
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    q = (x + dx, y + dy)
+                    if q in todo:
+                        todo.remove(q)
+                        stack.append(q)
+        xs = [x for x, _ in comp]
+        out.append({"x0": min(xs), "x1": max(xs), "ys": [y for _, y in comp]})
+    return sorted(out, key=lambda g: g["x0"])
 
 
 def _is_dot(g, base):

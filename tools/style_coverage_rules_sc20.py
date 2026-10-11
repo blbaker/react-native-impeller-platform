@@ -36,15 +36,21 @@ def _align_right(ctl, feat):
     return True, f"ink right edge {fb[2]}"
 
 
+def _darkness(slot):
+    return sum(255 - sum(slot.px(x, y)) // 3 for y in range(-31, 105) for x in range(-22, 110))
+
+
 def _bold(ctl, feat):
     ci, fi, cb, fb = _pair(ctl, feat)
     if not ci or not fi:
         return False, "no ink"
-    if len(fi) <= 1.3 * len(ci):
-        return False, f"ink {len(fi)} px vs control {len(ci)}, want > 1.3x"
+    # Coverage sum, not pixel count: darwin's heavier regular already crosses the ink threshold.
+    cd, fd = _darkness(ctl), _darkness(feat)
+    if fd <= 1.25 * cd:
+        return False, f"darkness {fd} vs control {cd}, want > 1.25x"
     if abs(fb[0] - cb[0]) > 3:
         return False, f"ink moved {fb} vs control {cb}"
-    return True, f"ink {len(fi)} px vs control {len(ci)}"
+    return True, f"darkness {fd} vs control {cd}"
 
 
 def _italic(ctl, feat):

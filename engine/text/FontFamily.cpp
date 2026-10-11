@@ -8,6 +8,8 @@
 
 #if defined(__linux__)
 #include <dlfcn.h>
+#elif defined(__APPLE__)
+#include <CoreText/CoreText.h>
 #endif
 
 namespace rni {
@@ -114,12 +116,62 @@ bool Exists(const std::string& name) {
   return Lower(FcMatchFamily(name)) == Lower(name);
 }
 #elif defined(__APPLE__)
-std::string Generic(const std::string& kind) {
-  if (kind == "monospace") return "Menlo";
-  if (kind == "serif") return "Times";
-  return "Helvetica";
+std::string FromCf(CFStringRef s) {
+  if (!s) return "";
+  char buf[256];
+  return CFStringGetCString(s, buf, sizeof buf, kCFStringEncodingUTF8) ? buf : "";
 }
-bool Exists(const std::string&) { return true; }  // first entry wins
+
+// True when CoreText has an installed family of exactly this name (the name
+// Impeller's CoreText font manager resolves); no fallback match counts.
+bool Exists(const std::string& name) {
+  CFStringRef fam = CFStringCreateWithCString(nullptr, name.c_str(),
+                                              kCFStringEncodingUTF8);
+  if (!fam) return false;
+  const void* keys[] = {kCTFontFamilyNameAttribute};
+  const void* vals[] = {fam};
+  CFDictionaryRef attrs = CFDictionaryCreate(
+      nullptr, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks,
+      &kCFTypeDictionaryValueCallBacks);
+  CTFontDescriptorRef desc = CTFontDescriptorCreateWithAttributes(attrs);
+  CFSetRef mandatory = CFSetCreate(nullptr, keys, 1, &kCFTypeSetCallBacks);
+  CTFontDescriptorRef match =
+      CTFontDescriptorCreateMatchingFontDescriptor(desc, mandatory);
+  const bool ok = match != nullptr;
+  if (match) CFRelease(match);
+  CFRelease(mandatory);
+  CFRelease(desc);
+  CFRelease(attrs);
+  CFRelease(fam);
+  return ok;
+}
+
+// The user's fixed-pitch UI font, unless it is a hidden "."-prefixed family.
+std::string UserFixedPitchFamily() {
+  CTFontRef f = CTFontCreateUIFontForLanguage(kCTFontUIFontUserFixedPitch, 0,
+                                              nullptr);
+  if (!f) return "";
+  CFStringRef fam = CTFontCopyFamilyName(f);
+  std::string out = FromCf(fam);
+  if (fam) CFRelease(fam);
+  CFRelease(f);
+  return !out.empty() && out[0] != '.' ? out : "";
+}
+
+std::string Generic(const std::string& kind) {
+  std::vector<std::string> picks;
+  if (kind == "monospace") {
+    picks = {UserFixedPitchFamily(), "Menlo", "Monaco", "Courier New"};
+  } else if (kind == "serif") {
+    picks = {"Times", "Times New Roman", "Georgia"};
+  } else {
+    picks = {"Helvetica", "Helvetica Neue", "Arial"};
+  }
+  for (const std::string& p : picks) {
+    if (!p.empty() && Exists(p)) return p;
+  }
+  return kind;
+}
 #elif defined(_WIN32)
 std::string Generic(const std::string& kind) {
   if (kind == "monospace") return "Consolas";
