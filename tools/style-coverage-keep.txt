@@ -120,7 +120,7 @@ nw:tracking
 nw:leading
 nw:textCenter
 nw:uppercase
-nw:tabularNums
+# nw:tabularNums  SC-37: react-native-css emits no fontVariant for tabular-nums; darwin faces have proportional digits, so the fontVariant control differs there (passed on bf7be0f only because fontVariant was unimplemented)
 nw:textShadow
 nw:textColor
 nw:placeholderColor
