@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Build the react-native-impeller custom Impeller SDK (SC-32) for linux-x64:
+# Build the react-native-impeller custom Impeller SDK (SC-32) for the HOST
+# (linux-x64; darwin-arm64 on the Mac, SC-35):
 # the pinned engine (engine/IMPELLER_SHA) plus engine/impeller-sdk-patches/*.patch
 # (letter/word spacing, font features, paragraph placeholders), unpacked into
 # engine/third_party/impeller-sdk-custom. The stock engine/third_party/impeller-sdk
 # is never touched.
 #   bash tools/impeller-sdk-custom-build.sh [dest]
-# Env: RNI_SDK_WORK  checkout dir (default ~/projects/_ref/sc32, ~10 GB)
+# Env: RNI_SDK_TARGET host (default) or android-arm64
+#      RNI_SDK_WORK  checkout dir (default ~/projects/_ref/sc32, ~10 GB)
 #      RNI_SDK_PATCH apply this patch instead of the committed ones
 #      RNI_SDK_POST_PATCH  shell command run in the patched interop dir (mutants)
 # Measured 2026-10-10 on this box (22 cores): sync 57 s, checkout 9.9 GB.
@@ -16,6 +18,19 @@ SHA="$(tr -d ' \n' < engine/IMPELLER_SHA)"
 DEST="${1:-engine/third_party/impeller-sdk-custom}"
 WORK="${RNI_SDK_WORK:-$HOME/projects/_ref/sc32}"
 OUT=rni_host_debug
+GN_EXTRA=()
+ANDROID_DEPS=False
+SYNC_KEY="$SHA"
+if [ "${RNI_SDK_TARGET:-host}" = android-arm64 ]; then
+  # Cross build on the linux box; the NDK comes from the android deps.
+  GN_EXTRA=(--android --android-cpu arm64); OUT=rni_android_debug_arm64
+  ANDROID_DEPS=True; SYNC_KEY="$SHA android"
+fi
+case "$(uname -s)" in
+  # Apple silicon: flutter's gn defaults --mac-cpu to x64.
+  Darwin) [ "$ANDROID_DEPS" = True ] || { GN_EXTRA=(--mac-cpu arm64); OUT=rni_host_debug_arm64; }
+          export PATH="$PATH:/opt/homebrew/bin" ;;  # ninja only: brew python3.14 lacks expat
+esac
 say() { echo "[impeller-sdk-custom] $*"; }
 
 mkdir -p "$(dirname "$DEST")"
@@ -46,18 +61,18 @@ if [ "$(git -C "$F" rev-parse HEAD 2>/dev/null || true)" != "$SHA" ]; then
   git -C "$F" checkout -q --force FETCH_HEAD
   rm -f "$WORK/.synced"
 fi
-if [ "$(cat "$WORK/.synced" 2>/dev/null)" != "$SHA" ]; then
-  cat > "$F/.gclient" <<'EOF'
+if [ "$(cat "$WORK/.synced" 2>/dev/null)" != "$SYNC_KEY" ]; then
+  cat > "$F/.gclient" <<EOF
 solutions = [{
   "name": ".", "url": "https://github.com/flutter/flutter.git", "deps_file": "DEPS",
   "managed": False, "custom_deps": {}, "safesync_url": "",
-  "custom_vars": {"download_android_deps": False, "download_fuchsia_deps": False,
+  "custom_vars": {"download_android_deps": $ANDROID_DEPS, "download_fuchsia_deps": False,
                   "download_jdk": False, "download_esbuild": False},
 }]
 EOF
   say "gclient sync"
   (cd "$F" && gclient sync --no-history -D -j 16 > "$WORK/sync.log" 2>&1) || { tail -15 "$WORK/sync.log"; exit 1; }
-  echo "$SHA" > "$WORK/.synced"
+  echo "$SYNC_KEY" > "$WORK/.synced"
 fi
 
 INTEROP=engine/src/flutter/impeller/toolkit/interop
@@ -68,15 +83,15 @@ for p in "${PATCHES[@]}"; do git -C "$F" apply "$p"; done
 
 SRC="$F/engine/src"
 [ -f "$SRC/out/$OUT/build.ninja" ] || (cd "$SRC" && ./flutter/tools/gn --target-dir "$OUT" \
-  --runtime-mode debug --prebuilt-dart-sdk --no-lto --no-rbe --no-goma > "$WORK/gn.log" 2>&1) \
+  --runtime-mode debug --prebuilt-dart-sdk --no-lto --no-rbe --no-goma ${GN_EXTRA[@]+"${GN_EXTRA[@]}"} > "$WORK/gn.log" 2>&1) \
   || { tail -15 "$WORK/gn.log"; exit 1; }
 say "ninja (log $WORK/build.log)"
 t0=$(date +%s)
-ninja -C "$SRC/out/$OUT" -j "$(nproc)" flutter/impeller/toolkit/interop:sdk > "$WORK/build.log" 2>&1 \
+ninja -C "$SRC/out/$OUT" -j "$(getconf _NPROCESSORS_ONLN)" flutter/impeller/toolkit/interop:sdk > "$WORK/build.log" 2>&1 \
   || { grep -m5 -A5 FAILED "$WORK/build.log"; exit 1; }
 secs=$(( $(date +%s) - t0 ))
-ZIP="$SRC/out/$OUT/zip_archives/linux-x64/impeller_sdk.zip"
-[ -f "$ZIP" ] || { echo "no SDK zip at $ZIP" >&2; exit 1; }
+ZIP="$(ls "$SRC/out/$OUT"/zip_archives/*/impeller_sdk.zip 2>/dev/null | head -1)"
+[ -n "$ZIP" ] && [ -f "$ZIP" ] || { echo "no SDK zip at $ZIP" >&2; exit 1; }
 
 TMP="$(mktemp -d "$(dirname "$DEST_ABS")/.sdk-custom.XXXXXX")"
 (cd "$TMP" && python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall('.')" "$ZIP")

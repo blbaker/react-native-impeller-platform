@@ -24,3 +24,6 @@ engine/build-android-*/
 probe/build-out/
 probe/android/src/main/jniLibs/
 engine/third_party/impeller-sdk-custom/
+engine/third_party/impeller-sdk-custom-darwin/
+engine/third_party/impeller-sdk-custom-win/
+engine/third_party/impeller-sdk-custom-android/

@@ -12,9 +12,14 @@
 #   placeholderAlign  baseline puts the box 10 px above the baseline, top at the line top
 #   cmake        engine/build selects the custom SDK and the staged
 #                libimpeller.so is the custom one (linux default dir only)
+# --all-platforms (SC-35) first judges every platform SDK (linux, darwin, win,
+# android): stamp, header and new symbols; darwin and win also their .probe,
+# written by the build driver on the target host; then cmake must select the
+# custom SDK with APPLE and with WIN32 set.
 # The probe (tools/impeller-sdk-probe.c) lays text out on the CPU, no GPU.
 #   bash tools/ci-impeller-sdk-custom.sh [--all-platforms]
 # Env: RNI_IMPELLER_SDK_DIR  SDK to judge (default engine/third_party/impeller-sdk-custom)
+#      RNI_SDK_DARWIN_DIR / RNI_SDK_WIN_DIR  --all-platforms dirs (mutants)
 #      RNI_SDK_STAMP_PATCH  patch file the stamp must name (mutants)
 #      RNI_SDK_PROBE_FONT   font with tnum/pnum/smcp (default FreeSans)
 set -uo pipefail
@@ -48,39 +53,8 @@ check_stamp() {  # dir
   grep -qx "patch_sha256=$want" "$st" || fail "stamp: $st was built from other patches (rebuild the SDK)"
 }
 
-if [ "${1:-}" = --all-platforms ]; then
-  # SC-35: every desktop target has its custom SDK. Their probes run on their
-  # own hosts; here the layout, stamp and header are judged.
-  for d in "$DEFAULT_SDK" engine/third_party/impeller-sdk-custom-darwin engine/third_party/impeller-sdk-custom-win; do
-    [ -d "$d" ] || fail "all-platforms: $d missing"
-    check_stamp "$d"; check_header "$d"; ok "$d"
-  done
-fi
-
-echo "== custom SDK $SDK =="
-check_stamp "$SDK"; ok "stamp"
-check_header "$SDK"; ok "header"
-
-LIB="$SDK/lib/libimpeller.so"
-[ -f "$LIB" ] || fail "exports: no $LIB"
-EXP="$(readelf --dyn-syms -W "$LIB" | awk '$5=="GLOBAL" && $7!="UND" {print $8}' | grep '^Impeller' | sort -u)"
-for s in $NEW_SYMS; do echo "$EXP" | grep -qx "$s" || fail "exports: $s not exported by $LIB"; done
-STOCK_EXP="$(readelf --dyn-syms -W engine/third_party/impeller-sdk/lib/libimpeller.so | awk '$5=="GLOBAL" && $7!="UND" {print $8}' | grep '^Impeller' | sort -u)"
-missing="$(comm -23 <(echo "$STOCK_EXP") <(echo "$EXP") | head -3)"
-[ -z "$missing" ] || fail "exports: stock symbols missing from the custom SDK: $missing"
-ok "exports ($(echo "$EXP" | wc -l) symbols, stock $(echo "$STOCK_EXP" | wc -l))"
-[ -f "$STOCK_H" ] && ! grep -q IMPELLER_RNI_TEXT_EXTENSIONS "$STOCK_H" || fail "header: the stock SDK header was overwritten"
-
-[ -f "$FONT" ] || fail "probe font $FONT missing (apt install fonts-freefont-ttf, or set RNI_SDK_PROBE_FONT)"
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-cc -std=c11 -O1 -I"$SDK/include" tools/impeller-sdk-probe.c -o "$WORK/probe" \
-   "$(cd "$SDK/lib" && pwd)/libimpeller.so" -Wl,-rpath,"$(cd "$SDK/lib" && pwd)" > "$WORK/cc.log" 2>&1 \
-  || { tail -5 "$WORK/cc.log"; fail "probe: does not compile against $SDK"; }
-"$WORK/probe" "$FONT" > "$WORK/probe.txt" 2> "$WORK/probe.err" || { tail -5 "$WORK/probe.err"; fail "probe: crashed"; }
-grep -q PROBE_DONE "$WORK/probe.txt" || fail "probe: incomplete output"
-sed 's/^/   /' "$WORK/probe.txt" | grep -v PROBE_DONE | paste -sd' ' | fold -s -w 160
-
-python3 - "$WORK/probe.txt" <<'PY' || exit 1
+judge_probe() {  # probe output file
+  python3 - "$1" <<'PY' || exit 1
 import sys
 v = {}
 for line in open(sys.argv[1]):
@@ -109,6 +83,65 @@ rule("placeholder", v[b+"_count"] == 1 and v[b+"_count_null"] == 1
 rule("placeholderAlign", abs(v[b+"_y"] + 10 - v[b+"_baseline"]) <= 0.5 and 0 <= v["ph_top_y"] <= 1.5,
      f"baseline box y {v[b+'_y']:.2f} + 10 vs baseline {v[b+'_baseline']:.2f}; top box y {v['ph_top_y']:.2f} (0..1.5)")
 PY
+}
+
+if [ "${1:-}" = --all-platforms ]; then
+  # SC-35: every desktop target has its custom SDK. Their probes run on their
+  # own hosts; here the layout, stamp and header are judged.
+  # Each platform lib must carry the new symbols, and darwin/win must carry
+  # the probe output their build driver ran on the target host (.probe),
+  # judged by the same rules as the linux probe below.
+  # android-arm64 has no host to probe on: layout, stamp, header and symbols only.
+  DARWIN_SDK="${RNI_SDK_DARWIN_DIR:-engine/third_party/impeller-sdk-custom-darwin}"
+  WIN_SDK="${RNI_SDK_WIN_DIR:-engine/third_party/impeller-sdk-custom-win}"
+  for d in "$DEFAULT_SDK" "$DARWIN_SDK" "$WIN_SDK" engine/third_party/impeller-sdk-custom-android; do
+    [ -d "$d" ] || fail "all-platforms: $d missing"
+    check_stamp "$d"; check_header "$d"
+    lib="$(ls "$d"/lib/libimpeller.so "$d"/lib/libimpeller.dylib "$d"/lib/impeller.dll 2>/dev/null | head -1)"
+    [ -n "$lib" ] || fail "all-platforms: no libimpeller in $d/lib"
+    for s in $NEW_SYMS; do grep -aq "$s" "$lib" || fail "all-platforms: $s not in $lib"; done
+    if [ "$d" != "$DEFAULT_SDK" ] && [ "${d%-android}" = "$d" ]; then
+      [ -f "$d/.probe" ] && grep -q PROBE_DONE "$d/.probe" || fail "all-platforms: no target-host probe in $d/.probe"
+      echo "   probe $d:"; judge_probe "$d/.probe"
+    fi
+    ok "$d"
+  done
+  # engine/CMakeLists.txt's SDK selection, evaluated as a script with each
+  # platform's variable set: darwin and win must pick their custom SDK.
+  SEL="$(mktemp)"
+  awk '/^if\(WIN32\)$/ && !s {getline n; if (n ~ /_impeller_sdk_default/) {s=1; print; print n; next}}
+       s {print} /^message\(STATUS "Impeller SDK:/ {if (s) exit}' engine/CMakeLists.txt > "$SEL"
+  for pv in APPLE:impeller-sdk-custom-darwin WIN32:impeller-sdk-custom-win; do
+    got="$(cd engine && env -u RNI_IMPELLER_SDK_DIR cmake -D"${pv%%:*}=1" -P "$SEL" 2>&1 | sed -n 's/^-- Impeller SDK: //p')"
+    [ "$got" = "$ROOT/engine/third_party/${pv#*:}" ] || { rm -f "$SEL"; fail "cmake: with ${pv%%:*} the engine selects '$got', not ${pv#*:}"; }
+  done
+  rm -f "$SEL"; ok "cmake selects the custom SDK on darwin and win"
+fi
+
+echo "== custom SDK $SDK =="
+check_stamp "$SDK"; ok "stamp"
+check_header "$SDK"; ok "header"
+
+LIB="$SDK/lib/libimpeller.so"
+[ -f "$LIB" ] || fail "exports: no $LIB"
+EXP="$(readelf --dyn-syms -W "$LIB" | awk '$5=="GLOBAL" && $7!="UND" {print $8}' | grep '^Impeller' | sort -u)"
+for s in $NEW_SYMS; do echo "$EXP" | grep -qx "$s" || fail "exports: $s not exported by $LIB"; done
+STOCK_EXP="$(readelf --dyn-syms -W engine/third_party/impeller-sdk/lib/libimpeller.so | awk '$5=="GLOBAL" && $7!="UND" {print $8}' | grep '^Impeller' | sort -u)"
+missing="$(comm -23 <(echo "$STOCK_EXP") <(echo "$EXP") | head -3)"
+[ -z "$missing" ] || fail "exports: stock symbols missing from the custom SDK: $missing"
+ok "exports ($(echo "$EXP" | wc -l) symbols, stock $(echo "$STOCK_EXP" | wc -l))"
+[ -f "$STOCK_H" ] && ! grep -q IMPELLER_RNI_TEXT_EXTENSIONS "$STOCK_H" || fail "header: the stock SDK header was overwritten"
+
+[ -f "$FONT" ] || fail "probe font $FONT missing (apt install fonts-freefont-ttf, or set RNI_SDK_PROBE_FONT)"
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+cc -std=c11 -O1 -I"$SDK/include" tools/impeller-sdk-probe.c -o "$WORK/probe" \
+   "$(cd "$SDK/lib" && pwd)/libimpeller.so" -Wl,-rpath,"$(cd "$SDK/lib" && pwd)" > "$WORK/cc.log" 2>&1 \
+  || { tail -5 "$WORK/cc.log"; fail "probe: does not compile against $SDK"; }
+"$WORK/probe" "$FONT" > "$WORK/probe.txt" 2> "$WORK/probe.err" || { tail -5 "$WORK/probe.err"; fail "probe: crashed"; }
+grep -q PROBE_DONE "$WORK/probe.txt" || fail "probe: incomplete output"
+sed 's/^/   /' "$WORK/probe.txt" | grep -v PROBE_DONE | paste -sd' ' | fold -s -w 160
+
+judge_probe "$WORK/probe.txt"
 
 if [ "$SDK" = "$DEFAULT_SDK" ]; then
   CACHE=engine/build/CMakeCache.txt

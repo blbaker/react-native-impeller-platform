@@ -100,17 +100,24 @@ set(IMPELLER_SDK "${_impeller_sdk_default}"
     CACHE PATH "Unzipped Impeller standalone SDK (tools/sdk-fetch.sh, sdk-fetch-win.sh, sdk-fetch-darwin.sh)")
 # SC-32 custom SDK (letter/word spacing, font features, placeholders; built by
 # tools/impeller-sdk-custom-build.sh). RNI_IMPELLER_SDK_DIR (env or -D) picks
-# any SDK dir; otherwise desktop linux takes impeller-sdk-custom when it is
-# built and the stock SDK when it is not. Re-derived on every configure because
-# IMPELLER_SDK is a cache variable. Android passes IMPELLER_SDK itself.
-set(_impeller_sdk_custom "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-custom")
+# any SDK dir; otherwise each desktop takes its custom SDK (impeller-sdk-custom,
+# -custom-darwin, -custom-win; SC-35) when it is built and the stock SDK when it
+# is not. Re-derived on every configure because IMPELLER_SDK is a cache
+# variable. Android passes IMPELLER_SDK itself.
+if(WIN32)
+  set(_impeller_sdk_custom "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-custom-win")
+elseif(APPLE)
+  set(_impeller_sdk_custom "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-custom-darwin")
+else()
+  set(_impeller_sdk_custom "${CMAKE_SOURCE_DIR}/third_party/impeller-sdk-custom")
+endif()
 if(NOT "$ENV{RNI_IMPELLER_SDK_DIR}" STREQUAL "")
   set(RNI_IMPELLER_SDK_DIR "$ENV{RNI_IMPELLER_SDK_DIR}")
 endif()
 if(RNI_IMPELLER_SDK_DIR)
   get_filename_component(_rni_sdk "${RNI_IMPELLER_SDK_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}/..")
   set(IMPELLER_SDK "${_rni_sdk}" CACHE PATH "" FORCE)
-elseif(NOT WIN32 AND NOT APPLE AND NOT ANDROID)
+elseif(NOT ANDROID)
   if(EXISTS "${_impeller_sdk_custom}/include/impeller.h")
     set(IMPELLER_SDK "${_impeller_sdk_custom}" CACHE PATH "" FORCE)
   else()

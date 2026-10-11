@@ -88,6 +88,7 @@
 #   SC33a..e  letterSpacing (Text paint/measure, TextInput) and fontVariant (smcp, pnum)
 #             (tools/mutation-verify-impeller-sdk-custom.sh has the per-mutant rules)
 #   SC34a..c  inline View: no paint placeholder, frames not read back, box hung below the baseline
+#   SC35a..b  custom SDK on darwin/win: judged by ci-impeller-sdk-custom.sh --all-platforms
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Every file any mutant edits. Add yours here.
@@ -676,6 +677,18 @@ fi
 if want SC32g; then
 echo "== SC32g: custom SDK, CMake keeps the stock SDK (tools/mutation-verify-impeller-sdk-custom.sh) =="
 ONLY=SC32g bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC32g (custom SDK gate)"
+N=$((N + 1))
+fi
+
+if want SC35a; then
+echo "== SC35a: custom SDK, CMake keeps the stock SDK on darwin/win (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC35a bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC35a (custom SDK gate)"
+N=$((N + 1))
+fi
+
+if want SC35b; then
+echo "== SC35b: custom SDK, darwin driver copies the stock SDK (tools/mutation-verify-impeller-sdk-custom.sh) =="
+ONLY=SC35b bash tools/mutation-verify-impeller-sdk-custom.sh || fail "SC35b (custom SDK gate)"
 N=$((N + 1))
 fi
 

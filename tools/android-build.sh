@@ -19,6 +19,9 @@ TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
 [ -f "$TOOLCHAIN" ] || { echo "toolchain file missing: $TOOLCHAIN" >&2; exit 1; }
 
 SDK_DIR="engine/third_party/impeller-sdk-android"
+# SC-35: RNI_ANDROID_IMPELLER_SDK_DIR=engine/third_party/impeller-sdk-custom-android
+# builds against the custom SDK (SC-33/34 text features). Opt-in: its lib is unstripped.
+SDK_DIR="${RNI_ANDROID_IMPELLER_SDK_DIR:-$SDK_DIR}"
 if [ ! -f "$SDK_DIR/include/impeller.h" ]; then
   echo "== fetching the android-arm64 Impeller SDK =="
   RNI_SDK_PLATFORM=android-arm64 bash tools/sdk-fetch.sh "$SDK_DIR"
