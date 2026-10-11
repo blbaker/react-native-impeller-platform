@@ -2430,6 +2430,8 @@ int main(int argc, char** argv) {
   printf("rn-impeller: platform=win32\n");  // SC-40: gates assert which engine ran
 #elif defined(__APPLE__)
   printf("rn-impeller: platform=darwin\n");
+#elif defined(__ANDROID__)
+  printf("rn-impeller: platform=android\n");
 #else
   printf("rn-impeller: platform=linux\n");
 #endif

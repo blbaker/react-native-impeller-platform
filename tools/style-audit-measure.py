@@ -27,6 +27,7 @@ from style_audit_rules_sc28 import spinner_ok  # noqa: E402
 from style_audit_rules_sc30 import image_ok, image_tint_ok  # noqa: E402
 from style_audit_rules_sc33 import letter_spacing_ok, tabular_ok  # noqa: E402
 from style_audit_rules_sc40 import line_at, is_reddish, any_dark  # noqa: E402
+from style_audit_rules_sc41 import split_kerned  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 PPM = Path(sys.argv[1])
@@ -424,7 +425,8 @@ def _box_colours(px, box):
 
 
 def nested_color_ok(c, f, d):
-    return any_dark(lambda bl: _nested_color(c, f, bl), blobs)
+    return (any_dark(lambda bl: _nested_color(c, f, bl), blobs)
+            or any_dark(lambda bl: _nested_color(c, f, bl), split_kerned(blobs)))
 
 
 def _nested_color(c, f, blobs):

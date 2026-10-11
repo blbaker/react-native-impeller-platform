@@ -17,6 +17,12 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+if(ANDROID)
+  # SC-41: the NDK defines ANDROID, which switches RN's C++ to its RN-Android
+  # branches (rawProps, ImageRequestParams). We are the impeller platform;
+  # real OS checks use __ANDROID__.
+  add_compile_options(-UANDROID)
+endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(${CMAKE_SOURCE_DIR}/cmake/CompileFlags.cmake)
 
@@ -409,7 +415,7 @@ target_include_directories(rn-impeller SYSTEM PRIVATE
 # working platform keeps exercising.
 find_library(HERMESVM_LIB NAMES hermesvm
              PATHS "${HERMES_BUILD}/lib" "${HERMES_BUILD}/API/hermes"
-             NO_DEFAULT_PATH REQUIRED)
+             NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH REQUIRED)
 
 target_link_libraries(rn-impeller PRIVATE
   reactcommon_fabric

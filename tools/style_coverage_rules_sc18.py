@@ -62,12 +62,40 @@ def _foot_ink(slot):
     return sum(1 for x, y in a if y >= base - 1), end - x0 + 1
 
 
+def _first_glyph(pts):
+    """8-connected ink component holding the leftmost pixel ('A' alone)."""
+    s = set(pts)
+    start = min(pts, key=lambda p: (p[0], -p[1]))
+    seen, todo = {start}, [start]
+    while todo:
+        x, y = todo.pop()
+        for q in ((x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
+            if q in s and q not in seen:
+                seen.add(q)
+                todo.append(q)
+    return seen
+
+
+def _foot_ink_component(slot):
+    """SC-41: Noto Serif (android) kerns 'g' under the 'A', so column runs merge them
+    and the 'base' row lands on the g's descender. Measure the A component alone."""
+    pts = _ink(slot, -22, 90)
+    if not pts:
+        return None
+    a = _first_glyph(pts)
+    base = max(y for _, y in a)
+    return sum(1 for _, y in a if y >= base - 1)
+
+
 def _serif(ctl, feat):
     c, f = _foot_ink(ctl), _foot_ink(feat)
     if c is None or f is None:
         return False, "no ink"
     if f[0] < c[0] + 4:
-        return False, f"foot ink {f[0]} px vs control {c[0]}: no slab serifs"
+        cc, fc = _foot_ink_component(ctl), _foot_ink_component(feat)
+        if fc >= cc + 4:
+            return True, f"'A' component foot ink {fc} vs control {cc}"
+        return False, f"foot ink {f[0]} px vs control {c[0]} ('A' alone {fc} vs {cc}): no slab serifs"
     return True, f"foot ink feature {f[0]} vs control {c[0]}"
 
 

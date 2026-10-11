@@ -91,16 +91,19 @@ if(DEFINED OPENSSL_SSL_LIBRARY AND OPENSSL_USE_STATIC_LIBS)
     unset(OPENSSL_LIBRARIES CACHE)
   endif()
 endif()
-find_package(OpenSSL QUIET)
+if(NOT ANDROID)
+  find_package(OpenSSL QUIET)
+endif()
 if(OpenSSL_FOUND)
   message(STATUS "rc_ssl: using system OpenSSL ${OPENSSL_VERSION} (static=${OPENSSL_USE_STATIC_LIBS})")
   add_library(rc_ssl INTERFACE)
   target_link_libraries(rc_ssl INTERFACE OpenSSL::SSL OpenSSL::Crypto)
   target_compile_definitions(rc_ssl INTERFACE RNI_WITH_TLS=1)
-elseif(WIN32)
-  # The source fallback below is a Unix config+make build cmd.exe cannot run.
+elseif(WIN32 OR ANDROID)
+  # The source fallback below is a Unix config+make build cmd.exe cannot run
+  # (and on android the NDK cross config is not wired; SC-41 probes need no TLS).
   # Build without TLS: NetworkingModule refuses https:// with a clear error.
-  message(STATUS "rc_ssl: Windows without OpenSSL; building WITHOUT TLS (http only)")
+  message(STATUS "rc_ssl: ${CMAKE_SYSTEM_NAME} without OpenSSL; building WITHOUT TLS (http only)")
   add_library(rc_ssl INTERFACE)
 else()
   message(STATUS "rc_ssl: no system OpenSSL; building from source")
