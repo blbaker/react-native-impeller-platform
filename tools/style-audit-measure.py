@@ -433,20 +433,26 @@ def nested_color_ok(c, f, d):
 
 
 def nested_size_ok(c, f, d):
-    """Item 14, 'AA' at 14 pt + nested 'AA' at 30 pt, on ONE line. The first
-    two glyphs keep the control's 14 pt height (within 1 px), the last two are
-    at least 1.8x taller, and all four bottoms sit on one baseline (within
-    1 px). Painting every glyph at 30 pt (the old bug) fails the first part,
-    and the wrap it causes fails the baseline."""
+    """Item 14, 'AA' at 14 pt + nested 'AA' at 30 pt, on ONE line. The FIRST
+    glyph keeps the control's 14 pt height (within 1 px), the LAST is at
+    least 1.8x taller, both bottoms sit on one baseline (within 1 px), and
+    the whole ink box is no taller than one 30 pt line (a wrap is ~2.6x the
+    14 pt cap). Painting every glyph at 30 pt (the old bug) fails the first
+    part and wraps; ignoring the nested size fails the second.
+    Judged on the first and last blob only: darwin's face draws the second
+    14 pt 'A' touching the first 30 pt 'A', so they merge into ONE blob
+    (3 blobs, heights 10/22/22) while linux keeps 4. Requiring exactly 4
+    failed a correct darwin engine."""
     cb, fb = blobs(c), blobs(f)
-    if len(fb) != 4 or not cb:
+    if len(fb) < 2 or not cb:
         return False
     ch = cb[0][3] - cb[0][1] + 1
-    hs = [b[3] - b[1] + 1 for b in fb]
-    small = all(abs(h - ch) <= 1 for h in hs[:2])
-    big = all(h >= 1.8 * ch for h in hs[2:])
-    baseline = max(b[3] for b in fb) - min(b[3] for b in fb) <= 1
-    return small and big and baseline
+    first, last = fb[0], fb[-1]
+    small = abs((first[3] - first[1] + 1) - ch) <= 1
+    big = (last[3] - last[1] + 1) >= 1.8 * ch
+    baseline = abs(first[3] - last[3]) <= 1
+    one_line = max(b[3] for b in fb) - min(b[1] for b in fb) + 1 <= 2.4 * ch
+    return small and big and baseline and one_line
 
 
 def text_bg_ok(c, f, d):
