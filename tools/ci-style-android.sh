@@ -14,7 +14,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 fail() { echo "ANDROID_STYLE_FAIL: $*" >&2; exit 1; }
-ENG="${RNI_ANDROID_ENGINE_DIR:-$ROOT/packages-engine/engine-android-arm64/bin}"
+ENG="${RNI_ANDROID_ENGINE_DIR:-$ROOT/engine/build/android-stage/bin}"
 [ -f "$ENG/rn-impeller" ] || fail "no staged android engine in $ENG (bash tools/engine-build-android.sh)"
 for s in ImpellerParagraphStyleSetLetterSpacing ImpellerParagraphStyleSetFontFeature ImpellerParagraphBuilderAddPlaceholder; do
   grep -aq "$s" "$ENG/rn-impeller" || fail "rn-impeller does not import $s (built against the stock SDK?)"

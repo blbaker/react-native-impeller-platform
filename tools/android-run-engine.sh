@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drop-in RNI_BIN for the style gates (SC-41): runs the staged android-arm64
-# engine (packages-engine/engine-android-arm64/bin, tools/engine-build-android.sh)
+# engine (engine/build/android-stage/bin, tools/engine-build-android.sh)
 # headless on a device through `adb shell`, from /data/local/tmp. No APK is
 # installed and no other app is touched.
 #   RNI_BIN=$PWD/tools/android-run-engine.sh bash tools/ci-style-coverage.sh
@@ -10,7 +10,7 @@
 # A physical device of any other model is refused (Baker's own phones).
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENG_DIR="${RNI_ANDROID_ENGINE_DIR:-$ROOT/packages-engine/engine-android-arm64/bin}"
+ENG_DIR="${RNI_ANDROID_ENGINE_DIR:-$ROOT/engine/build/android-stage/bin}"
 RDIR="${RNI_ANDROID_DIR:-/data/local/tmp/rni-style}"
 WANT_MODEL="${RNI_ANDROID_MODEL:-SM-G991U1}"
 die() { echo "android-run-engine: $*" >&2; exit 127; }

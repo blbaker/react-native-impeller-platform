@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SC-41: cross-compile the WHOLE headless engine (Hermes, ReactCommon, Fabric,
 # SceneGraph, text) for android-arm64 and stage it, stripped, in
-# packages-engine/engine-android-arm64/bin. Not the P10 surface library
+# engine/build/android-stage/bin. Not the P10 surface library
 # (tools/android-build.sh): this is the rn-impeller executable the style gates
 # run on a device through tools/android-run-engine.sh (adb shell, no APK).
 #   rn-impeller, libimpeller.so (custom SDK: SC-32 text extensions),
@@ -18,7 +18,7 @@ API="${API:-29}"
 SDK="${RNI_ANDROID_IMPELLER_SDK_DIR:-$ROOT/engine/third_party/impeller-sdk-custom-android}"
 HB="$ROOT/engine/build-android-arm64-hermes"
 EB="$ROOT/engine/build-android-arm64-engine"
-OUT="$ROOT/packages-engine/engine-android-arm64/bin"
+OUT="$ROOT/engine/build/android-stage/bin"
 JOBS="${JOBS:-$(nproc)}"
 fail() { echo "engine-build-android: $*" >&2; exit 1; }
 [ -f "$TC" ] || fail "NDK toolchain missing: $TC"
