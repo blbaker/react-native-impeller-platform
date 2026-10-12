@@ -3,6 +3,12 @@
 #include <chrono>
 #include "host/GlfwSurface.h"
 
+#if defined(_WIN32)
+// Windows: keep GLFW from pulling in <GL/gl.h> (opengl32's GL 1.1). The
+// window's context is ANGLE GLES3 through GLFW's EGL path, declared by the
+// vendored Khronos gl3.h below.
+#define GLFW_INCLUDE_NONE
+#endif
 #include <GLFW/glfw3.h>
 #include <GLES3/gl3.h>
 
@@ -24,6 +30,53 @@
 #include <cstdlib>
 #include <string>
 #include <unordered_map>
+
+#if defined(_WIN32)
+// ANGLE ships no import library, so on Windows nothing in this file may call
+// gl* by name. Linux links libGLESv2 and darwin links ANGLE's dylibs, so the
+// direct calls below resolve at link time there. On Windows libGLESv2.dll is
+// only loaded at run time (by GLFW's EGL path), so each GL entry point this
+// file uses is fetched through glfwGetProcAddress once the context is current.
+// The macros keep every call site identical on all hosts.
+namespace {
+struct WinGl {
+  PFNGLGETSTRINGPROC GetString = nullptr;
+  PFNGLGETINTEGERVPROC GetIntegerv = nullptr;
+  PFNGLVIEWPORTPROC Viewport = nullptr;
+  PFNGLFINISHPROC Finish = nullptr;
+  PFNGLBINDFRAMEBUFFERPROC BindFramebuffer = nullptr;
+  PFNGLREADPIXELSPROC ReadPixels = nullptr;
+  PFNGLGETERRORPROC GetError = nullptr;
+};
+WinGl gWinGl;
+
+template <typename T>
+bool LoadGlEntry(T* slot, const char* name) {
+  *slot = reinterpret_cast<T>(glfwGetProcAddress(name));
+  if (!*slot) fprintf(stderr, "rn-impeller: FATAL: %s unresolved\n", name);
+  return *slot != nullptr;
+}
+
+bool LoadWinGl() {
+  bool ok = true;
+  ok &= LoadGlEntry(&gWinGl.GetString, "glGetString");
+  ok &= LoadGlEntry(&gWinGl.GetIntegerv, "glGetIntegerv");
+  ok &= LoadGlEntry(&gWinGl.Viewport, "glViewport");
+  ok &= LoadGlEntry(&gWinGl.Finish, "glFinish");
+  ok &= LoadGlEntry(&gWinGl.BindFramebuffer, "glBindFramebuffer");
+  ok &= LoadGlEntry(&gWinGl.ReadPixels, "glReadPixels");
+  ok &= LoadGlEntry(&gWinGl.GetError, "glGetError");
+  return ok;
+}
+}  // namespace
+#define glGetString gWinGl.GetString
+#define glGetIntegerv gWinGl.GetIntegerv
+#define glViewport gWinGl.Viewport
+#define glFinish gWinGl.Finish
+#define glBindFramebuffer gWinGl.BindFramebuffer
+#define glReadPixels gWinGl.ReadPixels
+#define glGetError gWinGl.GetError
+#endif
 
 namespace rni {
 
@@ -374,6 +427,10 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   };
 
   glfwSetErrorCallback(GlfwErrorCallback);
+#if defined(_WIN32)
+  // ANGLE's D3D11 backend, the same one WinGLSurface picks for headless.
+  glfwInitHint(GLFW_ANGLE_PLATFORM_TYPE, GLFW_ANGLE_PLATFORM_TYPE_D3D11);
+#endif
   if (!glfwInit()) return fail("glfwInit failed");
 
 #if defined(__APPLE__)
@@ -394,6 +451,14 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   // ProcAddressCallback here is glfwGetProcAddress, which only resolves GLES
   // symbols correctly when the context was created through EGL.
   glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
+#if defined(_WIN32)
+  // GLFW's EGL path loads libEGL.dll/libGLESv2.dll (ANGLE, shipped beside
+  // the exe). ANGLE implements GLES only, so the client API must be ES 3.0;
+  // GLFW's desktop-GL default makes glfwCreateWindow fail.
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#endif
 #endif
 
   // ⛔ ENG-05b: THE GLFW_SAMPLES EXPERIMENT, BEHIND A FLAG, AND EXPECTED TO DO
@@ -701,6 +766,9 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   if (!initAngleForWindow(error)) return false;
 #else
   glfwMakeContextCurrent(window_);
+#if defined(_WIN32)
+  if (!LoadWinGl()) return fail("GLES entry points unresolved (libGLESv2.dll)");
+#endif
 #endif
 
   context_ = ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ProcAddr, nullptr);
