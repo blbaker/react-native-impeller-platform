@@ -231,6 +231,14 @@ int ListModules() {
     names += "'" + n + "'";
   }
 
+  // globalThis.expo.modules (ExpoHost.h), listed as expo_module= lines so
+  // the ^module= parsers in ci-p4/ci-p10 do not read them as TurboModules.
+  std::string expoNames;
+  for (const auto& [n, _] : host.expoModules()->defs()) {
+    if (!expoNames.empty()) expoNames += ",";
+    expoNames += "'" + n + "'";
+  }
+
   std::string script =
       "(function(){\n"
       "  var g = globalThis;\n"
@@ -244,6 +252,14 @@ int ListModules() {
       "    for (var k in m) { keys.push(k); }\n"
       "    keys.sort();\n"
       "    console.log('module=' + n + ' methods=' + keys.join(','));\n"
+      "  }\n"
+      "  var expoNames = [" + expoNames + "];\n"
+      "  for (var j = 0; j < expoNames.length; j++) {\n"
+      "    var en = expoNames[j];\n"
+      "    var em = g.expo && g.expo.modules ? g.expo.modules[en] : null;\n"
+      "    if (em == null) { console.log('expo_module=' + en + ' methods=<UNREACHABLE FROM JS>'); continue; }\n"
+      "    var ek = Object.keys(em).sort();\n"
+      "    console.log('expo_module=' + en + ' methods=' + ek.join(','));\n"
       "  }\n"
       "  console.log('MODULE_MANIFEST_END');\n"
       "})();\n";

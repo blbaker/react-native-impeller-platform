@@ -233,7 +233,52 @@ const FEATURE_FLAGS_SHIM = 'ReactNativeFeatureFlags.impeller.js';
 const REANIMATED = 'react-native-reanimated';
 const REANIMATED_SHIM = 'reanimated.impeller.js';
 
+// EXPO. `expo start` (@expo/cli withMetroMultiPlatform) asks
+// expo-modules-autolinking which package hosts react-native for the requested
+// platform, on EVERY resolve, and that is a closed switch (ios/android ->
+// react-native, tvos, macos, windows). For 'impeller' it THROWS "No support
+// package is known for platform". The retry-as-ios below then caught that
+// throw for every module, so `expo start` silently served an iOS bundle
+// (Settings.ios.js, Platform.ios.js, Image.ios.js...) and the first ios-only
+// TurboModule (SettingsManager) killed the dev boot. `react-native bundle`
+// never calls it, which is why the same config bundled fine there.
+//
+// The impeller platform's host package IS react-native (this package renders
+// stock react-native), so answer that, in the module @expo/cli reads, before
+// it reads it. A project without expo is left alone.
+function teachExpoImpellerPlatform(projectRoot) {
+  let platforms;
+  try {
+    const expoDir = path.dirname(require.resolve('expo/package.json', {paths: [projectRoot]}));
+    const exportsFile = require.resolve('expo-modules-autolinking/exports', {
+      paths: [path.join(expoDir, 'internal'), expoDir],
+    });
+    // The package's exports map points "./exports" at build/exports.js; older
+    // layouts had a root exports.js re-exporting ./build/exports.
+    const dir = path.dirname(exportsFile);
+    const candidates = [
+      path.join(dir, 'platforms', 'index.js'),
+      path.join(dir, 'build', 'platforms', 'index.js'),
+    ];
+    const found = candidates.find((c) => fs.existsSync(c));
+    if (!found) return 'unknown-shape';
+    platforms = require(found);
+  } catch (error) {
+    return 'no-expo';
+  }
+  if (typeof platforms.getSupportPackageForPlatform !== 'function') return 'unknown-shape';
+  if (platforms.getSupportPackageForPlatform.__rniImpeller) return 'patched';
+  const original = platforms.getSupportPackageForPlatform;
+  const patched = function getSupportPackageForPlatform(platform) {
+    return platform === 'impeller' ? 'react-native' : original.apply(this, arguments);
+  };
+  patched.__rniImpeller = true;
+  platforms.getSupportPackageForPlatform = patched;
+  return 'patched';
+}
+
 function withImpeller(config = {}) {
+  teachExpoImpellerPlatform(config.projectRoot || process.cwd());
   const resolver = config.resolver || {};
   const existingPlatforms = resolver.platforms || ['ios', 'android', 'native'];
   const platforms = existingPlatforms.includes('impeller')
@@ -274,6 +319,16 @@ function withImpeller(config = {}) {
       // stub exporting undefined is a different defect, and a blanket
       // redirect would hide it. (Moved here from HostApp's metro.config.js.)
       if (platform !== 'impeller') throw error;
+      // ⛔ NEVER retry a resolver that rejected the PLATFORM itself: that
+      // turns every module of the bundle into its iOS variant without a
+      // word (see teachExpoImpellerPlatform). Fail loudly instead.
+      if (/platform "impeller"/.test(String(error && error.message))) {
+        throw new Error(
+          '@react-native-impeller/core: the bundler rejected platform "impeller" (' +
+            String(error.message).split('\n')[0] +
+            '). Refusing to fall back to ios for every module.',
+        );
+      }
       resolution = baseResolve(context, moduleName, 'ios');
     }
 
@@ -316,6 +371,7 @@ function withImpeller(config = {}) {
 
 module.exports = {
   withImpeller,
+  teachExpoImpellerPlatform,
   shimForResolvedPath,
   shimForOrigin,
   SHIM_TARGETS,
