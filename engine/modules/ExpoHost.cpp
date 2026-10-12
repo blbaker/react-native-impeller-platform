@@ -131,6 +131,7 @@ const char* kExpoCoreJs = R"JS(
     Object.defineProperty(m, '__expo_module_name__', { value: name });
     var constants = def.constants || {};
     Object.keys(constants).forEach(function (k) { m[k] = constants[k]; });
+    if (typeof def.js === 'function') def.js(m, g.expo, def.host);
     (def.async || []).forEach(function (fn) {
       m[fn] = function () {
         var args = Array.prototype.slice.call(arguments);
@@ -421,6 +422,8 @@ void downloadAsync(std::shared_ptr<ExpoHostConfig> config, folly::dynamic args,
 
 }  // namespace
 
+std::string expoUuidv4() { return uuidv4(); }
+
 std::shared_ptr<ExpoHostConfig> makeExpoHostConfig() {
   auto c = std::make_shared<ExpoHostConfig>();
   const fs::path home = homeDir();
@@ -463,6 +466,8 @@ void registerBuiltinExpoModules(ExpoModuleRegistry& registry,
     downloadAsync(config, std::move(args), std::move(settle));
   };
   registry.add("ExpoAsset", std::move(asset));
+  registerExpoConstants(registry, config);
+  registerExpoFetch(registry, config);
 }
 
 void installExpoGlobal(jsi::Runtime& rt,
@@ -482,6 +487,14 @@ void installExpoGlobal(jsi::Runtime& rt,
       fns.setValueAtIndex(rt, i++, jsi::String::createFromUtf8(rt, fn));
     }
     d.setProperty(rt, "async", std::move(fns));
+    if (!def.js.empty()) {
+      d.setProperty(rt, "js",
+                    rt.evaluateJavaScript(std::make_shared<jsi::StringBuffer>(def.js),
+                                          "rni-expo-" + name + ".js"));
+    }
+    jsi::Object host(rt);
+    if (def.installHost) def.installHost(rt, host, jsInvoker);
+    d.setProperty(rt, "host", std::move(host));
     defs.setProperty(rt, name.c_str(), std::move(d));
   }
   native.setProperty(rt, "defs", std::move(defs));

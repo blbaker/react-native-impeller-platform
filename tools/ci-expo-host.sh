@@ -18,8 +18,16 @@
 #      refetched, a 404 rejecting with a CodedError, a file:// passthrough and
 #      a name that would escape the cache dir refused. Every file the engine
 #      names is checked ON DISK against what the server sent.
-#   C. --list-modules lists ExpoAsset as expo_module= (and not as a
-#      TurboModule ^module= line, which ci-p4/ci-p10 parse).
+#      SC-44: ExponentConstants (bare, manifest = fixtures/expo-host/app.json
+#      found from the bundle's directory) and expo/fetch against the same
+#      server: status/statusText, response + request headers, UTF-8 text,
+#      POST body, redirect follow/manual/error, abort, a 200 KB body streamed
+#      in chunks, and globalThis.fetch being expo's. The server's request log
+#      must show the requests arrived.
+#   C. --list-modules lists ExpoAsset, ExponentConstants and ExpoFetchModule
+#      as expo_module= (and not as a TurboModule ^module= line, which
+#      ci-p4/ci-p10 parse).
+#   Every arm fails on "Cannot find native module" / "No native ... module found".
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 cd "$(dirname "$0")/.."
@@ -68,8 +76,8 @@ no_js_errors() {  # no_js_errors <log> <arm>
     grep '^\[js-error\]' "$1" | head -5 >&2
     fail "$2: $(grep -c '^\[js-error\]' "$1") [js-error] line(s), first: $(grep -m1 '^\[js-error\]' "$1" | cut -c1-160)"
   fi
-  if grep -qE 'has not been registered|Cannot find native module' "$1"; then
-    grep -E 'has not been registered|Cannot find native module' "$1" | head -3 >&2
+  if grep -qE 'has not been registered|Cannot find native module|No native .* module found' "$1"; then
+    grep -E 'has not been registered|Cannot find native module|No native .* module found' "$1" | head -3 >&2
     fail "$2: boot error in the log"
   fi
 }
@@ -104,7 +112,7 @@ MD5E="$(python3 "$CHECK" md5file "$SRV/e.bin")"
 cp "$WORK/c-content.bin" "$WORK/cache/ExponentAsset-$MD5C.bin"
 echo "stale bytes that do not hash to md5E" > "$WORK/cache/ExponentAsset-$MD5E.bin"
 
-python3 "$CHECK" serve "$SRV" "$WORK/port" &
+python3 "$CHECK" serve "$SRV" "$WORK/port" "$WORK/reqlog" &
 SRV_PID=$!
 for _ in $(seq 1 100); do [ -s "$WORK/port" ] && break; sleep 0.05; done
 PORT="$(cat "$WORK/port" 2>/dev/null)"; [ -n "$PORT" ] || fail "B: test HTTP server did not start"
@@ -114,18 +122,20 @@ URL="rniexpo://contract?base=$BASE&md5B=$MD5B&md5C=$MD5C&md5D=$MD5D&md5E=$MD5E"
 LOG="$WORK/contract.log"
 render "$PRE/expo-contract.bundle" "$LOG" "$WORK/contract.ppm" --initial-url "$URL" \
   || { tail -20 "$LOG" >&2; fail "B: engine exited non-zero"; }
-grep -E '^\[js\] EXPO_' "$LOG" | sed 's/^\[js\] /   /'
+{ grep -E '^\[js\] EXPO_' "$LOG" || true; } | sed 's/^\[js\] /   /'
 no_js_errors "$LOG" B
 DONE="$(grep -m1 '^\[js\] EXPO_CONTRACT_DONE' "$LOG" || true)"
 [ -n "$DONE" ] || fail "B: the contract never finished (no EXPO_CONTRACT_DONE)"
 for name in classes emitter subclass uuidv4 uuidv5-shape uuidv5-bad-namespace-throws modules \
             expo-go-absent globals dl-a-no-md5 dl-b-md5 dl-c-cache-hit dl-d-rejects-coded \
-            dl-e-stale-refetch dl-f-file-passthrough dl-g-rejects-escape; do
+            dl-e-stale-refetch dl-f-file-passthrough dl-g-rejects-escape \
+            constants fetch-hello fetch-status fetch-post fetch-redirect-follow fetch-redirect-manual \
+            fetch-redirect-error fetch-abort fetch-stream fetch-global; do
   grep -q "^\[js\] EXPO_CONTRACT $name PASS" "$LOG" || fail "B: check '$name' did not PASS"
 done
 echo "$DONE" | grep -q ' fail=0$' || fail "B: $DONE"
 N="$(echo "$DONE" | sed -E 's/.*pass=([0-9]+).*/\1/')"
-[ "$N" -eq 16 ] || fail "B: expected 16 checks, the fixture ran $N"
+[ "$N" -eq 26 ] || fail "B: expected 26 checks, the fixture ran $N"
 
 WANT_V5="$(python3 "$CHECK" uuid5dns www.example.com)"
 GOT_V5="$(sed -n 's/^\[js\] EXPO_UUIDV5 //p' "$LOG")"
@@ -149,7 +159,10 @@ grep -q '^\[js\] EXPO_DL d err ERR_UNABLE_TO_DOWNLOAD_ASSET$' "$LOG" || fail "B:
 PX="$(python3 "$CHECK" ppm "$WORK/contract.ppm")"
 echo "   pixels: $PX"
 echo "$PX" | grep -q 'green_corner=1' || fail "B: the contract screen is not green (the app saw a failure)"
-echo "   B ok: 16/16 checks, uuidv5 = Python, 4 cache files verified on disk"
+grep -q '^GET /fetch/hello x-rni-req=sc44 ' "$WORK/reqlog" || fail "B: the server never saw expo/fetch's X-Rni-Req header"
+grep -q '^POST /fetch/echo x-rni-req=- body=ping-body$' "$WORK/reqlog" || fail "B: the server never saw the POST body"
+[ "$(grep -c '^GET /fetch/hello ' "$WORK/reqlog")" -ge 3 ] || fail "B: the redirect was not followed to /fetch/hello"
+echo "   B ok: 26/26 checks, uuidv5 = Python, 4 cache files verified on disk, $(grep -c /fetch/ "$WORK/reqlog") fetch requests at the server"
 
 echo "== C. --list-modules =="
 LOG="$WORK/list.log"
@@ -158,8 +171,14 @@ set +e; "$BIN" --list-modules > "$LOG" 2>&1; RC=$?; set -e
 sed 's/^\[js\] //' "$LOG" > "$WORK/manifest"
 grep -q '^expo_module=ExpoAsset methods=downloadAsync$' "$WORK/manifest" \
   || { grep expo_module "$WORK/manifest" >&2 || true; fail "C: ExpoAsset missing from the manifest"; }
-! grep -q '^module=ExpoAsset' "$WORK/manifest" || fail "C: ExpoAsset listed as a TurboModule"
+grep -q '^expo_module=ExpoFetchModule methods=NativeRequest,NativeResponse,unstable_createBlobData$' "$WORK/manifest" \
+  || { grep expo_module "$WORK/manifest" >&2 || true; fail "C: ExpoFetchModule missing from the manifest"; }
+grep -qE '^expo_module=ExponentConstants methods=.*executionEnvironment' "$WORK/manifest" \
+  || { grep expo_module "$WORK/manifest" >&2 || true; fail "C: ExponentConstants missing from the manifest"; }
+for m in ExpoAsset ExpoFetchModule ExponentConstants; do
+  ! grep -q "^module=$m" "$WORK/manifest" || fail "C: $m listed as a TurboModule"
+done
 grep -q '^MODULE_MANIFEST_END$' "$WORK/manifest" || fail "C: manifest truncated"
-echo "   C ok: expo_module=ExpoAsset methods=downloadAsync"
+echo "   C ok: expo_module= ExpoAsset, ExpoFetchModule, ExponentConstants"
 
 echo "EXPO_HOST_PASS"

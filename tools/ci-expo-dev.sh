@@ -15,6 +15,12 @@
 #   3. App.js is edited while it runs (BG -> #0b3d91): the app re-renders with
 #      ONE boot (Fast Refresh, not a reload) and the later frame of the SAME
 #      process shows the new colour.
+#   4. SC-44: ExponentConstants carries expo start's app config (manifest
+#      name/slug 'probe', bare), expo/fetch works against a local server
+#      (status, headers, text, POST, redirects, abort, streamed chunks,
+#      globalThis.fetch is expo's), and neither the engine log nor Metro's
+#      client log has a "Cannot find native module" / "No native ... module
+#      found" line.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
 cd "$(dirname "$0")/.."
@@ -31,7 +37,9 @@ if [ -n "${RNI_BIN:-}" ]; then BIN="$RNI_BIN"; else BIN="$ROOT/packages-engine/e
 
 WORK="$(mktemp -d)"
 EXPO_PID=""
+SRV_PID=""
 cleanup() {
+  [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true
   if [ -n "$EXPO_PID" ]; then
     for p in $(pgrep -g "$EXPO_PID" 2>/dev/null); do kill "$p" 2>/dev/null || true; done
   fi
@@ -44,7 +52,7 @@ echo "== 0. the probe app, installed from npm with core packed from this tree ==
 CORE_TGZ="$(cd package && npm pack --silent --pack-destination "$WORK")"
 APP="$WORK/app"; mkdir -p "$APP"
 cp "$FIX/package.json" "$FIX/metro.config.js" "$FIX/app.json" "$FIX/.watchmanconfig" "$APP/"
-cp "$FIX/dev/index.js" "$FIX/dev/App.js" "$APP/"
+cp "$FIX/dev/index.js" "$FIX/dev/App.js" "$FIX/fetchChecks.js" "$APP/"
 cd "$APP"
 node -e '
 const fs = require("fs");
@@ -79,20 +87,34 @@ done
 echo "   OK: HTTP 200, $(wc -c < "$WORK/dev.bundle") bytes, no ios-only variants"
 
 echo "== 2 + 3. windowed run, then edit App.js while it runs =="
+mkdir -p "$WORK/srv"
+python3 "$CHECK" serve "$WORK/srv" "$WORK/srvport" "$WORK/reqlog" &
+SRV_PID=$!
+for _ in $(seq 1 100); do [ -s "$WORK/srvport" ] && break; sleep 0.05; done
+[ -s "$WORK/srvport" ] || fail "4: test HTTP server did not start"
+FBASE="http://127.0.0.1:$(cat "$WORK/srvport")"
 L="$WORK/run.log"
 cd "$ROOT"
 "$BIN" --window --probe-banner off --bundle "$URL" --app-name main --width 480 --height 320 \
+    --initial-url "rniexpo://dev?base=$FBASE" \
     --idle-skip --idle-run-sec 22 --screenshot-first "$WORK/before.ppm" \
     --screenshot "$WORK/after.ppm" --screenshot-after 15000 > "$L" 2>&1 &
 APP_PID=$!
 dump() { grep -E '^\[js|js-error|hmr_setup|websocket|scene_nodes|FATAL' "$L" | grep -v 'Deep imports' | cut -c1-200 | tail -20 | sed 's/^/   /' >&2; }
 for _ in $(seq 1 240); do grep -q 'EXPO_DEV_RENDER #121213' "$L" && break; sleep 0.25; done
-grep -q 'EXPO_DEV_RENDER #121213' "$L" || { dump; kill $APP_PID 2>/dev/null; fail "2: the app never rendered from expo start"; }
+# Checked before any other verdict: a missing module can also throw at import
+# and end the boot, which would otherwise read as "never rendered".
+no_missing_native() {
+  local m; m="$(grep -hE 'Cannot find native module|No native .* module found' "$L" "$WORK/expo.log" || true)"
+  [ -z "$m" ] || { echo "$m" | head -3 | sed 's/^/   /' >&2; fail "4: Expo asked for a native module the host does not vend"; }
+}
+grep -q 'EXPO_DEV_RENDER #121213' "$L" || { dump; kill $APP_PID 2>/dev/null || true; no_missing_native; fail "2: the app never rendered from expo start"; }
 sleep 2
 sed -i "s/const BG = '#121213';/const BG = '#0b3d91';/" "$APP/App.js"
 for _ in $(seq 1 80); do grep -q 'EXPO_DEV_RENDER #0b3d91' "$L" && break; sleep 0.25; done
 wait $APP_PID || true
 grep -E 'hmr_setup|scene_nodes|EXPO_DEV_' "$L" | sed 's/^/   /'
+no_missing_native
 if grep -q '^\[js-error\]' "$L"; then dump; fail "2: [js-error]: $(grep -m1 '^\[js-error\]' "$L" | cut -c1-160)"; fi
 ! grep -q "could not be found" "$L" || { dump; fail "2: a TurboModule lookup failed at boot"; }
 grep -q '^rn-impeller: hmr_setup host=127.0.0.1 port='"$PORT" "$L" || { dump; fail "2: HMR was never set up against expo start"; }
@@ -118,4 +140,15 @@ BOOTS="$(grep -c '^\[js\] EXPO_DEV_BOOT' "$L")"
 A="$(corner "$WORK/after.ppm")"
 near "$A" 0b3d91 || fail "3: after the edit the background is $A, expected #0b3d91 (re-rendered but not repainted)"
 echo "   OK: Fast Refresh repainted $B -> $A in the same process, 1 boot"
+
+echo "== 4. Expo native modules: ExponentConstants + expo/fetch =="
+grep -E '^\[js\] EXPO_DEV_CHECK' "$L" | sed 's/^\[js\] /   /' | cut -c1-200
+for name in constants fetch-hello fetch-status fetch-post fetch-redirect-follow fetch-redirect-manual \
+            fetch-redirect-error fetch-abort fetch-stream fetch-global; do
+  grep -q "^\[js\] EXPO_DEV_CHECK $name PASS" "$L" || fail "4: check '$name' did not PASS"
+done
+grep -q '^\[js\] EXPO_DEV_CHECKS_DONE pass=10 fail=0$' "$L" \
+  || fail "4: $(grep -m1 EXPO_DEV_CHECKS_DONE "$L" || echo 'checks never finished')"
+grep -q '^GET /fetch/hello x-rni-req=sc44 ' "$WORK/reqlog" || fail "4: the server never saw expo/fetch's request header"
+echo "   OK: 10/10 checks, $(grep -c /fetch/ "$WORK/reqlog") fetch requests at the server, no missing native module"
 echo "EXPO_DEV_PASS"

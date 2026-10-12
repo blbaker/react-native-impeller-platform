@@ -11,9 +11,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/bin:$PATH"
 HOST=engine/modules/ExpoHost.cpp; HASH=engine/modules/ExpoHash.h; RH=engine/runtime/ReactHost.cpp
+FETCH=engine/modules/ExpoFetch.cpp; FETCHJS=engine/modules/ExpoFetchJs.h; CONST=engine/modules/ExpoConstants.cpp
+FILES="$HOST $HASH $RH $FETCH $FETCHJS $CONST"
 BAK="$(mktemp -d)"
-cp "$HOST" "$BAK/ExpoHost.cpp"; cp "$HASH" "$BAK/ExpoHash.h"; cp "$RH" "$BAK/ReactHost.cpp"
-put_back() { cp "$BAK/ExpoHost.cpp" "$HOST"; cp "$BAK/ExpoHash.h" "$HASH"; cp "$BAK/ReactHost.cpp" "$RH"; }
+for f in $FILES; do cp "$f" "$BAK/$(basename "$f")"; done
+put_back() { for f in $FILES; do cp "$BAK/$(basename "$f")" "$f"; done; }
 restore() {
   put_back
   bash tools/engine-build.sh > /dev/null 2>&1 || echo "WARN: rebuild of restored tree failed" >&2
@@ -29,7 +31,7 @@ mutate() {  # file old new  (old must occur exactly once)
 KILLED=0
 check() {  # name expected-failure-substring
   if [ -n "${DRY:-}" ]; then
-    grep -qF -- "$(echo "$2" | sed -E "s/^check '([^']*)' did not PASS$/\1/")" tools/ci-expo-host.sh fixtures/expo-host/contract.js \
+    grep -qF -- "$(echo "$2" | sed -E "s/^check '([^']*)' did not PASS$/\1/")" tools/ci-expo-host.sh fixtures/expo-host/contract.js fixtures/expo-host/fetchChecks.js \
       || echo "   WARN: $1 expectation text not found in gate/fixture: $2"
     echo "   dry: $1 anchor ok"; KILLED=$((KILLED + 1)); return; fi
   bash tools/engine-build.sh > "$BAK/$1.build.log" 2>&1 || { tail -15 "$BAK/$1.build.log" >&2; fail "$1 tree did not build"; }
@@ -103,7 +105,55 @@ mutate "$HOST" "                    (c >= '0' && c <= '9') || c == '.' || c == '
     if (!ok) return false;"
 check M12 "check 'dl-g-rejects-escape' did not PASS"; fi
 
+# SC-44: ExponentConstants + ExpoFetchModule.
+if want M13; then echo "== M13: ExpoFetchModule not registered =="
+mutate "$HOST" "  registerExpoFetch(registry, config);" "  (void)registry;"
+check M13 "Cannot find native module 'ExpoFetchModule'"; fi
+
+if want M14; then echo "== M14: ExponentConstants not registered =="
+mutate "$HOST" "  registerExpoConstants(registry, config);" "  (void)registry;"
+check M14 "No native ExponentConstants module found"; fi
+
+if want M15; then echo "== M15: redirect 'follow' does not follow =="
+mutate "$FETCH" '    if (isRedirect && redirect != "manual") {' '    if (isRedirect && false) {'
+check M15 "check 'fetch-redirect-follow' did not PASS"; fi
+
+if want M16; then echo "== M16: redirect 'error' follows instead of failing =="
+mutate "$FETCH" '    if (isRedirect && redirect == "error") {' '    if (false) {'
+check M16 "check 'fetch-redirect-error' did not PASS"; fi
+
+if want M17; then echo "== M17: NativeRequest.cancel does nothing =="
+mutate "$FETCHJS" "    if (!p) return;
+    pending.delete(this.__id);" "    return;
+    pending.delete(this.__id);"
+check M17 "check 'fetch-abort' did not PASS"; fi
+
+if want M18; then echo "== M18: response headers dropped =="
+mutate "$FETCH" '  meta.setProperty(rt, "headers", std::move(headers));' '  meta.setProperty(rt, "headers", jsi::Array(rt, 0));'
+check M18 "check 'fetch-hello' did not PASS"; fi
+
+if want M19; then echo "== M19: request headers not sent =="
+mutate "$FETCH" "    std::string body = bytesOf(rt, a[5]);" "    std::string body = bytesOf(rt, a[5]);
+    headers.clear();"
+check M19 "check 'fetch-hello' did not PASS"; fi
+
+if want M20; then echo "== M20: status always 200 =="
+mutate "$FETCH" '  meta.setProperty(rt, "status", r.status);' '  meta.setProperty(rt, "status", 200);'
+check M20 "check 'fetch-status' did not PASS"; fi
+
+if want M21; then echo "== M21: request body dropped =="
+mutate "$FETCH" "    std::string body = bytesOf(rt, a[5]);" "    std::string body;"
+check M21 "check 'fetch-post' did not PASS"; fi
+
+if want M22; then echo "== M22: body handed over as one chunk (no streaming) =="
+mutate "$FETCHJS" "  var CHUNK = 65536;" "  var CHUNK = 1 << 30;"
+check M22 "check 'fetch-stream' did not PASS"; fi
+
+if want M23; then echo "== M23: app config not looked up next to the bundle =="
+mutate "$CONST" "  for (int up = 0; up < 3 && !dir.empty(); ++up) {" "  for (int up = 0; up < 0 && !dir.empty(); ++up) {"
+check M23 "check 'constants' did not PASS"; fi
+
 if [ -n "${DRY:-}" ]; then echo "EXPO_HOST_MUTATION_DRY_OK ($KILLED anchors found, nothing built)"; exit 0; fi
 if [ -n "${ONLY:-}" ]; then echo "EXPO_HOST_MUTATION_PARTIAL_PASS ($KILLED killed: $ONLY)"; exit 0; fi
-[ "$KILLED" -eq 12 ] || fail "only $KILLED/12 mutants ran"
-echo "EXPO_HOST_MUTATION_PASS (12/12 mutants killed by their own assertion)"
+[ "$KILLED" -eq 23 ] || fail "only $KILLED/23 mutants ran"
+echo "EXPO_HOST_MUTATION_PASS (23/23 mutants killed by their own assertion)"

@@ -23,11 +23,14 @@
 //   ExpoAsset          REQUIRED. expo-asset's ExpoAsset.js calls
 //                      requireNativeModule('ExpoAsset') at import, and
 //                      Expo.fx imports expo-asset. Absent = boot throws.
-//   ExponentConstants  optional (one console.warn when absent).
+//   ExpoFetchModule    REQUIRED once anything fetches: expo/winter replaces
+//                      globalThis.fetch with expo/fetch (ExpoFetch.cpp).
+//   ExponentConstants  optional (one console.warn when absent; ExpoConstants.cpp).
 //   ExpoUpdates, ExpoGo, NativeModulesProxy
 //                      optional, and must STAY absent: a present ExpoGo makes
 //                      isRunningInExpoGo() true and re-routes asset loading.
-// So ExpoAsset is the only module this host has to vend for boot.
+// SC-44 re-measured (dev + release, requireNativeModule/requireOptional...):
+// ExpoAsset, ExpoFetchModule, ExponentConstants, ExpoGo, ExpoUpdates.
 //
 // SPLIT. The four classes are plain JS (ExpoHost.cpp, kExpoCoreJs) with the
 // semantics of expo-modules-core's own reference implementation
@@ -67,6 +70,13 @@ using ExpoAsyncFn = std::function<void(folly::dynamic args, ExpoSettle settle)>;
 struct ExpoModuleDef {
   folly::dynamic constants = folly::dynamic::object();
   std::map<std::string, ExpoAsyncFn> asyncFunctions;
+  // Optional ES5 function expression `(function (module, expo, host) {...})`,
+  // run once when JS first touches the module (classes, sync methods).
+  std::string js;
+  // Optional: fills `host` (the third argument of `js`) with host functions.
+  std::function<void(facebook::jsi::Runtime&, facebook::jsi::Object& host,
+                     std::shared_ptr<facebook::react::CallInvoker>)>
+      installHost;
 };
 
 // Directories the host hands Expo. Resolved once at host construction (same
@@ -76,6 +86,9 @@ struct ExpoHostConfig {
   std::filesystem::path documentsDir;
   std::shared_ptr<std::function<void(const std::string&)>> reload;
   std::shared_ptr<NetworkActivity> network;
+  // Source URL of the app bundle (file://... or http://...), set before it is
+  // evaluated; ExponentConstants derives the app manifest from it.
+  std::shared_ptr<std::string> bundleUrl = std::make_shared<std::string>();
 };
 
 // The expo-module seam: name -> definition. Enumerable for --list-modules.
@@ -94,9 +107,15 @@ class ExpoModuleRegistry {
 // (gates point them at disposable paths).
 std::shared_ptr<ExpoHostConfig> makeExpoHostConfig();
 
-// Registers the modules the engine vends to Expo (today: ExpoAsset).
+// Registers the modules the engine vends to Expo: ExpoAsset,
+// ExponentConstants, ExpoFetchModule.
 void registerBuiltinExpoModules(ExpoModuleRegistry& registry,
                                 std::shared_ptr<ExpoHostConfig> config);
+void registerExpoConstants(ExpoModuleRegistry& registry,
+                           std::shared_ptr<ExpoHostConfig> config);
+void registerExpoFetch(ExpoModuleRegistry& registry,
+                       std::shared_ptr<ExpoHostConfig> config);
+std::string expoUuidv4();
 
 // Installs globalThis.expo. Call from the runtime's bindings install, after
 // the TurboModule binding, before the bundle is evaluated.

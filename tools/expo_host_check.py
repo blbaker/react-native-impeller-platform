@@ -5,14 +5,20 @@
   md5file <file>             -> hex
   md5str <string>            -> hex
   uuid5dns <name>            -> RFC 4122 v5 in the DNS namespace (Python's uuid)
-  serve <dir> <portfile>     -> HTTP on 127.0.0.1:<free port>, port written to portfile
+  serve <dir> <portfile> [reqlog]
+                             -> HTTP on 127.0.0.1:<free port>, port written to portfile;
+                                /fetch/* are the expo/fetch endpoints (SC-44), each
+                                request logged to reqlog as one line
 """
 import hashlib
 import http.server
 import os
 import socketserver
 import sys
+import time
 import uuid
+
+BIG = bytes((i * 7) & 0xFF for i in range(200000))
 
 
 def read_ppm(path):
@@ -61,14 +67,64 @@ def cmd_ppm(path):
 
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
+    reqlog = None
+
     def log_message(self, format, *args):  # noqa: A002 (stdlib signature)
         pass
 
+    def _log(self, body=b''):
+        if Quiet.reqlog:
+            with open(Quiet.reqlog, 'a') as f:
+                f.write('%s %s x-rni-req=%s body=%s\n' % (
+                    self.command, self.path, self.headers.get('X-Rni-Req', '-'),
+                    body.decode('utf-8', 'replace') or '-'))
 
-def cmd_serve(directory, portfile):
+    def _send(self, code, body, headers=(), reason=None):
+        self.send_response(code, reason)
+        for k, v in headers:
+            self.send_header(k, v)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _fetch(self, body):
+        p = self.path
+        self._log(body)
+        if p == '/fetch/hello':
+            self._send(200, 'hello from sc44 \u2713'.encode('utf-8'),
+                       [('Content-Type', 'text/plain; charset=utf-8'), ('X-Rni-Probe', 'sc44-probe'),
+                        ('X-Rni-Echo', self.headers.get('X-Rni-Req', ''))])
+        elif p == '/fetch/teapot':
+            self._send(418, b'teapot', [('Content-Type', 'text/plain')], "I'm a teapot")
+        elif p == '/fetch/echo':
+            self._send(200, self.command.encode() + b':' + body, [('Content-Type', 'text/plain')])
+        elif p == '/fetch/redirect':
+            self._send(302, b'', [('Location', '/fetch/hello')])
+        elif p == '/fetch/slow':
+            time.sleep(2.5)
+            self._send(200, b'late', [('Content-Type', 'text/plain')])
+        elif p == '/fetch/big':
+            self._send(200, BIG, [('Content-Type', 'application/octet-stream')])
+        else:
+            self._send(404, b'no such fetch endpoint')
+
+    def do_GET(self):
+        if self.path.startswith('/fetch/'):
+            return self._fetch(b'')
+        return super().do_GET()
+
+    def do_POST(self):
+        n = int(self.headers.get('Content-Length') or 0)
+        return self._fetch(self.rfile.read(n) if n else b'')
+
+
+def cmd_serve(directory, portfile, reqlog=None):
     os.chdir(directory)
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(('127.0.0.1', 0), Quiet) as httpd:
+    Quiet.reqlog = reqlog
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+    socketserver.ThreadingTCPServer.daemon_threads = True
+    with socketserver.ThreadingTCPServer(('127.0.0.1', 0), Quiet) as httpd:
         with open(portfile + '.tmp', 'w') as f:
             f.write(str(httpd.server_address[1]))
         os.replace(portfile + '.tmp', portfile)
@@ -87,7 +143,7 @@ def main():
     elif cmd == 'uuid5dns':
         print(uuid.uuid5(uuid.NAMESPACE_DNS, sys.argv[2]))
     elif cmd == 'serve':
-        cmd_serve(sys.argv[2], sys.argv[3])
+        cmd_serve(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else None)
     else:
         raise SystemExit('unknown command ' + cmd)
 

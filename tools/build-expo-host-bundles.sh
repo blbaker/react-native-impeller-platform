@@ -23,7 +23,7 @@ trap 'rm -rf "$WORK"' EXIT
 CORE_TGZ="$(cd package && npm pack --silent --pack-destination "$WORK")"
 APP="$WORK/app"
 mkdir -p "$APP"
-cp "$FIX/package.json" "$FIX/index.js" "$FIX/App.js" "$FIX/contract.js" \
+cp "$FIX/package.json" "$FIX/index.js" "$FIX/App.js" "$FIX/contract.js" "$FIX/fetchChecks.js" \
    "$FIX/metro.config.js" "$FIX/app.json" "$FIX/.watchmanconfig" "$APP/"
 cd "$APP"
 node -e '

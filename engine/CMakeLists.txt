@@ -265,6 +265,8 @@ add_executable(rn-impeller
   modules/ImageLoaderModule.cpp
   modules/WebSocketModule.cpp
   modules/ExpoHost.cpp
+  modules/ExpoConstants.cpp
+  modules/ExpoFetch.cpp
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
   scenegraph/Shadows.cpp

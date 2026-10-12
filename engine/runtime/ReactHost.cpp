@@ -372,6 +372,7 @@ ReactHost::ReactHost(bool withInspector) {
   expoConfig_ = makeExpoHostConfig();
   expoConfig_->reload = reloadHook_;
   expoConfig_->network = network_;
+  expoConfig_->bundleUrl = scriptURL_;  // same string SourceCode reports
   expoModules_ = std::make_shared<ExpoModuleRegistry>();
   registerBuiltinExpoModules(*expoModules_, expoConfig_);
 

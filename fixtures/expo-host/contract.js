@@ -22,6 +22,7 @@ import {
   SharedRef,
 } from 'expo';
 import {uuid, CodedError} from 'expo-modules-core';
+import {checkConstants, runFetchChecks} from './fetchChecks';
 
 let pass = 0;
 let fail = 0;
@@ -173,6 +174,8 @@ guard('globals', () => {
   console.log('EXPO_DIRS cacheDir=' + e.cacheDir + ' documentsDir=' + e.documentsDir);
 });
 
+guard('constants', () => checkConstants(check));
+
 // --- asynchronous: ExpoAsset.downloadAsync ---------------------------------
 // All cases start together: the headless host waits for in-flight native
 // requests once, so a sequential chain would be cut off after its first hop.
@@ -204,6 +207,7 @@ function runDownloads(url) {
     g: settle(asset.downloadAsync(base + '/b.bin', null, 'bin/../../escape')),
   };
   const names = Object.keys(cases);
+  const fetches = runFetchChecks(base, check);
   return Promise.all(names.map((n) => cases[n])).then((results) => {
     const r = {};
     names.forEach((n, i) => (r[n] = results[i]));
@@ -222,6 +226,7 @@ function runDownloads(url) {
     check('dl-e-stale-refetch', r.e.ok && r.e.v.endsWith('/ExponentAsset-' + q.md5E + '.bin'), String(r.e.v));
     check('dl-f-file-passthrough', r.f.ok && r.f.v === 'file:///opt/app/assets/icon.png', String(r.f.v));
     check('dl-g-rejects-escape', !r.g.ok, String(r.g.e && r.g.e.code));
+    return fetches;
   });
 }
 
