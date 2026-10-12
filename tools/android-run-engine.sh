@@ -23,6 +23,14 @@ if [ -z "$SERIAL" ]; then
   for s in $(timeout 15 adb devices | awk 'NR>1 && $2=="device" {print $1}'); do
     [ "$(model_of "$s")" = "$WANT_MODEL" ] && { SERIAL="$s"; break; }
   done
+  # Wireless debugging drops the adb transport on idle (SC-43): reconnect via the phone's mDNS advert.
+  if [ -z "$SERIAL" ]; then
+    for ep in $(timeout 15 adb mdns services 2>/dev/null | awk '$2 ~ /^_adb-tls-connect\._tcp/ {print $3}'); do
+      timeout 20 adb connect "$ep" >/dev/null 2>&1 || continue
+      if [ "$(model_of "$ep")" = "$WANT_MODEL" ]; then SERIAL="$ep"; break; fi
+      timeout 10 adb disconnect "$ep" >/dev/null 2>&1
+    done
+  fi
   [ -n "$SERIAL" ] || die "no attached $WANT_MODEL (adb devices; see the adb-over-network skill)"
 fi
 M="$(model_of "$SERIAL")"
