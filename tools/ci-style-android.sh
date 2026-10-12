@@ -30,13 +30,13 @@ RNI_SC_WINDOWED=0 bash tools/ci-style-coverage.sh > "$LOG/cov.log" 2>&1
 rc=$?
 grep -E 'keep-green|STYLE_COVERAGE' "$LOG/cov.log" | sed 's/^/   /'
 [ "$rc" -eq 0 ] || { tail -12 "$LOG/cov.log" >&2; fail "coverage gate failed on android"; }
-COV="$(tail -1 "$LOG/cov.log")"
+COV="$(grep -E "^STYLE_COVERAGE_GATE_(PASS|FAIL)" "$LOG/cov.log" | tail -1)"  # KEEP_WORKDIR appends a line after the verdict
 echo "== audit (grid 1, secure field, selection) on the device =="
 bash tools/ci-style-audit.sh > "$LOG/aud.log" 2>&1
 rc=$?
 grep -E 'keep-green|STYLE_AUDIT' "$LOG/aud.log" | sed 's/^/   /'
 [ "$rc" -eq 0 ] || { tail -12 "$LOG/aud.log" >&2; fail "audit gate failed on android"; }
-AUD="$(tail -1 "$LOG/aud.log")"
+AUD="$(grep -E "^STYLE_AUDIT_GATE_(PASS|FAIL)" "$LOG/aud.log" | tail -1)"
 case "$COV" in STYLE_COVERAGE_GATE_PASS*platform=android) ;; *) fail "coverage verdict: $COV" ;; esac
 case "$AUD" in STYLE_AUDIT_GATE_PASS*platform=android) ;; *) fail "audit verdict: $AUD" ;; esac
 echo "ANDROID_STYLE_PASS ${COV#STYLE_COVERAGE_GATE_PASS } | ${AUD#STYLE_AUDIT_GATE_PASS }"
