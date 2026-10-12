@@ -43,6 +43,13 @@ cmake -S engine -B "$EB" "${COMMON[@]}" -DRNI_WITH_WINDOW=OFF \
   || { tail -20 "$EB.cfg.log" >&2; fail "engine configure"; }
 cmake --build "$EB" -j"$JOBS" --target rn-impeller > "$EB.log" 2>&1 \
   || { grep -E 'error:|FAILED:' "$EB.log" | head -20 >&2; fail "engine build"; }
+# A killed link leaves a zero-filled rn-impeller newer than its inputs, so ninja never relinks it (SC-43).
+if ! file "$EB/rn-impeller" | grep -q 'ELF'; then
+  echo "   rn-impeller is not an ELF (interrupted link?): relinking"
+  rm -f "$EB/rn-impeller"
+  cmake --build "$EB" -j"$JOBS" --target rn-impeller >> "$EB.log" 2>&1 \
+    || { grep -E 'error:|FAILED:' "$EB.log" | head -20 >&2; fail "engine relink"; }
+fi
 
 echo "== stage $OUT =="
 rm -rf "$OUT" && mkdir -p "$OUT"
