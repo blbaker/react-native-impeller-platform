@@ -365,6 +365,17 @@ ReactHost::ReactHost(bool withInspector) {
                   return std::make_shared<react::AnimatedModule>(inv, provider);
                 });
 
+  // globalThis.expo (ExpoHost.h). Installed for EVERY bundle, as
+  // expo-modules-core's native side does on iOS/Android: Expo reads it at
+  // module load, before anything could ask for it. A bundle with no Expo in
+  // it never looks.
+  expoConfig_ = makeExpoHostConfig();
+  expoConfig_->reload = reloadHook_;
+  expoConfig_->network = network_;
+  expoConfig_->bundleUrl = scriptURL_;  // same string SourceCode reports
+  expoModules_ = std::make_shared<ExpoModuleRegistry>();
+  registerBuiltinExpoModules(*expoModules_, expoConfig_);
+
   auto moduleProvider = [jsInvoker, modules = modules_](
                             jsi::Runtime&, const std::string& name)
       -> std::shared_ptr<react::TurboModule> {
@@ -383,12 +394,14 @@ ReactHost::ReactHost(bool withInspector) {
   instance_->initializeRuntime(
       {.isProfiling = false},
       [moduleProvider = std::move(moduleProvider),
-       known = knownComponents_](jsi::Runtime& runtime) {
+       known = knownComponents_, expo = expoModules_, expoConfig = expoConfig_,
+       jsInvoker](jsi::Runtime& runtime) {
         installConsole(runtime);
         installHasComponent(runtime, known);
         react::TurboModuleBinding::install(
             runtime,
             react::TurboModuleProviderFunctionTypeWithRuntime(moduleProvider));
+        installExpoGlobal(runtime, expo, jsInvoker, expoConfig);
       });
 }
 

@@ -32,12 +32,18 @@ launch() {  # $1 name  $2 app  $3 initial hook  [extra engine args...]
   ( cd "$(dirname "$BIN")" && RNI_OS_APPEARANCE_FILE="$WORK/hook" \
       xvfb-run -a -s "-screen 0 1280x1024x24" "$BIN" --bundle "$BUNDLE" --app-name "$app" \
       --probe-banner off --window --scale 1 --width 400 --height 300 --supersample-rnsvg 0 \
-      --frames 4000 --screenshot-after 3500 --screenshot "$WORK/$name.ppm" "$@" ) \
+      --frames 1000000 --screenshot-after 3500 --screenshot "$WORK/$name.ppm" "$@" ) \
       > "$WORK/$name.log" 2>&1 &
   rni_track "$!"
 }
 renders() { sed -n -E 's/.*SC23 render scheme=([a-z]+)$/\1/p' "$WORK/$1.log" | tr '\n' ' ' | sed 's/ $//'; }
-finish() { wait_for "$WORK/$1.log" 'screenshot|wrote' 1 "$1 screenshot" 2>/dev/null || true; for i in $(seq 1 100); do [ -s "$WORK/$1.ppm" ] && break; sleep 0.2; done; rni_kill_own; }
+# The frame budget is far past the 3.5 s capture: unpaced xvfb runs ~1000 fps, so a
+# small --frames ended the run before the screenshot (SC-45). finish kills it.
+finish() {
+  for i in $(seq 1 100); do [ -s "$WORK/$1.ppm" ] && grep -q '^rn-impeller: screenshot=' "$WORK/$1.log" && break; sleep 0.2; done
+  rni_kill_own
+  [ -s "$WORK/$1.ppm" ] || { tail -15 "$WORK/$1.log" >&2; fail "$1: the engine wrote no screenshot"; }
+}
 box() {
   python3 - "$WORK/$1.ppm" <<'PY'
 import sys
@@ -71,7 +77,7 @@ grep -q '^rn-impeller: appearance_changed scheme=light source=os$' "$WORK/b.log"
   || fail "B: the host never reported the OS change"
 finish b
 [ "$(renders b)" = "dark light" ] || fail "B: subscriber renders were '$(renders b)', want 'dark light'"
-c="$(box b)"; [ "$c" = "WHITE" ] || fail "B: box painted $c after the OS went light, want WHITE"
+c="$(box b)" || fail "B: could not read $WORK/b.ppm"; [ "$c" = "WHITE" ] || fail "B: box painted $c after the OS went light, want WHITE"
 echo "   OK A+B: renders '$(renders b)', box WHITE"
 
 echo "== C. --color-scheme beats the OS =="

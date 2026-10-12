@@ -22,6 +22,7 @@
 #include "modules/WorldRasterModule.h"
 #include "modules/WorldRasterStore.h"
 #include "modules/ClipboardBridge.h"
+#include "modules/ExpoHost.h"
 #include "runtime/DeviceEventSink.h"
 #include "runtime/JsThread.h"
 #include "runtime/NativeAnimatedPump.h"
@@ -96,6 +97,8 @@ class ReactHost {
   // posts through it, and main.cpp wires its system backend to the real
   // GLFW clipboard once a window exists. See ClipboardBridge.h.
   std::shared_ptr<ClipboardBridge> clipboard() { return clipboard_; }
+  // The modules globalThis.expo.modules vends (ExpoHost.h), for --list-modules.
+  std::shared_ptr<ExpoModuleRegistry> expoModules() { return expoModules_; }
 
   std::string jsThreadStats() const {
     return jsThread_ ? jsThread_->debugStats() : std::string();
@@ -170,6 +173,9 @@ class ReactHost {
   std::shared_ptr<ClipboardBridge> clipboard_ =
       std::make_shared<ClipboardBridge>();
   std::shared_ptr<AppStorageConfig> storage_;
+  // globalThis.expo: directories + the expo-module seam. See ExpoHost.h.
+  std::shared_ptr<ExpoHostConfig> expoConfig_;
+  std::shared_ptr<ExpoModuleRegistry> expoModules_;
   std::shared_ptr<rni::WorldRasterStore> worldRasterStore_ =
       std::make_shared<rni::WorldRasterStore>();
   // ENG-06. The provider owns the NativeAnimatedNodesManager; the pump is the
