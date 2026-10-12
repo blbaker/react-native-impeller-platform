@@ -23,6 +23,14 @@ SC_BUNDLE="${RNI_SC_BUNDLE:-$ROOT/fixtures/style-coverage/prebuilt/style-coverag
 NW_BUNDLE="${RNI_NW_BUNDLE:-$ROOT/fixtures/nw-coverage/prebuilt/nw-coverage.bundle}"
 SS="${RNI_SUPERSAMPLE:-0}"
 fail() { echo "STYLE_COVERAGE_GATE_FAIL: $*" >&2; exit 1; }
+# RNI_EXPECT_PLATFORM=win32|darwin|linux: every render log must prove that engine ran.
+EXPECT="${RNI_EXPECT_PLATFORM:-}"
+assert_platform() {  # log
+  [ -n "$EXPECT" ] || return 0
+  grep -qx "rn-impeller: platform=$EXPECT" "$1" \
+    || fail "$(basename "$1"): want platform=$EXPECT, log says '$(grep -m1 -o 'platform=[a-z0-9]*' "$1" || echo none)'"
+  [ "$EXPECT" != win32 ] || grep -q 'angle_backend=D3D11' "$1" || fail "$(basename "$1"): win32 run did not render through ANGLE D3D11"
+}
 
 OS="$(uname -s)"
 if [ -n "${RNI_BIN:-}" ]; then BIN="$RNI_BIN"
@@ -46,6 +54,7 @@ render() {  # name bundle app scene w h [extra engine args...]
   grep -qE 'scene_nodes=[1-9]' "$WORK/$name.log" || fail "render $name mounted nothing (app-name mismatch?)"
   grep -q "supersample_rnsvg=$SS\$" "$WORK/$name.log" || fail "render $name: supersample not pinned to $SS"
   [ -s "$WORK/$name.ppm" ] || fail "render $name wrote no screenshot"
+  assert_platform "$WORK/$name.log"
 }
 
 echo "== render (headless, supersample $SS) =="
@@ -81,6 +90,7 @@ if [ "$WINDOWED" = 1 ]; then
     local rc=$?
     set -e
     [ "$rc" -eq 0 ] && [ -s "$WORK/i-$c.ppm" ] || { tail -8 "$WORK/i-$c.log" >&2; fail "windowed $c rc=$rc / no screenshot"; }
+    assert_platform "$WORK/i-$c.log"
     ARGS+=(interact-"$c"="$WORK/i-$c.ppm")
   }
   wrun idle
@@ -104,6 +114,7 @@ echo "== A. landed tiles must PASS =="
 bad=""; nl=0
 while read -r key pass _; do
   [ -z "$key" ] || [ "${key#\#}" != "$key" ] && continue
+  if [ "$WINDOWED" != 1 ] && [ "${key%%:*}" = interact ]; then echo "   $pass: $key skipped (RNI_SC_WINDOWED=0)"; continue; fi
   nl=$((nl + 1)); v="$(verdict "$key")"
   echo "   $pass: $(line "$key")"
   [ "$v" = PASS ] || bad="$bad $key"
@@ -125,4 +136,4 @@ echo "   $nk keep-green tiles PASS"
 echo "== open tiles (reported, not judged) =="
 awk '$1=="TILE" && $5!="PASS" {printf "   %s:%s %s\n", $2, $4, $5}' "$WORK/tiles.txt"
 grep TILES_FAILING "$WORK/tiles.txt" | sed 's/^/   /'
-echo "STYLE_COVERAGE_GATE_PASS landed=$nl keep=$nk"
+echo "STYLE_COVERAGE_GATE_PASS landed=$nl keep=$nk${EXPECT:+ platform=$EXPECT}"

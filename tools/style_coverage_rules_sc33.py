@@ -1,6 +1,7 @@
 """SC-33 strict rules: letterSpacing and fontVariant small-caps.
 g2:smallCaps: 'Abc' 20 pt; the feature has fontVariant small-caps. 'A' stays the same,
-'b' loses its ascender and 'c' grows past x-height, both to one small-cap height
+'b' loses its ascender and 'c' grows past x-height (or, Roboto, keeps it
+but changes shape), both to one small-cap height
 below the cap height.
 g2:tiLetterSpacing: an 80 x 40 TextInput holding 'ab' 16 pt; the feature adds
 letterSpacing 8, so the second glyph moves 8 px further from the first.
@@ -28,8 +29,14 @@ def _small_caps(ctl, feat):
     (ca, cb, cc), (fa, fb, fc) = gc, gf
     if ca != fa:
         return False, f"'A' changed {fa} vs control {ca}"
-    if fc[2] >= cc[2]:
-        return False, f"'c' top {fc[2]} not above control's {cc[2]} (no small cap)"
+    if fc[2] > cc[2]:
+        return False, f"'c' top {fc[2]} below control's {cc[2]} (no small cap)"
+    if fc[2] == cc[2]:
+        # SC-41: Roboto's small-cap C has the x-height of 'c', so demand a new glyph shape.
+        d = sum(1 for x in range(min(cc[0], fc[0]), max(cc[1], fc[1]) + 1) for y in range(0, 31)
+                if abs(sum(ctl.px(x, y)[:3]) - sum(feat.px(x, y)[:3])) > 192)
+        if d < 15:
+            return False, f"'c' top {fc[2]} = control's and only {d} px changed (no small cap)"
     if fb[2] < cb[2] + 2:
         return False, f"'b' top {fb[2]} vs control {cb[2]}: ascender kept"
     if abs(fb[2] - fc[2]) > 1:

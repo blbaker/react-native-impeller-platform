@@ -10,6 +10,8 @@
 #include <dlfcn.h>
 #elif defined(__APPLE__)
 #include <CoreText/CoreText.h>
+#elif defined(_WIN32)
+#include <windows.h>
 #endif
 
 namespace rni {
@@ -173,12 +175,39 @@ std::string Generic(const std::string& kind) {
   return kind;
 }
 #elif defined(_WIN32)
-std::string Generic(const std::string& kind) {
-  if (kind == "monospace") return "Consolas";
-  if (kind == "serif") return "Times New Roman";
-  return "Segoe UI";
+int CALLBACK OnFamily(const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM found) {
+  *(bool*)found = true;
+  return 0;  // one hit is enough
 }
-bool Exists(const std::string&) { return true; }  // first entry wins
+// True when GDI knows an installed family of exactly this name (GDI and
+// DirectWrite share the system font set; no DirectWrite dependency needed).
+bool Exists(const std::string& name) {
+  LOGFONTW lf = {};
+  lf.lfCharSet = DEFAULT_CHARSET;
+  const int n = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, lf.lfFaceName,
+                                    LF_FACESIZE);
+  if (n <= 1) return false;  // empty, or longer than a GDI face name
+  HDC dc = CreateCompatibleDC(nullptr);
+  if (!dc) return false;
+  bool found = false;
+  EnumFontFamiliesExW(dc, &lf, OnFamily, (LPARAM)&found, 0);
+  DeleteDC(dc);
+  return found;
+}
+std::string Generic(const std::string& kind) {
+  std::vector<std::string> picks;
+  if (kind == "monospace") {
+    picks = {"Consolas", "Courier New"};
+  } else if (kind == "serif") {
+    picks = {"Times New Roman", "Georgia"};
+  } else {
+    picks = {"Segoe UI", "Arial"};
+  }
+  for (const std::string& p : picks) {
+    if (Exists(p)) return p;
+  }
+  return picks.front();
+}
 #else
 std::string Generic(const std::string& kind) { return kind; }
 bool Exists(const std::string&) { return true; }

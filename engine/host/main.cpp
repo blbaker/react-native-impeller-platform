@@ -413,6 +413,7 @@ static std::string EscapeNewlines(const std::string& v) {
 // grow again. Empty = no windowed typing.
 static std::string gWindowedTypeSpec;
 
+static bool gFollowOsAppearance = false;  // SC-23 (set in headless builds too)
 #if RNI_WITH_WINDOW
 // The windowed repaint loop.
 //
@@ -430,7 +431,6 @@ static std::string gWindowedTypeSpec;
 // foreclosed. See docs/STATE.md "Open questions" if that changes.
 // parity item 14: defined below main()'s argv capture.
 [[noreturn]] static void ReexecForReload(const std::string& reason);
-static bool gFollowOsAppearance = false;  // SC-23
 
 int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                 std::string bundle, size_t nodeReportOnly, size_t bundleSize,
@@ -2426,6 +2426,15 @@ int main(int argc, char** argv) {
   printf("rn-impeller: bundle=%s (%zu bytes)\n", bundlePath.c_str(), bundle.size());
   printf("rn-impeller: shim_marker=%s\n", shimOk ? "PRESENT" : "MISSING");
   printf("rn-impeller: headless=%s\n", headless ? "yes" : "no");
+#if defined(_WIN32)
+  printf("rn-impeller: platform=win32\n");  // SC-40: gates assert which engine ran
+#elif defined(__APPLE__)
+  printf("rn-impeller: platform=darwin\n");
+#elif defined(__ANDROID__)
+  printf("rn-impeller: platform=android\n");
+#else
+  printf("rn-impeller: platform=linux\n");
+#endif
   fflush(stdout);
 
   if (windowMode) {

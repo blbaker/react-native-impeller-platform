@@ -206,7 +206,7 @@ fi
 
 if want M16; then
 echo "== M16: textDecorationColor ignored (decoration in the text colour) =="
-mutate "$SG" "                        impellerColor(node.hasDecoColor ? node.decoColor" "                        impellerColor(false ? node.decoColor"
+mutate "$SG" "    ImpellerColor decoC = impellerColor(run.hasDecoColor ? run.decoColor : run.color," "    ImpellerColor decoC = impellerColor(false ? run.decoColor : run.color,"
 check M16 decorationColor
 fi
 
@@ -242,13 +242,13 @@ fi
 
 if want M22; then
 echo "== M22: every run painted in the last run's colour (one-style paint) =="
-mutate "$SG" "      ImpellerColor tc = impellerColor(run.color, OwnAlpha(node));" "      ImpellerColor tc = impellerColor(node.textColor, OwnAlpha(node));"
+mutate "$SG" "    ImpellerColor tc = impellerColor(run.color, OwnAlpha(node) * run.opacity);" "    ImpellerColor tc = impellerColor(node.textColor, OwnAlpha(node) * run.opacity);"
 check M22 nestedText
 fi
 
 if want M23; then
 echo "== M23: every run painted at the last run's font size =="
-mutate "$SG" "      ImpellerParagraphStyleSetFontSize(style, run.fontSize);" "      ImpellerParagraphStyleSetFontSize(style, node.fontSize);"
+mutate "$SG" "    ImpellerParagraphStyleSetFontSize(style, run.fontSize);" "    ImpellerParagraphStyleSetFontSize(style, node.fontSize);"
 check M23 nestedTextSize
 fi
 

@@ -32,7 +32,8 @@ echo === configure ===
   -DCMAKE_BUILD_TYPE=Release ^
   -DHERMES_SRC=C:/Devel/hermes-win ^
   -DHERMES_BUILD=C:/Devel/hermes-win-build ^
-  -DCMAKE_INSTALL_PREFIX="%BUILD%\stage"
+  -DCMAKE_INSTALL_PREFIX="%BUILD%\stage" ^
+  -DRNI_WITH_WINDOW=OFF
 if errorlevel 1 ( echo CONFIGURE_FAIL & exit /b 1 )
 echo CONFIGURE_OK
 

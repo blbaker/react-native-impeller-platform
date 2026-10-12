@@ -19,6 +19,10 @@
 // during boot -- a main-thread queue would deadlock startup.
 #pragma once
 
+// HostTarget.h uses std::mutex without including <mutex>; MSVC's STL does
+// not reach it transitively (C2039).
+#include <mutex>
+
 #include <jsinspector-modern/HostTarget.h>
 #include <jsinspector-modern/InspectorPackagerConnection.h>
 

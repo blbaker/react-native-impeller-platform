@@ -87,6 +87,13 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   }
   if (dpy == EGL_NO_DISPLAY) return fail("no ANGLE display could be initialised");
   display_ = dpy;
+#elif defined(__ANDROID__)
+  // SC-41: Android's EGL needs no display server; the Mesa enum is unknown.
+  dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+  if (dpy == EGL_NO_DISPLAY) return fail("android eglGetDisplay failed");
+  EGLint major = 0, minor = 0;
+  if (!eglInitialize(dpy, &major, &minor)) return fail("eglInitialize failed");
+  display_ = dpy;
 #else
   dpy = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA,
                            nativeDefaultDisplay(), nullptr);
@@ -110,7 +117,17 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctxAttrs);
   if (ctx == EGL_NO_CONTEXT) return fail("eglCreateContext failed");
   if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
+#if defined(__ANDROID__)
+    // Drivers without EGL_KHR_surfaceless_context: bind a 1x1 pbuffer instead
+    // (we render into our own FBO either way).
+    const EGLint pbAttrs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+    EGLSurface pb = eglCreatePbufferSurface(dpy, cfg, pbAttrs);
+    if (pb == EGL_NO_SURFACE || !eglMakeCurrent(dpy, pb, pb, ctx)) {
+      return fail("eglMakeCurrent (pbuffer) failed");
+    }
+#else
     return fail("eglMakeCurrent (surfaceless) failed");
+#endif
   }
   eglContext_ = ctx;
 
