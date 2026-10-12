@@ -41,15 +41,12 @@ echo "== engine (android-arm64, $SDK) =="
 cmake -S engine -B "$EB" "${COMMON[@]}" -DRNI_WITH_WINDOW=OFF \
   -DIMPELLER_SDK="$SDK" -DHERMES_BUILD="$HB" > "$EB.cfg.log" 2>&1 \
   || { tail -20 "$EB.cfg.log" >&2; fail "engine configure"; }
+# A killed build leaves zero-filled objects/binaries newer than their inputs; ninja never redoes them (SC-43).
+[ -d "$EB" ] && find "$EB" \( -name '*.o' -o -name rn-impeller \) -type f | while read -r f; do
+  [ "$(head -c4 "$f" | od -An -c | tr -d ' ')" = 177ELF ] || { echo "   removing non-ELF $f (interrupted build)"; rm -f "$f"; }
+done
 cmake --build "$EB" -j"$JOBS" --target rn-impeller > "$EB.log" 2>&1 \
   || { grep -E 'error:|FAILED:' "$EB.log" | head -20 >&2; fail "engine build"; }
-# A killed link leaves a zero-filled rn-impeller newer than its inputs, so ninja never relinks it (SC-43).
-if ! file "$EB/rn-impeller" | grep -q 'ELF'; then
-  echo "   rn-impeller is not an ELF (interrupted link?): relinking"
-  rm -f "$EB/rn-impeller"
-  cmake --build "$EB" -j"$JOBS" --target rn-impeller >> "$EB.log" 2>&1 \
-    || { grep -E 'error:|FAILED:' "$EB.log" | head -20 >&2; fail "engine relink"; }
-fi
 
 echo "== stage $OUT =="
 rm -rf "$OUT" && mkdir -p "$OUT"
