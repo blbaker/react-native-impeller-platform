@@ -23,6 +23,7 @@
 
 #include "runtime/FeatureFlags.h"
 #include "modules/ClipboardModule.h"
+#include "modules/CryptoGlobal.h"  // ENG-31
 #include "modules/ImageLoaderModule.h"  // SC-31
 #include "modules/AccessibilityManagerModule.h"  // ENG-14
 
@@ -397,6 +398,7 @@ ReactHost::ReactHost(bool withInspector) {
        known = knownComponents_, expo = expoModules_, expoConfig = expoConfig_,
        jsInvoker](jsi::Runtime& runtime) {
         installConsole(runtime);
+        installCryptoGlobal(runtime);  // ENG-31: crypto.getRandomValues
         installHasComponent(runtime, known);
         react::TurboModuleBinding::install(
             runtime,

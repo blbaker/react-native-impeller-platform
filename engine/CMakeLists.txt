@@ -265,6 +265,8 @@ add_executable(rn-impeller
   modules/ImageLoaderModule.cpp
   modules/WebSocketModule.cpp
   modules/ExpoHost.cpp
+  # ENG-31: globalThis.crypto.getRandomValues on the OS CSPRNG.
+  modules/CryptoGlobal.cpp
   modules/ExpoConstants.cpp
   modules/ExpoFetch.cpp
   fabric/FabricHost.cpp
