@@ -262,6 +262,9 @@ add_executable(rn-impeller
   modules/WebSocketModule.cpp
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
+  # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
+  # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
+  $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/scenegraph/SceneGraphGlWin.cpp>
   scenegraph/Shadows.cpp
   scenegraph/BackgroundLayers.cpp
   scenegraph/BackgroundTiles.cpp

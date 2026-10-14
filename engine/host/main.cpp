@@ -141,7 +141,7 @@ void Usage() {
           "                     prove glfwSetScrollCallback is registered.)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
-          "                     default 4 on darwin, 0 (off) elsewhere\n"
+          "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
           "                   [--title <string>]  (windowed) window title, also\n"
@@ -494,7 +494,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::SceneGraph sceneGraph(surface.typography());
   // ENG item 2. Wire the supersample render context (the surface's own
   // ImpellerContext — same GL sharegroup the offscreen FBO needs) and N. On
-  // Windows/Android the offscreen path is compiled out, so these are inert.
+  // Android the offscreen path is compiled out, so these are inert there.
   sceneGraph.setRenderContext(surface.context());
   sceneGraph.setSupersample(supersampleRnsvg);
   // ENG item 2b — the root supersample offscreen is sized N x this. Device
@@ -1798,9 +1798,11 @@ int main(int argc, char** argv) {
   // ENG item 2 — SUPERSAMPLE-RNSVG. N>0 renders each <Svg> root subtree into an
   // N x offscreen and composites it back with a linear downsample, which
   // synthesises the edge-coverage AA Impeller's tessellated stroke path does not
-  // emit. Default 4 on darwin (where the tessellated-AA gap was measured), 0
-  // (disabled, exact in-place path) elsewhere. --supersample-rnsvg overrides.
-#if defined(__APPLE__)
+  // emit. Default 4 on darwin (where the tessellated-AA gap was measured) and on
+  // Windows (ANGLE D3D11 shows the same gap: 3 luma levels on the HostApp icon rail
+  // at N=0), 0 (disabled, exact in-place path) on linux, whose gates pin it.
+  // --supersample-rnsvg overrides.
+#if defined(__APPLE__) || defined(_WIN32)
   int supersampleRnsvg = 4;
 #else
   int supersampleRnsvg = 0;
