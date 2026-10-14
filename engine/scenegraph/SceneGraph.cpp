@@ -3881,6 +3881,7 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   // N=0 (disabled) and N=1 (the mutant control) never enter here — they take the
   // in-place walk and paint the flat, un-antialiased edge the gate proves.
   pointScale_ = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;  // elevation DPR
+  painted_ = 0;  // per frame: the root hook's inner walk counts into it (else N>=2 sums frames)
   if (supersample_ >= 2 && paintTreeSupersampled(builder, pointScaleFactor)) {
     // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
     // so it already reflects the visited node count.
