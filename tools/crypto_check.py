@@ -87,6 +87,10 @@ def serve_client(conn):
 
 def ws_echo(port, ready):
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # The server closes first, so the previous run's connections sit in
+    # TIME_WAIT on 8797 for ~60 s; without this, back-to-back runs (the
+    # mutation chain) die with EADDRINUSE. A LIVE listener still refuses.
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         srv.bind(("127.0.0.1", port))
     except OSError as e:

@@ -50,7 +50,7 @@ echo "engine: $BIN"
 WORK="$(mktemp -d)"
 SRV_PID=""
 cleanup() {
-  [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true
+  if [ -n "$SRV_PID" ]; then kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; fi
   rni_kill_own
   [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"
 }
