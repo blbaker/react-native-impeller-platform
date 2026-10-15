@@ -97,3 +97,12 @@ reverse it. The PR description links here; keep it current.
   per-backend goldens agree. The rebuilt SDK lives in lane B's `engine/third_party/impeller-sdk-custom-parity*`.
   Another worktree that needs it symlinks that dir read-only (parity-merge.sh does this for the merge
   worktree).
+
+## Process decisions on 2026-10-15
+
+13. **12:55: merge verification policy.** `ci-load-proof` (re-runs the sanitizer suites 3x under a deliberate CPU
+    hog, about 1 h) stays a pass-time gate and is skipped in merges. It held lane A's merge at 12:35 because, on a box
+    lane A keeps busy, the ASan native-anim-jsstall cadence came in at 151/159 vs a 95% bar. Every merge now runs the
+    ASan+UBSan suite once instead, and the merge job runs at the default CPU weight so timing gates are judged fairly.
+14. **12:55: lane B round 2.** Lane B had finished its five passes and was idle. FP-33, FP-34, FP-40, FP-41, FP-50,
+    FP-53 and FP-54 moved to it. Lane A keeps the platform, backend, embedding and final passes (13 left).
