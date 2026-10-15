@@ -29,3 +29,4 @@ tools/ci-memory-budget.sh  # FP-33 image cache budget, LRU, low-memory purge (ab
 tools/ci-layout-animation.sh  # FP-40 LayoutAnimation update/create/delete curves (about 40 s)
 tools/ci-backdrop.sh  # FP-41 expo-blur backdrop blur, tint, outside unchanged, ss 0/4, ScrollView (about 2 s)
 tools/ci-perf.sh  # FP-53 frame-time budgets, median of 5 runs x3 fixtures (about 45 s)
+tools/ci-devtools-frames.sh  # FP-54 DevTools trace: frames == presents while recording, none outside, RN clock (about 55 s)

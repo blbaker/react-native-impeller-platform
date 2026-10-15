@@ -70,6 +70,7 @@
 #include "host/FrameScheduler.h"
 #include "host/AnimRowProbe.h"
 #include "base/Trace.h"
+#include "base/DevToolsFrames.h"
 #include "base/SanitizerHooks.h"
 #if RNI_FUZZ
 #include "fuzz/Fuzz.h"
@@ -1783,6 +1784,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
   // FP-01: presents counted at surface.present(), independent of the recorder.
   printf("rn-impeller: presents=%d\n", paintsTotal);
+  {  // FP-54: frames handed to React Native DevTools (0 unless a trace recorded)
+    const rni::devtools::Stats dt = rni::devtools::GetStats();
+    printf("rn-impeller: devtools_frames sessions=%llu commits=%llu emitted=%llu\n",
+           (unsigned long long)dt.sessions, (unsigned long long)dt.commits,
+           (unsigned long long)dt.emitted);
+  }
   scheduler.PrintSummary();
   fabric.printLayoutAnimationSummary();  // FP-40
   FinishFrameTimings(frameTimings);

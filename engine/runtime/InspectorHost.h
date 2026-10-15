@@ -26,6 +26,8 @@
 #include <jsinspector-modern/HostTarget.h>
 #include <jsinspector-modern/InspectorPackagerConnection.h>
 
+#include "runtime/DevToolsTracing.h"
+
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -91,8 +93,14 @@ class InspectorHost final
       facebook::react::jsinspector_modern::ScopedExecutor<
           facebook::react::jsinspector_modern::NetworkRequestListener> executor)
       override;
+  // FP-54: frame timings + host spans while a DevTools trace records.
+  facebook::react::jsinspector_modern::HostTargetTracingDelegate*
+  getTracingDelegate() override {
+    return &tracing_;
+  }
 
  private:
+  DevToolsTracing tracing_;  // declared first: outlives hostTarget_
   std::shared_ptr<InspectorQueue> queue_;
   ReloadHook reload_;
   std::shared_ptr<facebook::react::jsinspector_modern::HostTarget> hostTarget_;

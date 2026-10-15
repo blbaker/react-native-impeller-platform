@@ -248,6 +248,7 @@ add_executable(rn-impeller
   host/AnimRowProbe.cpp
   host/MemoryPressure.cpp
   base/Trace.cpp
+  base/DevToolsFrames.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
   base/GlLimits.cpp
@@ -266,6 +267,7 @@ add_executable(rn-impeller
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   runtime/InspectorHost.cpp
+  runtime/DevToolsTracing.cpp
   modules/PlatformModules.cpp
   # ENG-14: the host's accessibility settings. darwin windowed builds read
   # NSWorkspace (Cocoa is linked only there); every other build answers false.

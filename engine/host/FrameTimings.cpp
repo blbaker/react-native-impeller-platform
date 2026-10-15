@@ -1,6 +1,8 @@
 // Model: flutter/flow/frame_timings.cc (FrameTimingsRecorder).
 #include "FrameTimings.h"
 
+#include "base/DevToolsFrames.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -74,10 +76,16 @@ void FrameTimings::Commit(std::unique_ptr<FrameTimingsRecorder> frame) {
   for (int i = 0; i < FrameTimingsRecorder::kStampCount; ++i) {
     r.us[i] = frame->stampUs((FrameTimingsRecorder::State)(i + 1));
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  errors_ += frame->errors();
-  if (frame->state() != FrameTimingsRecorder::State::kPresent) ++errors_;
-  recs_.push_back(r);
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    errors_ += frame->errors();
+    if (frame->state() != FrameTimingsRecorder::State::kPresent) ++errors_;
+    recs_.push_back(r);
+  }
+  // FP-54: the same record goes to React Native DevTools while a trace records.
+  const int64_t beginUs = r.us[0] >= 0 ? r.us[0] : r.us[1];
+  if (beginUs >= 0 && r.us[5] >= 0) devtools::OnFrameCommitted({r.frame, kOrigin + std::chrono::microseconds(beginUs),
+                              kOrigin + std::chrono::microseconds(r.us[5])});
 }
 
 void FrameTimings::Discard(std::unique_ptr<FrameTimingsRecorder> frame) {

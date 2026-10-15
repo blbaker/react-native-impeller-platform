@@ -8,6 +8,8 @@ const http = require('http');
 const WebSocket = require('ws');
 
 const [origin, appName, mode] = process.argv.slice(2);
+// mode 'trace' <out.json>: FP-54, a Tracing.start/end round with frames before,
+// inside and after the window (tools/ci-devtools-frames.sh).
 // mode 'hold': attach (Runtime + Debugger enabled), then stay attached until
 // the APP quits -- the "closed the app with DevTools open" case.
 
@@ -86,6 +88,43 @@ async function main() {
     return null;
   };
 
+  if (mode === 'trace') {
+    // FP-54: play the DevTools Performance panel. Frames before Tracing.start
+    // and after Tracing.end must not reach the trace; the ones in between must.
+    const out = process.argv[5];
+    const val = r => (r && r.result && r.result.result ? r.result.result.value : null);
+    const animate = async (run, ms) => {
+      const a = await call('Runtime.evaluate', {expression: `globalThis.__fp54Animate(${ms})`, returnByValue: true});
+      const end = Date.now() + ms + 8000;
+      let done = null;
+      while (Date.now() < end) {
+        done = val(await call('Runtime.evaluate', {expression: 'globalThis.__fp54Done', returnByValue: true}));
+        if (done === run) break;
+        await sleep(50);
+      }
+      await sleep(700);  // last frames presented, app idle again
+      console.log('CDP animate ' + JSON.stringify({run, started: val(a), done}));
+    };
+    const r0 = await call('Runtime.enable');
+    console.log('CDP runtime_enable ' + JSON.stringify({ok: !r0.error && !r0.timeout}));
+    await animate(1, 300);
+    const categories = ['devtools.timeline', 'disabled-by-default-devtools.timeline',
+      'disabled-by-default-devtools.timeline.frame', 'blink.user_timing'].join(',');
+    const ts = await call('Tracing.start', {categories, transferMode: 'ReportEvents'});
+    console.log('CDP tracing_start ' + JSON.stringify({ok: !ts.error && !ts.timeout, error: ts.error}));
+    await sleep(500);
+    await animate(2, 1500);
+    const te = await call('Tracing.end', {}, 20000);
+    const complete = await waitEvent('Tracing.tracingComplete', 20000);
+    const traceEvents = [];
+    for (const e of events) if (e.method === 'Tracing.dataCollected') traceEvents.push(...e.params.value);
+    console.log('CDP tracing_end ' + JSON.stringify({ok: !te.error && !te.timeout, complete: !!complete, events: traceEvents.length}));
+    await animate(3, 300);
+    require('fs').writeFileSync(out, JSON.stringify({traceEvents}));
+    ws.close();
+    await sleep(200);
+    process.exit(0);
+  }
   if (mode === 'hold') {
     const h1 = await call('Runtime.enable');
     const h2 = await call('Debugger.enable');
