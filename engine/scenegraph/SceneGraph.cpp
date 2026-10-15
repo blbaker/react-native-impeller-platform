@@ -4,6 +4,10 @@
 #include "scenegraph/CursorKinds.h"
 
 #include <react/renderer/core/ConcreteState.h>
+#include <react/renderer/core/PropsParserContext.h>
+#include <react/renderer/core/RawValue.h>
+#include <react/renderer/components/view/conversions.h>  // fromRawValue(Transform)
+#include <react/utils/ContextContainer.h>
 #include <react/renderer/components/textinput/BaseTextInputProps.h>
 #include <react/renderer/components/iostextinput/TextInputProps.h>
 #include <react/renderer/components/FBReactNativeSpec/Props.h>  // SwitchProps, ENG-15, ActivityIndicatorViewProps
@@ -38,17 +42,25 @@
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
 #include "text/TextTransform.h"
+#include "text/TypographyContexts.h"
 
 // ENG item 2 — supersample offscreen render. Direct GL entry points link on
-// Linux (EGL GLESv2) and macOS (ANGLE dylibs), but NOT on Windows (resolved
-// dynamically in WinGLSurface) or Android (Vulkan). Gate the whole offscreen
-// path on the two platforms where gl* resolves at link time; elsewhere the
-// helper is a stub that returns false and paintNode falls back to in-place.
-#if !defined(_WIN32) && !defined(__ANDROID__)
+// Linux (EGL GLESv2) and macOS (ANGLE dylibs). On Windows they are resolved at
+// first use from ANGLE's libGLESv2.dll (SceneGraphGl.h), and every offscreen
+// hook also checks scenegraph_gl::Ready(), so an unresolved table paints in
+// place. Android is Vulkan: no GL, the offscreen stays compiled out there.
+#if !defined(__ANDROID__)
 #define RNI_SUPERSAMPLE_GL 1
-#include <GLES3/gl3.h>
+#include "scenegraph/SceneGraphGl.h"
 #else
 #define RNI_SUPERSAMPLE_GL 0
+#endif
+// <world> ENG-09/10 GPU textures share those entry points but have never run on
+// Windows; they stay compiled out there until gated on that backend.
+#if RNI_SUPERSAMPLE_GL && !defined(_WIN32)
+#define RNI_WORLD_GL 1
+#else
+#define RNI_WORLD_GL 0
 #endif
 
 #include <algorithm>
@@ -57,6 +69,7 @@
 #include <cstdio>
 #include <functional>
 #include <variant>
+#include "base/TsanAnnotate.h"
 
 namespace {
 // <TextInput> text inset from the field's left edge, in layout points. Used by
@@ -319,10 +332,57 @@ std::string ellipseToPathData(float cx, float cy, float rx, float ry) {
   return buf;
 }
 
+// ONE transform resolver for BOTH prop paths: the mounting transaction
+// (updateFromShadowView) and the NativeAnimated direct path (updateViewProps).
+// `ops` is the operation list; frame size, transform-origin and the backface
+// rule come from the node, which the mount path filled in. Two copies of this
+// would drift, and a drift shows up as an animated view that pivots or culls
+// differently from the same view at rest.
+void ResolveViewTransform(SceneNode& node, const react::Transform& ops) {
+  node.hasTransform = false;
+  node.backfaceHidden = false;
+  if (ops.operations.empty()) {
+    return;
+  }
+  const auto resolved = react::BaseViewProps::resolveTransform(
+      node.layoutMetrics.frame.size, ops, node.transformOrigin);
+  node.transform = resolved.matrix;
+  node.hasTransform = resolved != react::Transform::Identity();
+  if (node.backfaceVisibilityHidden) {
+    // Orientation of the z=0 plane after the transform: determinant of the
+    // x, y, w rows over columns 0, 1, 3. Negative means the back faces us.
+    const auto& m = node.transform;
+    const double det = m[0] * (m[5] * m[15] - m[13] * m[7]) -
+                       m[4] * (m[1] * m[15] - m[13] * m[3]) +
+                       m[12] * (m[1] * m[7] - m[5] * m[3]);
+    node.backfaceHidden = det < 0;
+  }
+}
+
+// The NativeAnimated `transform` payload is an OPERATION LIST, not a matrix:
+// RN's TransformAnimatedNode builds [{"rotate": 1.57}, {"scale": 2}] with
+// angles already in radians (NativeAnimatedHelper.transformDataType). Parsed
+// by RN's own prop parser, so every operation the mount path accepts
+// (rotate/X/Y/Z, scale/X/Y, translate/X/Y, skewX/Y, perspective, matrix) is
+// accepted here too. False for a non-empty list RN's parser rejects: it
+// returns an empty Transform for ANY bad entry, and applying that would snap
+// the view to identity.
+bool ParseTransformOps(const folly::dynamic& value, react::Transform& out) {
+  static const react::ContextContainer kNoContext;
+  const react::PropsParserContext context{-1, kNoContext};
+  out = react::Transform{};
+  react::fromRawValue(context, react::RawValue(value), out);
+  return value.empty() || !out.operations.empty();
+}
+
 }  // namespace
 
 SceneGraph::SceneGraph(ImpellerTypographyContext typography)
     : typography_(typography) {}
+
+ImpellerTypographyContext SceneGraph::threadTypography() const {
+  return typography_ != nullptr ? rni::typography::ForThisThread() : nullptr;
+}
 
 SceneGraph::~SceneGraph() {
   {
@@ -556,21 +616,10 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     rni::ParseContentFilters(props->filter, node.blurSigma, node.dropShadows);
     node.hasTransform = false;
     node.backfaceHidden = false;
-    if (!props->transform.operations.empty()) {
-      const auto resolved = props->resolveTransform(view.layoutMetrics);
-      node.transform = resolved.matrix;
-      node.hasTransform = resolved != react::Transform::Identity();
-      node.backfaceHidden = false;
-      if (props->backfaceVisibility == react::BackfaceVisibility::Hidden) {
-        // Orientation of the z=0 plane after the transform: determinant of the
-        // x, y, w rows over columns 0, 1, 3. Negative means the back faces us.
-        const auto& m = node.transform;
-        const double det = m[0] * (m[5] * m[15] - m[13] * m[7]) -
-                           m[4] * (m[1] * m[15] - m[13] * m[3]) +
-                           m[12] * (m[1] * m[7] - m[5] * m[3]);
-        node.backfaceHidden = det < 0;
-      }
-    }
+    node.transformOrigin = props->transformOrigin;
+    node.backfaceVisibilityHidden =
+        props->backfaceVisibility == react::BackfaceVisibility::Hidden;
+    ResolveViewTransform(node, props->transform);
 
     // experimental_backgroundImage: linear and radial layers (BackgroundLayers.cpp).
     node.bgLayers = BuildBackgroundLayers(
@@ -1113,6 +1162,9 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
 void SceneGraph::applyMutations(
     const react::ShadowViewMutation::List& mutations, bool log) {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (!mutations.empty()) {
+    mountTransactions_.fetch_add(1, std::memory_order_relaxed);
+  }
   for (const auto& m : mutations) {
     switch (m.type) {
       case react::ShadowViewMutation::Create: {
@@ -1284,9 +1336,23 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
     }
 
     if (key == "transform") {
-      // RN sends the resolved 4x4 as a flat 16-element array, column-major,
-      // the same layout SceneNode::transform already holds.
-      if (!value.isArray() || value.size() != 16) continue;
+      if (!value.isArray()) continue;
+      // ⛔ THE SHAPE RN ACTUALLY SENDS IS AN OPERATION LIST. RN 0.86's C++
+      // TransformAnimatedNode emits [{"rotate": <radians>}, {"scale": 2}],
+      // never a matrix. This branch used to accept ONLY a flat 16-number
+      // matrix, so every native-driven rotate/translate/scale was skipped here
+      // without a log line while nativeanimated_ticks counted up and opacity
+      // (a different key) animated fine (Mac ledger DS-INPUT-SPIN, 2026-09-28).
+      // A flat 16-number array is still accepted below as a column-major matrix.
+      const bool flatMatrix = value.size() == 16 && value[0].isNumber();
+      if (!flatMatrix) {
+        react::Transform ops;
+        if (!ParseTransformOps(value, ops)) continue;
+        ResolveViewTransform(node, ops);
+        ++directPropUpdates_;
+        continue;
+      }
+      // Flat matrix: column-major, the layout SceneNode::transform holds.
       std::array<float, 16> m{};
       bool ok = true;
       for (size_t i = 0; i < 16 && ok; ++i) {
@@ -1515,6 +1581,7 @@ ImpellerParagraph BuildTextInputParagraph(ImpellerTypographyContext typo,
                              impellerColor(dc, OwnAlpha(node)));
   }
   const std::string shownText = rni::applyTextTransform(text, node.tiFace.transform);
+  rni::tsan::NoteExclusiveUse(typo);  // FP-04: impeller.h typography contexts are single-thread
   ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typo);
   ImpellerParagraphBuilderPushStyle(pb, style);
   ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shownText.data(), shownText.size());
@@ -1782,7 +1849,8 @@ ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const
                                                     float w, int shadow) {
   if (typography_ == nullptr) return nullptr;
   std::vector<ImpellerPaint> runPaints;
-  ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
+  rni::tsan::NoteExclusiveUse(threadTypography());  // FP-04: impeller.h typography contexts are single-thread
+  ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(threadTypography());
   if (pb == nullptr) return nullptr;
   for (const TextRun& run : runs) {
     if (run.attachment) {
@@ -1838,7 +1906,7 @@ ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const
     ApplyTextDecoration(style, run.decoLine, run.decoStyle, decoC);
     // SC-19: one push per fallback segment (text/FontFallback.h); same split in measure.
     const std::string primary = run.fontFamily.empty() ? "" : rni::ResolveFontFamily(run.fontFamily);
-    const std::vector<rni::FontSegment> segs = rni::SplitFontFallback(typography_, primary, run.text);
+    const std::vector<rni::FontSegment> segs = rni::SplitFontFallback(threadTypography(), primary, run.text);
     for (const rni::FontSegment& seg : segs) {
       rni::ApplySegmentFamily(style, primary, seg, segs.size() == 1);
       ImpellerParagraphBuilderPushStyle(pb, style);
@@ -1941,7 +2009,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // control the gate proves does NOT anti-alias. A failure inside the helper
   // returns false and we fall through to the in-place walk below, so a broken
   // offscreen degrades to a correct-but-aliased icon, never a blank one.
-  if (node.isSvgRoot && supersample_ >= 1 && renderContext_ != nullptr) {
+  if (node.isSvgRoot && supersample_ >= 1 && renderContext_ != nullptr &&
+      rni::scenegraph_gl::Ready()) {
     if (paintSvgRootSupersampled(builder, node, x, y, w, h)) {
       // ⛔ COUNT THE SUBTREE CACHE-INDEPENDENTLY. The offscreen render (which is
       // the only thing that walks the children, and only on a cache MISS) does
@@ -1954,6 +2023,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       return;
     }
   }
+#endif
+#if RNI_WORLD_GL
   // <world> ENG-09. Same shape as the SVG supersample hook just above: a
   // dedicated node kind short-circuits the ordinary paint (background/
   // border/text/children) walk. Gated on renderContext_ for the SAME reason
@@ -2235,7 +2306,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                       node.outlineStyle, impellerColor(node.outlineColor, OwnAlpha(node)));
   }
 
-#if RNI_SUPERSAMPLE_GL
+#if RNI_WORLD_GL
   // ENG-10: a <world> with a sprite list but NO setPixels buffer still
   // composites its sprites, over its own background painted just above. (With
   // a buffer, the early return in the <world> hook already drew them.)
@@ -2539,12 +2610,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // content box, and textAlignVertical overrides either.
     const float lineH = TextInputLineH(node);  // ENG-23 TextInput
     // ENG-25: the same helper the multiline hit test uses (TiGeomOf).
-    const float ty = TextInputTextTop(typography_, node, y, w, h, drawStr);
+    const float ty = TextInputTextTop(threadTypography(), node, y, w, h, drawStr);
     const auto& insets = node.layoutMetrics.contentInsets;
     // A small left inset so the glyphs (and caret) do not sit on the border.
     // Shared with glyphBoundariesLocked (item 3 click-to-caret): a click and
     // the painted text must agree on where the text starts.
-    const float pad = TextInputPadL(node) + TextInputAlignDx(typography_, node, drawStr, w);
+    const float pad = TextInputPadL(node) + TextInputAlignDx(threadTypography(), node, drawStr, w);
     const float padR = TextInputPadR(node);
     // ENG-24: a single-line field lays its text out on ONE line (it used to
     // wrap at the box and spill below it) and scrolls sideways to keep the
@@ -2576,11 +2647,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerParagraphStyleSetForeground(style, tPaint);
       // ENG-25: built by the SAME helper the multiline hit test uses.
       ImpellerParagraph paragraph =
-          BuildTextInputParagraph(typography_, node, drawStr, w, tPaint);
+          BuildTextInputParagraph(threadTypography(), node, drawStr, w, tPaint);
       if (paragraph != nullptr) {
         auto prefixW = [&](size_t n) -> float {
           if (n == 0) return 0.0f;
-          ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(typography_);
+          rni::tsan::NoteExclusiveUse(threadTypography());  // FP-04: impeller.h typography contexts are single-thread
+          ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(threadTypography());
           ImpellerParagraphBuilderPushStyle(sb, style);
           ImpellerParagraphBuilderAddText(sb, (const uint8_t*)editMeasured.data(), n);
           ImpellerParagraph sp = ImpellerParagraphBuilderBuildParagraphNew(sb, 1e6f);
@@ -3881,7 +3953,10 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   // N=0 (disabled) and N=1 (the mutant control) never enter here — they take the
   // in-place walk and paint the flat, un-antialiased edge the gate proves.
   pointScale_ = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;  // elevation DPR
-  if (supersample_ >= 2 && paintTreeSupersampled(builder, pointScaleFactor)) {
+  painted_ = 0;  // per frame: the root hook's inner walk counts into it (else N>=2 sums frames)
+  spritesDrawn_ = 0;  // same rule: world_sprites_drawn is one frame's count
+  if (supersample_ >= 2 && rni::scenegraph_gl::Ready() &&
+      paintTreeSupersampled(builder, pointScaleFactor)) {
     // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
     // so it already reflects the visited node count.
     collectModalShowsLocked(shows);
@@ -4248,7 +4323,7 @@ bool SceneGraph::absoluteOriginLocked(facebook::react::Tag tag, float* ox,
 ImpellerParagraph SceneGraph::buildTextInputParagraphLocked(
     const SceneNode& node, const std::string& raw, float boxW) {
   const std::string shown = node.tiSecure ? SecureMask(raw) : raw;
-  return BuildTextInputParagraph(typography_, node, shown, boxW, nullptr);
+  return BuildTextInputParagraph(threadTypography(), node, shown, boxW, nullptr);
 }
 
 bool SceneGraph::textInputKeyTraits(facebook::react::Tag tag, bool* multiline,
@@ -4324,7 +4399,7 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
       node.tiSecure ? SecureMask(raw) : raw, node.tiFace.transform);  // SC-20
   // ENG-24: a focused single-line field may be scrolled sideways.
   const float alignDx = TextInputAlignDx(
-      typography_, node, shown.empty() ? node.tiPlaceholder : shown,
+      threadTypography(), node, shown.empty() ? node.tiPlaceholder : shown,
       (float)node.layoutMetrics.frame.size.width);
   const float textX = ox + TextInputPadL(node) + alignDx -
                       ((tiFocused_ == tag && !node.tiMultiline) ? tiScrollX_ : 0.0f);
@@ -4340,7 +4415,8 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   for (size_t i = 1; i <= raw.size(); ++i) {
     if (i < raw.size() && (((unsigned char)raw[i]) & 0xC0) == 0x80) continue;
     const size_t mi = node.tiSecure ? SecureMaskOffset(raw, i) : i;
-    ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
+    rni::tsan::NoteExclusiveUse(threadTypography());  // FP-04: impeller.h typography contexts are single-thread
+    ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(threadTypography());
     ImpellerParagraphBuilderPushStyle(pb, style);
     ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shown.data(), mi);
     ImpellerParagraph par = ImpellerParagraphBuilderBuildParagraphNew(pb, 1e6f);
@@ -4371,7 +4447,7 @@ size_t SceneGraph::caretIndexForClick(facebook::react::Tag tag, float screenX,
         typography_ != nullptr && absoluteOriginLocked(tag, &ox, &oy)) {
       const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
       TiGeom g;
-      TiGeomOf(typography_, it->second, raw, ox, oy,
+      TiGeomOf(threadTypography(), it->second, raw, ox, oy,
                (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
       size_t L = g.lines.size() - 1;
       for (size_t i = 0; i < g.lines.size(); ++i) {
@@ -4415,7 +4491,7 @@ std::string SceneGraph::glyphBoundaryReportFor(facebook::react::Tag tag) {
         typography_ != nullptr && absoluteOriginLocked(tag, &ox, &oy)) {
       const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
       TiGeom g;
-      TiGeomOf(typography_, it->second, raw, ox, oy,
+      TiGeomOf(threadTypography(), it->second, raw, ox, oy,
                (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
       xs = g.xs;
       lineReport = "\nrn-impeller: ti_glyph_lines tag=" + std::to_string((int)tag) +
@@ -4466,7 +4542,7 @@ size_t SceneGraph::textInputVerticalMove(facebook::react::Tag tag, size_t caret,
   }
   const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
   TiGeom g;
-  TiGeomOf(typography_, it->second, raw, ox, oy,
+  TiGeomOf(threadTypography(), it->second, raw, ox, oy,
                (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
   size_t cur = 0;
   for (size_t i = 0; i < g.offsets.size(); ++i) {

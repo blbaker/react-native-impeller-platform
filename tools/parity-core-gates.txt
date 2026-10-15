@@ -1,0 +1,27 @@
+# Core keep-green gates for every Flutter-parity pass (tools/parity-check.sh runs them in order).
+# One per line: script path, then an optional comment. Keep the whole set under ~45 min on this box;
+# tools/parity-baseline.sh records each gate's duration in .loop-logs/baseline.log.
+tools/ci-headless.sh          # P0 headless pixels
+tools/ci-p2.sh                # React tree -> pixels through the consumer path
+tools/ci-text.sh              # paragraphs
+tools/ci-style-coverage.sh    # 107 RN style tiles
+tools/ci-style-audit.sh       # 66-cell grid + LANDED/KEEP arms
+tools/ci-supersample.sh       # per-<Svg> AA hook
+tools/ci-supersample-root.sh  # root AA hook
+tools/ci-native-transform.sh  # NativeAnimated direct props
+tools/ci-first-present.sh     # windowed boot + firstFramePresented
+tools/ci-window.sh            # windowed capture
+tools/ci-resize.sh            # windowed resize repaint
+tools/ci-world-sprites.sh     # GPU sprite compositing
+tools/ci-hover.sh             # windowed input
+tools/ci-scroll.sh            # ScrollView
+tools/ci-image-net.sh         # network images
+tools/ci-exit-race.sh         # teardown order
+# Light gates added by parity passes (each < ~2 min). A pass whose new gate is light appends it here,
+# so later passes keep it green (FP-10 broke FP-02's ci-trace because it was not in this set).
+tools/ci-frame-timings.sh     # FP-01 frame-timing records
+tools/ci-trace.sh             # FP-02 trace spans on the right threads
+tools/ci-gl-validation.sh     # FP-05 zero KHR_debug errors
+tools/ci-native-anim-jsstall.sh  # FP-10 native animation survives JS stalls
+tools/ci-vsync.sh             # FP-11 vsync pacing, one frame per vsync, idle = 0 presents
+tools/ci-typography-threads.sh  # FP-12 measure == paint, one typography context per thread (TSan)

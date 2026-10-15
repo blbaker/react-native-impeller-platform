@@ -1,6 +1,11 @@
 #include "text/FontFallback.h"
+#include "base/TsanAnnotate.h"
 
 #include "text/FontFamily.h"
+#include "text/TypographyContexts.h"
+
+#include <cstdio>
+#include <memory>
 
 #include <fstream>
 #include <iterator>
@@ -64,12 +69,6 @@ Fc& FcSyms() {
   return fc;
 }
 
-struct FontBlob {
-  std::vector<uint8_t> bytes;
-  ImpellerMapping mapping{};
-};
-void ReleaseBlob(void* u) { delete static_cast<FontBlob*>(u); }
-
 std::mutex gMu;
 
 // The matched pattern is kept for the process lifetime: its charset is borrowed.
@@ -89,8 +88,10 @@ void* gPrimaryCharset(Fc& fc, const std::string& family) {
   return cache[family] = cs;
 }
 
-// Family of a face that covers `cp`, registered with Impeller ("" = none).
-std::string FallbackFor(ImpellerTypographyContext typography, uint32_t cp) {
+// Family of a face that covers `cp` ("" = none). FP-12: the face joins the
+// process-wide font list, so every thread's context registers the same file and
+// measure and paint pick the same face; byCp makes the choice once per process.
+std::string FallbackFor(uint32_t cp) {
   static std::map<uint32_t, std::string> byCp;
   static std::set<std::string> registered;
   auto hit = byCp.find(cp);
@@ -121,17 +122,12 @@ std::string FallbackFor(ImpellerTypographyContext typography, uint32_t cp) {
       if (!registered.count(path)) {
         registered.insert(path);
         std::ifstream in(path, std::ios::binary);
-        auto* blob = new FontBlob();
-        blob->bytes.assign(std::istreambuf_iterator<char>(in),
-                           std::istreambuf_iterator<char>());
-        blob->mapping.data = blob->bytes.data();
-        blob->mapping.length = blob->bytes.size();
-        blob->mapping.on_release = &ReleaseBlob;
-        // Ownership passes to Impeller, success or not.
-        if (blob->bytes.empty() ||
-            !ImpellerTypographyContextRegisterFont(typography, &blob->mapping,
-                                                   blob, nullptr)) {
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                   std::istreambuf_iterator<char>());
+        if (bytes.empty()) {
           family.clear();
+        } else {
+          typography::AddFont(path, std::make_shared<const std::vector<uint8_t>>(std::move(bytes)));
         }
       }
     }
@@ -164,6 +160,7 @@ bool Sticks(uint32_t cp) {
 std::vector<FontSegment> SplitFontFallback(ImpellerTypographyContext typography,
                                            const std::string& primary,
                                            const std::string& text) {
+  rni::tsan::NoteExclusiveUse(typography);  // FP-04: impeller.h typography contexts are single-thread
 #if defined(__linux__)
   bool ascii = true;
   for (unsigned char c : text) ascii = ascii && c < 0x80;
@@ -183,14 +180,20 @@ std::vector<FontSegment> SplitFontFallback(ImpellerTypographyContext typography,
       if (out.empty() || !(Sticks(cp) || cp == ' ')) {
         const bool covered = cov ? (cp < 0x80 || fc.csHas(cov, cp))
                                  : (cp < 0x250 || (cp >= 0x2010 && cp <= 0x2027));
-        fam = covered ? "" : FallbackFor(typography, cp);
+        fam = covered ? "" : FallbackFor(cp);
       }
       any = any || !fam.empty();
       if (out.empty() || out.back().family != fam) out.push_back({fam, ""});
       out.back().text.append(text, start, i - start);
       prevFamily = fam;
     }
-    if (any) return out;
+    if (any) {
+      // A face another thread added under gMu is registered here before use.
+      if (typography::ForThisThread() != typography) {
+        fprintf(stderr, "rn-impeller: SplitFontFallback: context is not this thread's\n");
+      }
+      return out;
+    }
   }
 #else
   (void)typography;

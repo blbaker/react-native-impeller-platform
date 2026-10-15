@@ -1,5 +1,7 @@
+#include "base/Trace.h"
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include "fabric/FabricHost.h"
 
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
@@ -121,6 +123,7 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
   void schedulerDidFinishTransaction(
       const std::shared_ptr<const react::MountingCoordinator>&) override {
     // Android-only observation hook; we pull in ShouldRender below.
+    TRACE_EVENT0("fabric", "JsCommit");
   }
 
   void schedulerShouldRenderTransactions(
@@ -135,6 +138,7 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
     // pulls exactly once.
     if (auto transaction = mountingCoordinator->pullTransaction()) {
       if (sceneGraph_ != nullptr) {
+        TRACE_EVENT0("fabric", "MountTransaction");
         sceneGraph_->applyMutations(transaction->getMutations(), logMutations_);
       }
     }
@@ -639,7 +643,7 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
   contextContainer->insert(
       "TextLayoutManager",
       std::shared_ptr<react::TextLayoutManager>(
-          std::make_shared<ImpellerTextLayoutManager>(contextContainer, typography)));
+          std::make_shared<ImpellerTextLayoutManager>(contextContainer, typography != nullptr)));
   contextContainer->insert(react::ImageManagerKey,
                            std::make_shared<react::ImageManager>(contextContainer));
   // Scheduler's ctor asserts on this key. Weak ptr, same shape as RCTInstance.
@@ -700,10 +704,22 @@ FabricHost::~FabricHost() {
   stopSurface();
   // In-flight rendering-update lambdas captured a raw delegate pointer, and
   // the Scheduler only invalidates them behind a feature flag — drop the
-  // delegate reference explicitly before tearing down.
-  if (scheduler_) {
-    scheduler_->setDelegate(nullptr);
-  }
+  // delegate reference explicitly before tearing down. FP-04: the JS thread
+  // reads Scheduler::delegate_ on every NativeAnimated tick, so the detach
+  // runs there (in the drain barrier below) like Flutter's Shell teardown
+  // posts each thread's teardown to that thread; main only does it when JS
+  // has no scheduler or is wedged.
+  struct Detach {
+    std::mutex mutex;
+    facebook::react::Scheduler* scheduler{nullptr};
+    void run() {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (scheduler != nullptr) scheduler->setDelegate(nullptr);
+      scheduler = nullptr;
+    }
+  };
+  auto detach = std::make_shared<Detach>();
+  detach->scheduler = scheduler_.get();
   // EXIT RACE (see ExitRaceProbe above): stop NEW ticks from reaching the
   // event-timing delegate, then wait out the tick that may already hold it.
   // The barrier runs on the JS thread after the current tick, so when it
@@ -713,13 +729,16 @@ FabricHost::~FabricHost() {
     runtimeScheduler_->setEventTimingDelegate(nullptr);
     auto drained = std::make_shared<std::promise<void>>();
     auto done = drained->get_future();
-    runtimeScheduler_->scheduleWork(
-        [drained](facebook::jsi::Runtime&) { drained->set_value(); });
+    runtimeScheduler_->scheduleWork([drained, detach](facebook::jsi::Runtime&) {
+      detach->run();
+      drained->set_value();
+    });
     if (done.wait_for(std::chrono::seconds(3)) != std::future_status::ready) {
       std::fprintf(stderr, "rn-impeller: WARN: JS thread did not drain before "
                            "Scheduler teardown (3 s)\n");
     }
   }
+  detach->run();  // no-op once the JS thread did it
   scheduler_.reset();
   gSchedulerTornDown = true;
   delegate_.reset();
@@ -1026,12 +1045,15 @@ void FabricHost::emitScroll(int tag, float offsetX, float offsetY,
           .count() /
       1000.0f;
 
-  // Hop to the JS thread, for the same reason dispatchTouch does: the emitter
-  // reaches into the runtime.
-  runtimeScheduler_->scheduleWork(
-      [scrollEmitter, event](facebook::jsi::Runtime&) {
-        scrollEmitter->onScroll(event);
-      });
+  // FP-10: dispatched on the CALLING thread, which for wheel input is the
+  // platform/frame-loop thread, as RN iOS emits onScroll from the UI thread.
+  // onScroll only queues the event (EventQueue is locked, the payload is built
+  // on JS later) and first offers it to the event listeners, where RN's
+  // NativeAnimatedNodesManager::handleAnimatedEvent runs native Animated.event
+  // drivers ONLY when it is on its render thread. NativeAnimated ticks on the
+  // frame-loop thread since FP-10, so a JS-thread hop here would silently drop
+  // every useNativeDriver onScroll.
+  scrollEmitter->onScroll(event);
 }
 
 // ENG-09 hover/cursor.

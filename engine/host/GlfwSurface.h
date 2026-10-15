@@ -475,6 +475,9 @@ class GlfwSurface {
   void postEmptyEvent();
   bool shouldClose() const;
   void present();  // glfwSwapBuffers
+  // FP-11: swap interval on the window context (glfwSwapInterval; eglSwapInterval
+  // on darwin). Main thread, context current.
+  void setSwapInterval(int interval);
 
  private:
   std::string title_ = "React Native (Impeller)";

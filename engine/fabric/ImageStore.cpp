@@ -1,4 +1,5 @@
 #include "ImageStore.h"
+#include "base/Trace.h"
 
 #include <cstdio>
 #include <mutex>
@@ -80,6 +81,7 @@ bool ReadFile(const std::string& path, std::vector<uint8_t>& out) {
 }
 
 std::shared_ptr<const Decoded> Decode(const std::vector<uint8_t>& bytes) {
+  TRACE_EVENT1("image", "ImageDecode", "bytes", bytes.size());
   int w = 0, h = 0, comp = 0;
   stbi_uc* px = stbi_load_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &comp, 4);
   if (px == nullptr || w <= 0 || h <= 0) {
@@ -168,7 +170,11 @@ LoadResult FetchAndDecode(const Fetcher& fetch, const std::string& uri, const He
     r.error = "no network transport for " + uri;
     return r;
   }
-  FetchResult f = fetch(uri, headers);
+  FetchResult f;
+  {
+    TRACE_EVENT0("image", "ImageFetch");
+    f = fetch(uri, headers);
+  }
   r.status = f.status;
   r.headers = std::move(f.headers);
   if (!f.ok) {
@@ -217,6 +223,7 @@ void LoadAsync(const std::string& uri, const Headers& headers, LoadDone done) {
   if (!start) return;
   if (begin) begin();
   std::thread([uri, headers, fetch = std::move(fetch), end = std::move(end)]() {
+    rni::trace::SetThreadName("image-io");
     LoadResult r = FetchAndDecode(fetch, uri, headers);
     std::vector<LoadDone> waiters;
     {

@@ -1,6 +1,8 @@
 #include "text/FontRegistry.h"
+#include "base/TsanAnnotate.h"
 
 #include "text/FontFamily.h"
+#include "text/TypographyContexts.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -19,19 +21,6 @@ bool HasFontExtension(const std::string& name) {
   std::transform(ext.begin(), ext.end(), ext.begin(),
                  [](unsigned char c) { return (char)std::tolower(c); });
   return ext == "ttf" || ext == "otf" || ext == "ttc";
-}
-
-// Impeller keeps the bytes until it calls on_release. Its release lambda may
-// also read the ImpellerMapping itself at that point (it can capture the
-// `contents` pointer), so the mapping lives on the heap NEXT TO the bytes and
-// both are freed only by that callback.
-struct FontBlob {
-  std::vector<uint8_t> bytes;
-  ImpellerMapping mapping{};
-};
-
-void ReleaseFontBlob(void* userData) {
-  delete static_cast<FontBlob*>(userData);
 }
 
 }  // namespace
@@ -61,6 +50,12 @@ std::vector<std::string> FontDirsFrom(const std::vector<std::string>& cliDirs) {
 int RegisterFontDirs(ImpellerTypographyContext typography,
                      const std::vector<std::string>& dirs) {
   if (typography == nullptr) return 0;
+  // FP-12: `typography` is this thread's context; fonts go into the process-wide
+  // list so every thread's context (measure on JS, paint on main) registers them.
+  if (typography::ForThisThread() != typography) {
+    fprintf(stderr, "rn-impeller: RegisterFontDirs: context is not this thread's\n");
+  }
+  rni::tsan::NoteExclusiveUse(typography);  // FP-04: impeller.h typography contexts are single-thread
   int registered = 0;
   for (const auto& dir : dirs) {
     // std::filesystem, not dirent.h: the same file builds for win32-x64.
@@ -87,16 +82,9 @@ int RegisterFontDirs(ImpellerTypographyContext typography,
                                  std::istreambuf_iterator<char>());
       bool ok = false;
       if (!bytes.empty()) {
-        auto* blob = new FontBlob();
-        blob->bytes = std::move(bytes);
-        blob->mapping.data = blob->bytes.data();
-        blob->mapping.length = blob->bytes.size();
-        blob->mapping.on_release = &ReleaseFontBlob;
-        // Ownership passes to Impeller here, success or not: a rejected
-        // mapping is released through the same callback, so never free the
-        // blob on this side.
-        ok = ImpellerTypographyContextRegisterFont(typography, &blob->mapping,
-                                                   blob, nullptr);
+        const size_t index = typography::AddFont(
+            path, std::make_shared<const std::vector<uint8_t>>(std::move(bytes)));
+        ok = typography::RegisteredHere(index);
       }
       if (ok) ++registered;
       printf("rn-impeller: font_registered=%s ok=%d\n", path.c_str(), ok ? 1 : 0);

@@ -1,3 +1,5 @@
+#include "base/Trace.h"
+#include "base/TsanAnnotate.h"
 #include "text/ImpellerTextLayoutManager.h"
 
 #include <react/renderer/attributedstring/AttributedString.h>
@@ -12,6 +14,7 @@
 #include "text/LineHeight.h"
 #include "text/TextStyle.h"
 #include "text/TextTransform.h"
+#include "text/TypographyContexts.h"
 
 namespace rni {
 
@@ -42,14 +45,15 @@ void ReadAttachmentFrames(ImpellerParagraph paragraph,
 
 ImpellerTextLayoutManager::ImpellerTextLayoutManager(
     const std::shared_ptr<const react::ContextContainer>& contextContainer,
-    ImpellerTypographyContext typography)
-    : react::TextLayoutManager(contextContainer), typography_(typography) {}
+    bool haveTypography)
+    : react::TextLayoutManager(contextContainer), haveTypography_(haveTypography) {}
 
 react::TextMeasurement ImpellerTextLayoutManager::measure(
     const react::AttributedStringBox& attributedStringBox,
     const react::ParagraphAttributes& paragraphAttributes,
     const react::TextLayoutContext& /*layoutContext*/,
     const react::LayoutConstraints& layoutConstraints) const {
+  TRACE_EVENT0("text", "TextMeasure");
   react::TextMeasurement::Attachments attachments;
   const auto& attributedString = attributedStringBox.getValue();
 
@@ -63,7 +67,9 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
     }
   }
 
-  if (typography_ == nullptr || attributedString.isEmpty()) {
+  ImpellerTypographyContext typography =
+      haveTypography_ ? typography::ForThisThread() : nullptr;
+  if (typography == nullptr || attributedString.isEmpty()) {
     return react::TextMeasurement{
         .size = {.width = 0, .height = 0}, .attachments = attachments};
   }
@@ -76,7 +82,8 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
 
   // clamp=false lays the text out with no line limit or ellipsis (SC-17 probe).
   const auto build = [&](float scale, bool clamp) -> ImpellerParagraph {
-    ImpellerParagraphBuilder builder = ImpellerParagraphBuilderNew(typography_);
+    rni::tsan::NoteExclusiveUse(typography);  // FP-04: impeller.h typography contexts are single-thread
+    ImpellerParagraphBuilder builder = ImpellerParagraphBuilderNew(typography);
     if (builder == nullptr) return nullptr;
     // One style push per fragment, so per-fragment font size/weight is honoured
     // rather than the whole string being measured at the first fragment's size.
@@ -125,7 +132,7 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
       // SC-19: the same fallback split the painter runs (text/FontFallback.h).
       const std::string primary =
           attrs.fontFamily.empty() ? "" : rni::ResolveFontFamily(attrs.fontFamily);
-      const auto segs = rni::SplitFontFallback(typography_, primary, measured);
+      const auto segs = rni::SplitFontFallback(typography, primary, measured);
       for (const auto& seg : segs) {
         rni::ApplySegmentFamily(style, primary, seg, segs.size() == 1);
         ImpellerParagraphBuilderPushStyle(builder, style);

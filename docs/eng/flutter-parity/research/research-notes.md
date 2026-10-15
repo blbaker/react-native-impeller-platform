@@ -1,0 +1,1 @@
+- 2026-10-14 19:2x: interop C API surface identical between pin 114eb18 (2026-08-09) and master 200fdfbd (2026-10-14): 176 Impeller* symbols each, none added or removed; interop dir file list identical. A pin bump buys renderer fixes only, no new C API (e.g. still no non-GL offscreen surface ctor).

@@ -1,0 +1,7 @@
+# Races IN OUR CODE that tools/ci-tsan.sh has found and a later parity pass owns the fix for.
+# Not a suppression: tools/tsan_check.py matches each entry precisely, counts it, and FAILS if
+# an entry is no longer seen (delete the line in the pass that fixes it). One per line:
+#   <matcher in tools/tsan_check.py> <owning pass>
+
+# (none: FP-12 gave measure and paint their own typography contexts. tools/tsan_check.py still
+# names a typography-context race as such, and it FAILS like any other new report.)

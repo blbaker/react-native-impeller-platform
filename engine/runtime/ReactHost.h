@@ -9,6 +9,7 @@
 #include <react/renderer/runtimescheduler/RuntimeScheduler.h>
 #include <react/runtime/ReactInstance.h>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -132,12 +133,29 @@ class ReactHost {
   // ENG-06. One NativeAnimated tick, driven by the host's frame loop so the
   // clock IS the frame counter and `--frames N` is deterministic. Safe and
   // near-free to call every frame: a relaxed atomic load when nothing is
-  // animating. Hops to the JS thread itself -- call it from the render loop.
+  // animating. Runs RN's onRender on the CALLING thread (FP-10): call it from
+  // the frame loop, never from the JS thread.
   void pumpNativeAnimated();
 
   // How many times RN's animation engine actually ran, for gates. See
   // NativeAnimatedPump.h for why a pixel diff alone cannot prove ENG-06.
   unsigned long nativeAnimatedTicks() const;
+  // FP-11: true while an animation is in flight (one atomic load), and a hook
+  // run whenever one starts (any thread) so a sleeping loop requests a frame.
+  bool nativeAnimatedActive() const;
+  void setNativeAnimatedStartHook(std::function<void()> hook);
+
+  // Per-frame JS-work instruments for the native-driven-loop cost check.
+  // jsTimersFired: JS timer callbacks run (setTimeout/setInterval and
+  // requestAnimationFrame, which IS a setTimeout(0) here). A JS-driven
+  // Animated loop fires one per frame; a native-driven one fires none.
+  // nativeAnimatedTickMicros: wall time spent inside RN's C++ onRender (the
+  // node-graph walk + prop apply), summed over every tick. That walk runs on
+  // the frame-loop thread (see pumpNativeAnimated) and executes no JS.
+  unsigned long jsTimersFired() const {
+    return jsTimersFired_->load(std::memory_order_relaxed);
+  }
+  unsigned long long nativeAnimatedTickMicros() const;
 
   // ENG-06. Replace RN's animation clock with a FRAME COUNTER, and step it.
   //
@@ -148,9 +166,15 @@ class ReactHost {
   // advances it. See ReactHost.cpp for the one-clock-per-process caveat.
   static void installFrameCountedAnimationClock();
   static void advanceAnimationClock();
+  // Frames the animation clock has advanced (FP-10 probe reads it per present).
+  static uint64_t animationClockFrames();
 
  private:
   std::shared_ptr<JsThread> jsThread_;
+  // Shared with the JsThread timer-fire callback, so the counter stays valid
+  // for whichever of the two is destroyed last.
+  std::shared_ptr<std::atomic<unsigned long>> jsTimersFired_ =
+      std::make_shared<std::atomic<unsigned long>>(0);
   // parity item 24. Declared BEFORE instance_ so it is destroyed AFTER it:
   // the ReactInstance's inspector targets live under its HostTarget.
   std::unique_ptr<InspectorHost> inspector_;

@@ -1,4 +1,5 @@
 #include "runtime/ReactHost.h"
+#include "base/Trace.h"
 #include "runtime/InspectorHost.h"
 
 #include <ReactCommon/TurboModuleBinding.h>
@@ -23,6 +24,7 @@
 
 #include "runtime/FeatureFlags.h"
 #include "modules/ClipboardModule.h"
+#include "modules/CryptoGlobal.h"  // ENG-31
 #include "modules/ImageLoaderModule.h"  // SC-31
 #include "modules/AccessibilityManagerModule.h"  // ENG-14
 
@@ -182,7 +184,9 @@ ReactHost::ReactHost(bool withInspector) {
   // Weak: TimerManager outlives us only through ReactInstance, and a strong
   // capture here would keep it alive past the runtime it calls into.
   jsThread_->setTimerFireCallback(
-      [weak = std::weak_ptr<react::TimerManager>(timerManager)](uint32_t id) {
+      [weak = std::weak_ptr<react::TimerManager>(timerManager),
+       fired = jsTimersFired_](uint32_t id) {
+        fired->fetch_add(1, std::memory_order_relaxed);
         if (auto tm = weak.lock()) {
           tm->callTimer(static_cast<react::TimerHandle>(id));
         }
@@ -397,6 +401,7 @@ ReactHost::ReactHost(bool withInspector) {
        known = knownComponents_, expo = expoModules_, expoConfig = expoConfig_,
        jsInvoker](jsi::Runtime& runtime) {
         installConsole(runtime);
+        installCryptoGlobal(runtime);  // ENG-31: crypto.getRandomValues
         installHasComponent(runtime, known);
         react::TurboModuleBinding::install(
             runtime,
@@ -469,24 +474,29 @@ ReactHost::~ReactHost() {
   }
 }
 
-// ENG-06. Called once per frame from the host's render loop, so the animation
-// clock IS the frame counter: `--frames N` advances the animation the same
-// number of steps on every machine. Wall-clock driving would make every
-// animation gate a race.
+// ENG-06 / FP-10. Called once per frame from the host's frame loop, so the
+// animation clock IS the frame counter: `--frames N` advances the animation the
+// same number of steps on every machine.
 //
-// ⛔ THE EARLY-OUT IS LOAD-BEARING, NOT AN OPTIMISATION. scheduleWork() on an
-// idle app would post a JS task every single frame, which keeps the JS thread
-// permanently non-idle and makes waitForJsIdle() -- the thing every headless
-// gate blocks on -- never return. Two acquire loads and out.
+// ⛔ onRender RUNS HERE, ON THE FRAME-LOOP THREAD, NOT ON THE JS QUEUE. That is
+// RN's contract: iOS ticks from a CADisplayLink on the main thread
+// (RCTNativeAnimatedNodesManager.mm) and the C++ manager calls it its "UI tick
+// listener" (NativeAnimatedNodesManager.cpp handleAnimatedEvent). The manager
+// is built for it: JS-thread module calls are queued through scheduleOnUI and
+// drained inside onRender, isOnRenderThread_ (thread_local) is set on this
+// thread, direct-manipulation props go through
+// schedulerShouldSynchronouslyUpdateViewOnUIThread -> SceneGraph::updateViewProps
+// (which takes the scene mutex, so a concurrent Fabric commit is ordered), layout
+// props go to Fabric through MergedValueDispatcher's jsInvoker, and onEnd /
+// value listeners are AsyncCallback / emitDeviceEvent, which post to JS. Before
+// FP-10 this hopped through RuntimeScheduler::scheduleWork, so a busy JS thread
+// froze every "native" animation, the one thing the native driver exists to
+// prevent.
 void ReactHost::pumpNativeAnimated() {
   if (!nativeAnimatedPump_ || !instance_) {
     return;
   }
   if (!nativeAnimatedPump_->isActive()) {
-    return;
-  }
-  auto scheduler = instance_->getRuntimeScheduler();
-  if (!scheduler) {
     return;
   }
   // ⛔ ADVANCE THE CLOCK BEFORE THE TICK, NOT AFTER.
@@ -497,14 +507,24 @@ void ReactHost::pumpNativeAnimated() {
   // same timestamp, the delta is 0, and the animation holds its start value
   // for one extra frame on every restart.
   advanceAnimationClock();
-  // Hop to the JS thread: tick() walks the animated node graph and touches the
-  // shadow tree and JSI, which is JS-thread work in this engine.
-  scheduler->scheduleWork(
-      [pump = nativeAnimatedPump_](facebook::jsi::Runtime&) { pump->tick(); });
+  TRACE_EVENT0("animated", "NativeAnimatedPump");
+  nativeAnimatedPump_->tick();
+}
+
+bool ReactHost::nativeAnimatedActive() const {
+  return nativeAnimatedPump_ && nativeAnimatedPump_->isActive();
+}
+
+void ReactHost::setNativeAnimatedStartHook(std::function<void()> hook) {
+  if (nativeAnimatedPump_) nativeAnimatedPump_->setStartHook(std::move(hook));
 }
 
 unsigned long ReactHost::nativeAnimatedTicks() const {
   return nativeAnimatedPump_ ? nativeAnimatedPump_->ticks() : 0UL;
+}
+
+unsigned long long ReactHost::nativeAnimatedTickMicros() const {
+  return nativeAnimatedPump_ ? nativeAnimatedPump_->tickMicros() : 0ULL;
 }
 
 // ⛔ ENG-06: THE FRAME-COUNTED ANIMATION CLOCK.
@@ -546,6 +566,10 @@ void ReactHost::installFrameCountedAnimationClock() {
 
 void ReactHost::advanceAnimationClock() {
   g_animationFrames.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint64_t ReactHost::animationClockFrames() {
+  return g_animationFrames.load(std::memory_order_relaxed);
 }
 
 void ReactHost::setKnownComponents(std::vector<std::string> names) {

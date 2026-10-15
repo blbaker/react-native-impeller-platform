@@ -1,4 +1,6 @@
+#include "base/GlValidation.h"
 #include "host/HeadlessSurface.h"
+#include "text/TypographyContexts.h"
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -20,7 +22,10 @@ void* ProcAddr(const char* name, void*) { return (void*)eglGetProcAddress(name);
 }  // namespace
 
 HeadlessSurface::~HeadlessSurface() {
-  if (typography_) ImpellerTypographyContextRelease(typography_);
+  if (typography_) {
+    rni::typography::Unbind(typography_);
+    ImpellerTypographyContextRelease(typography_);
+  }
   if (surface_) ImpellerSurfaceRelease(surface_);
   if (context_) ImpellerContextRelease(context_);
 }
@@ -113,7 +118,10 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
     return fail("eglChooseConfig failed");
   }
   if (!eglBindAPI(EGL_OPENGL_ES_API)) return fail("eglBindAPI failed");
-  const EGLint ctxAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_NONE};
+  // FP-05: a debug context so Mesa/ANGLE report API errors through KHR_debug.
+  const EGLint dbg = rni::glvalidation::Enabled() ? 1 : 0;
+  const EGLint ctxAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, 0x31B0 /*EGL_CONTEXT_OPENGL_DEBUG*/, dbg,
+                             EGL_NONE};
   EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctxAttrs);
   if (ctx == EGL_NO_CONTEXT) return fail("eglCreateContext failed");
   if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
@@ -195,11 +203,14 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   // context is independent of FBO completeness (it needs only a current GL
   // context), so create it either way — the degraded walk still needs it for
   // the offscreen supersample paths and for typography.
+  rni::glvalidation::Install(&ProcAddr, nullptr);  // FP-05
   context_ = ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ProcAddr, nullptr);
   if (!context_) return fail("ImpellerContextCreateOpenGLESNew returned null");
 
   typography_ = ImpellerTypographyContextNew();
   if (!typography_) return fail("ImpellerTypographyContextNew returned null");
+  // FP-12: the paint thread's context; other threads (measure on JS) get their own.
+  rni::typography::Bind(typography_);
 
   if (!fboComplete || forceFboFail) {
     // Degraded: no drawable. surface_ stays null; the caller falls back to a

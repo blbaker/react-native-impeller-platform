@@ -66,11 +66,18 @@
 #else
 #include <process.h>
 #endif
+#include "host/FrameTimings.h"
+#include "host/FrameScheduler.h"
+#include "host/AnimRowProbe.h"
+#include "base/Trace.h"
+#include "base/SanitizerHooks.h"
+#include "base/GlValidation.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
 #include "text/FontRegistry.h"
+#include "text/TypographyContexts.h"
 
 // ENG-22: --font-dir values, registered with each surface's typography context
 // right after init and BEFORE anything measures (see text/FontRegistry.h).
@@ -141,10 +148,15 @@ void Usage() {
           "                     prove glfwSetScrollCallback is registered.)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
-          "                     default 4 on darwin, 0 (off) elsewhere\n"
+          "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
-          "                   [--title <string>]  (windowed) window title, also\n"
+          "                   [--frame-timings-out <file.json>]  one record per\n"
+          "                     presented frame (FP-01)\n"
+          "                   [--trace-out <file.json>]  Chrome/Perfetto trace of\n"
+          "                     spans + counters (FP-02)\n"
+          "                   [--trace-bench N]  print the off-mode cost of one span\n"
+          "                     and exit\n"          "                   [--title <string>]  (windowed) window title, also\n"
           "                     the macOS Window menu entry. Default\n"
           "                     \"React Native (Impeller)\".\n"
           "                   [--screenshot-first <file.ppm>]\n"
@@ -428,6 +440,67 @@ static std::string EscapeNewlines(const std::string& v) {
 // scope (like gFontDirs) so RunWindowed's long positional signature does not
 // grow again. Empty = no windowed typing.
 static std::string gWindowedTypeSpec;
+// FP-11: --vsync auto|swap|software|off and --vsync-log (windowed only).
+static rni::FrameScheduler::Source gVsyncSource = rni::FrameScheduler::Source::kAuto;
+static bool gVsyncSet = false;
+static bool gVsyncLog = false;
+
+// FP-01: --frame-timings-out <file.json>. File scope for the same reason.
+static std::string gFrameTimingsOut;
+
+// FP-02: --trace-out <file.json>. Written once, at the end of the run.
+static std::string gTraceOut;
+
+static void FinishTrace() {
+  const uint64_t events = rni::trace::EventCount();
+  if (gTraceOut.empty()) {
+    printf("rn-impeller: trace enabled=%d events=%llu\n", rni::trace::Enabled() ? 1 : 0,
+           (unsigned long long)events);
+    return;
+  }
+  const bool ok = rni::trace::Stop();
+  printf("rn-impeller: trace enabled=0 events=%llu written=%d out=%s\n",
+         (unsigned long long)events, ok ? 1 : 0, gTraceOut.c_str());
+}
+
+// FP-02: cost of a span while tracing is OFF, measured in-process through the
+// same macro the engine uses, against an empty loop with the same barrier.
+static int RunTraceBench(long iterations) {
+  using Clock = std::chrono::steady_clock;
+  auto timeLoop = [&](bool withSpan) {
+    const auto t0 = Clock::now();
+    for (long i = 0; i < iterations; ++i) {
+      if (withSpan) {
+        TRACE_EVENT0("bench", "span");
+        asm volatile("" ::: "memory");
+      } else {
+        asm volatile("" ::: "memory");
+      }
+    }
+    return std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
+  };
+  timeLoop(true);  // warm up
+  double best = 1e30;
+  for (int rep = 0; rep < 5; ++rep) {
+    const double span = timeLoop(true), base = timeLoop(false);
+    best = std::min(best, std::max(0.0, span - base) / (double)iterations);
+  }
+  printf("rn-impeller: trace_bench enabled=%d ns_per_span=%.3f\n", rni::trace::Enabled() ? 1 : 0, best);
+  return 0;
+}
+
+// Exit report of both loops: the summary line always, the JSON when asked.
+static void FinishFrameTimings(const rni::FrameTimings& timings) {
+  timings.PrintSummary(stdout);
+  if (gFrameTimingsOut.empty()) return;
+  if (timings.WriteJson(gFrameTimingsOut)) {
+    printf("rn-impeller: frame_timings_out=%s\n", gFrameTimingsOut.c_str());
+  } else {
+    fprintf(stderr, "rn-impeller: WARN: cannot write frame timings %s\n",
+            gFrameTimingsOut.c_str());
+  }
+  fflush(stdout);
+}
 
 static bool gFollowOsAppearance = false;  // SC-23 (set in headless builds too)
 #if RNI_WITH_WINDOW
@@ -510,7 +583,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::SceneGraph sceneGraph(surface.typography());
   // ENG item 2. Wire the supersample render context (the surface's own
   // ImpellerContext — same GL sharegroup the offscreen FBO needs) and N. On
-  // Windows/Android the offscreen path is compiled out, so these are inert.
+  // Android the offscreen path is compiled out, so these are inert there.
   sceneGraph.setRenderContext(surface.context());
   sceneGraph.setSupersample(supersampleRnsvg);
   // ENG item 2b — the root supersample offscreen is sized N x this. Device
@@ -618,7 +691,22 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   bool grabOk = false;
   std::vector<rni::Px> grabPx;
 
-  auto paintFrame = [&]() -> int {
+  // FP-01: one recorder per frame, committed at the present (model:
+  // flutter/flow/frame_timings.h). Idle-skipped loop frames are discarded.
+  rni::FrameTimings frameTimings;
+
+  // FP-11: frame requests + vsync (model: flutter/shell/common/animator.cc and
+  // vsync_waiter_fallback.cc). Idle-skip M3 keeps the request but drops the
+  // wake, so a sleeping loop only notices it at the end of its budget.
+  rni::FrameScheduler scheduler(
+      rni::FrameScheduler::Options{gVsyncSource, 60.0, gVsyncLog},
+      [&surface](double s) { surface.waitEvents(s); },
+      (idleSkip && idleMutant == 3)
+          ? rni::FrameScheduler::WakeFn()
+          : rni::FrameScheduler::WakeFn([&surface]() { surface.postEmptyEvent(); }),
+      [&surface](int interval) { surface.setSwapInterval(interval); });
+
+  auto paintFrame = [&](std::unique_ptr<rni::FrameTimingsRecorder> frame) -> int {
     // ⛔ THE PAINT-IN-FLIGHT SCOPE GOES HERE, AT THE ONE SHARED BODY.
     // Both the frame loop and the window-refresh callback paint through this
     // lambda, so scoping the guard here is what makes it cover every paint
@@ -628,19 +716,48 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // With this scope live, that callback is dropped instead of starting a
     // second paint on top of this one.
     rni::GlfwSurface::PaintScope paintScope(&surface);
+    TRACE_EVENT0("frame", "Frame");
     ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
-    int painted = sceneGraph.paint(builder, pointScale);
-    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
+    int painted;
+    {
+      TRACE_EVENT0("paint", "PaintWalk");
+      painted = sceneGraph.paint(builder, pointScale);
+    }
+    ImpellerDisplayList dl;
+    {
+      TRACE_EVENT0("paint", "DisplayListBuild");
+      dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
+    }
+    frame->RecordBuildEnd();
+    frame->RecordRasterStart();
     if (dl) {
+      TRACE_EVENT0("raster", "Draw");
       surface.drawDisplayList(dl);
       ImpellerDisplayListRelease(dl);
     }
     ImpellerDisplayListBuilderRelease(builder);
+    frame->RecordRasterEnd();
     if (grabArmed) {
       grabOk = surface.readPixels(&grabPx);
       grabArmed = false;
     }
-    surface.present();
+    if (rni::animrow::Enabled()) {  // FP-10 test hook, see AnimRowProbe.h
+      std::vector<rni::Px> rowPx;
+      if (surface.readPixels(&rowPx)) {
+        rni::animrow::OnPresent(rowPx, surface.width(), surface.height(),
+                                paintsTotal + 1,
+                                rni::ReactHost::animationClockFrames());
+      }
+    }
+    {
+      TRACE_EVENT0("raster", "Present");
+      scheduler.WillPresent();
+      surface.present();
+      scheduler.DidPresent(paintsTotal + 1);
+    }
+    frame->RecordPresent();
+    frameTimings.Commit(std::move(frame));
+    TRACE_COUNTER("presents", paintsTotal + 1);
     // ⛔ COUNTED HERE, AT THE PRESENT, NOT AT THE CALLER.
     // refreshPaints is derived from this counter, so "a frame was painted
     // during the stall" is measured at the only place a frame actually
@@ -649,6 +766,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // precisely the mark-only trap this fix exists to avoid, and exactly what
     // the M2 mutant in tools/mutation-verify-resize.sh does.
     ++paintsTotal;
+    rni::glvalidation::OnFrame();  // FP-05 test hook
     // ⛔ firstFramePresented: THE APP'S "YOU ARE ON SCREEN NOW" SIGNAL.
     // Emitted once, after the first present returns, so a launch animation
     // can start its clock from the moment pixels reach the window instead of
@@ -775,8 +893,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // inside AppKit's modal loop would re-enter the runtime from a nested event
   // loop for a benefit the drag does not need.
   surface.setRefreshHandler([&]() {
+    // A refresh paint is its own frame: it begins here, not at a loop vsync.
+    auto frame = std::make_unique<rni::FrameTimingsRecorder>();
+    frame->RecordVsync();
+    frame->RecordBuildStart();
     applyResizeIfDirty();
-    paintFrame();
+    paintFrame(std::move(frame));
   });
 
   // ⛔ THE WINDOWED PATH'S ONLY ROUTE INTO dispatchTouch.
@@ -1041,19 +1163,23 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // full budget, proving the wake is load-bearing. Wired only under --idle-skip:
   // every existing gate keeps its unconditional paint-every-frame loop.
   if (idleSkip) {
-    if (idleMutant != 3) {
-      sceneGraph.setDamageWake([&surface]() { surface.postEmptyEvent(); });
+    // FP-11: every damage source is a frame request; the scheduler posts the
+    // wake (glfwPostEmptyEvent) unless M3 built it without one.
+    sceneGraph.setDamageWake([&scheduler]() { scheduler.RequestFrame("damage"); });
+    host.setNativeAnimatedStartHook([&scheduler]() { scheduler.RequestFrame("animation"); });
+    {
       // ENG-09: a WorldRaster.setPixels write is scene damage the version
       // counter is otherwise blind to (it runs on the JS thread and never
       // touches the scene graph). Route it through bumpVersion() — the SAME
       // signal a Fabric commit uses — so the next frame is dirty AND a loop
       // asleep in glfwWaitEventsTimeout wakes. Without this the animation
       // freezes on the last painted frame under the default windowed idle-skip.
-      // Gated on mutant!=3 exactly like the wake above, so M3 (no wake) also
+      // It reaches the scheduler through bumpVersion, so M3 (no wake) also
       // covers the store path and its off-thread witness stalls the full budget.
       host.worldRasterStore()->setDamageHook(
           [&sceneGraph]() { sceneGraph.bumpVersion(); });
-    } else {
+    }
+    if (idleMutant == 3) {
       printf("rn-impeller: [idle] MUTANT M3: damage wake NOT installed\n");
       fflush(stdout);
     }
@@ -1061,11 +1187,6 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
            idleBudgetMs, idleMutant, idleRunSec);
     fflush(stdout);
   }
-  // The last version() we actually PRESENTED. A frame is dirty when it advanced,
-  // an animation clock is live, or a CLI hand is still pending (folded in at the
-  // loop head). Starts at 0 == the initial version, so the first frame is forced
-  // dirty explicitly below.
-  uint64_t lastPresentedVersion = 0;
 
   // ENG-18: windowed --type. Settle the mount, focus the field at X,Y (layout
   // points, the same coordinates headless --type takes), then feed ONE token
@@ -1099,14 +1220,46 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   int typeDoneFrame = -1;
   const auto typeStart = std::chrono::steady_clock::now();
 
+  // Any frame-anchored test hand not yet fully consumed keeps the loop
+  // painting, so resize/stall/click/scroll/hover/screenshot gates and any
+  // bounded --frames N run keep their exact frame counts. A --frames run
+  // paints every frame by construction (idle gate uses --idle-run-sec, an
+  // unbounded loop with a wall-clock exit, NOT --frames).
+  auto handsPending = [&]() -> bool {
+    return frames > 0 ||
+           (resizeAfterFrames > 0 && frameIndex <= resizeAfterFrames + 5) ||
+           (stallAfterFrames > 0 && frameIndex <= stallAfterFrames) ||
+           (clickAfterFrames > 0 && frameIndex <= clickAfterFrames) ||
+           (scrollAfterFrames > 0 && frameIndex <= scrollAfterFrames) ||
+           (hoverAfterFrames > 0 &&
+            frameIndex <= hoverAfterFrames + (int)hoverPoints.size()) ||
+           (keyAfterFrames > 0 &&
+            frameIndex <= keyAfterFrames + (int)keySequence.size()) ||
+           (charAfterFrames > 0 &&
+            frameIndex <= charAfterFrames + (int)charSequence.size()) ||
+           (mouseAfterFrames > 0 &&
+            frameIndex <= mouseAfterFrames + (int)mouseSequence.size()) ||
+           (!screenshotFirstPath.empty() && !capturedFirst) ||
+           (!screenshotPath.empty() && !capturedTimed) ||
+           (typePlan && (!typeDone || frameIndex <= typeDoneFrame + 3));
+  };
+
   while (!surface.shouldClose()) {
+    auto loopFrame = std::make_unique<rni::FrameTimingsRecorder>();
+    // FP-11: the loop's own requests. Without --idle-skip every iteration is a
+    // frame (the old paint-every-frame loop, now paced by vsync); with it only
+    // the first frame and a pending test hand ask here. Everything else
+    // (damage, NativeAnimated start, a live clock, resize) requests itself.
+    if (!idleSkip || frameIndex == 0 || handsPending()) scheduler.RequestFrame("loop");
+    if (scheduler.FramePending()) scheduler.AwaitVsync();
+    loopFrame->RecordVsync();
     surface.pollEvents();
 
     // The loop's caller of the shared resize body. This is the path that runs
     // in the normal (non-drag) case; the window-refresh callback installed
     // above is the path that runs when this loop is blocked inside
     // pollEvents(). Both go through applyResizeIfDirty, deliberately.
-    applyResizeIfDirty();
+    if (applyResizeIfDirty()) scheduler.RequestFrame("resize");
 
     // item 5. Drain the ClipboardBridge's queued main-thread tasks every
     // iteration, same discipline as applyResizeIfDirty: a getString()/
@@ -1173,63 +1326,31 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       fflush(stdout);
     }
 
+    // ── FP-11: BeginFrame (was P12-01's damage computation) ──────────────────
+    // No request, no frame. Without --idle-skip the loop requested above, so
+    // every iteration paints exactly as before. With it a clean iteration skips
+    // the paint and SLEEPS below (that sleep, not the paint-skip, is what drops
+    // CPU). M1 forces a frame every iteration so the CPU gate fails.
+    loopFrame->RecordBuildStart();
+    const bool shouldPaint =
+        (idleSkip && idleMutant == 1) ? true : scheduler.FramePending();
     // ENG-06: advance RN's animation engine once per frame, BEFORE painting,
-    // so this frame shows the value this tick produced. Near-free when nothing
-    // is animating (one atomic load) -- see ReactHost::pumpNativeAnimated.
-    const unsigned long ticksBefore = host.nativeAnimatedTicks();
-    host.pumpNativeAnimated();
-    // P12-01: did an animation actually advance this frame? A NativeAnimated
-    // ramp drives props through updateViewProps (which bumps version_), but a
-    // frame that ticked the clock without yet moving a pixel still must not be
-    // mistaken for idle -- treat any tick as a live animation clock.
-    const bool animatedThisFrame = host.nativeAnimatedTicks() != ticksBefore;
-
-    // ── P12-01: compute this frame's damage (idle-skip only) ─────────────────
-    // With --idle-skip OFF, shouldPaint stays true and the loop is byte-for-byte
-    // its old paint-every-frame self -- every existing gate is untouched. ON, a
-    // frame is dirty iff the scene version advanced, an animation clock is live
-    // (a NativeAnimated tick this frame OR a focused field whose caret blinks),
-    // the first frame, or a frame-anchored CLI test hook is still pending.
-    // Otherwise the paint is skipped and the loop SLEEPS below (that sleep, not
-    // the paint-skip, is what drops CPU).
-    bool shouldPaint = true;
-    if (idleSkip) {
-      const uint64_t curVersion = sceneGraph.version();
-      const bool versionAdvanced = curVersion != lastPresentedVersion;
-      // Any frame-anchored test hand not yet fully consumed keeps the loop
-      // painting, so resize/stall/click/scroll/hover/screenshot gates and any
-      // bounded --frames N run keep their exact frame counts. A --frames run
-      // paints every frame by construction (idle gate uses --idle-run-sec, an
-      // unbounded loop with a wall-clock exit, NOT --frames).
-      const bool handsPending =
-          frames > 0 ||
-          (resizeAfterFrames > 0 && frameIndex <= resizeAfterFrames + 5) ||
-          (stallAfterFrames > 0 && frameIndex <= stallAfterFrames) ||
-          (clickAfterFrames > 0 && frameIndex <= clickAfterFrames) ||
-          (scrollAfterFrames > 0 && frameIndex <= scrollAfterFrames) ||
-          (hoverAfterFrames > 0 &&
-           frameIndex <= hoverAfterFrames + (int)hoverPoints.size()) ||
-          (keyAfterFrames > 0 &&
-           frameIndex <= keyAfterFrames + (int)keySequence.size()) ||
-          (charAfterFrames > 0 &&
-           frameIndex <= charAfterFrames + (int)charSequence.size()) ||
-          (mouseAfterFrames > 0 &&
-           frameIndex <= mouseAfterFrames + (int)mouseSequence.size()) ||
-          (!screenshotFirstPath.empty() && !capturedFirst) ||
-          (!screenshotPath.empty() && !capturedTimed) ||
-          (typePlan && (!typeDone || frameIndex <= typeDoneFrame + 3));
-      // A caret blink is a time-based clock nothing marks dirty: refuse the skip
-      // while a field is focused or the cached frame would freeze mid-blink.
-      const bool clockLive =
-          animatedThisFrame || sceneGraph.focusedTextInput() != 0 ||
-          sceneGraph.spinnerAnimating();
-      // First frame ALWAYS paints (lastPresentedVersion starts at 0 == the
-      // initial version). M1 forces dirty every frame so the CPU gate fails,
-      // proving the skip is load-bearing.
-      const bool computedDirty =
-          frameIndex == 0 || versionAdvanced || clockLive || handsPending;
-      shouldPaint = (idleMutant == 1) ? true : computedDirty;
-      if (shouldPaint) lastPresentedVersion = curVersion;
+    // so this frame shows the value this tick produced (BeginFrame fan-out:
+    // Animator::BeginFrame -> OnAnimatorBeginFrame).
+    bool animatedThisFrame = false;
+    if (shouldPaint) {
+      scheduler.BeginFrame();
+      const unsigned long ticksBefore = host.nativeAnimatedTicks();
+      host.pumpNativeAnimated();
+      animatedThisFrame = host.nativeAnimatedTicks() != ticksBefore;
+    }
+    // A live clock asks for the next frame: a NativeAnimated animation in
+    // flight, a focused field's caret blink, a spinning ActivityIndicator.
+    // Nothing marks those dirty, so without this they freeze mid-cycle.
+    if (idleSkip && (animatedThisFrame || host.nativeAnimatedActive() ||
+                     sceneGraph.focusedTextInput() != 0 ||
+                     sceneGraph.spinnerAnimating())) {
+      scheduler.RequestFrame("clock");
     }
 
     // Decide BEFORE the paint which captures this frame serves, and arm the
@@ -1255,7 +1376,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     grabOk = false;
     grabArmed = wantFirst || wantTimed;
 
-    int painted = shouldPaint ? paintFrame() : 0;
+    int painted = 0;
+    if (shouldPaint) painted = paintFrame(std::move(loopFrame));
+    else frameTimings.Discard(std::move(loopFrame));
     grabArmed = false;
     ++frameIndex;
     if (shouldPaint && frameIndex == 1) {
@@ -1543,11 +1666,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 
       const bool clean = !shouldPaint;
       int sleptMs = 0;
+      // A request that landed after the decision posted its wake already, so
+      // the wait below returns at once; skip it outright when one is pending.
       // THE SLEEP THAT DROPS CPU. Block up to budget ms; any input OR a posted
       // wake returns early. M2 deliberately KEEPS the non-blocking poll (no
       // sleep) so the loop busy-spins -- the CPU gate must catch that exact
       // wrong fix, proving the sleep, not the paint-skip, is what matters.
-      if (clean && idleMutant != 2) {
+      if (clean && idleMutant != 2 && !scheduler.FramePending()) {
         const auto t0 = std::chrono::steady_clock::now();
         surface.waitEvents((double)idleBudgetMs / 1000.0);
         sleptMs = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1630,12 +1755,20 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // to a window mid-destruction. Safe even though the JS thread is already torn
   // down by this point -- belt and braces, same discipline as the handlers.
   sceneGraph.setDamageWake(nullptr);
+  host.setNativeAnimatedStartHook(nullptr);  // FP-11: captures `scheduler`
 
 
   // Machine-readable evidence that the modal-loop repaint path executed. A
   // gate asserting only on pixels cannot tell a mid-drag repaint from the
   // single post-release repaint that was already happening.
   printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
+  // FP-01: presents counted at surface.present(), independent of the recorder.
+  printf("rn-impeller: presents=%d\n", paintsTotal);
+  scheduler.PrintSummary();
+  FinishFrameTimings(frameTimings);
+  FinishTrace();
+  rni::glvalidation::Finish();
+  rni::typography::PrintSummary();  // FP-12
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
   // a completely different failure from touch_downs=3 touch_hits=0 (clicks
@@ -1690,6 +1823,8 @@ int main(int argc, char** argv) {
   // MUST be first: ReactNativeFeatureFlags::override() throws once any flag has
   // been read, and plenty of construction paths read one.
   rni::installFeatureFlags();
+  rni::trace::SetThreadName("main");
+  rni::sanitize::RunTestHooks();
 
   std::string bundlePath, appName, screenshot;
   std::string colorScheme = "light";
@@ -1814,9 +1949,11 @@ int main(int argc, char** argv) {
   // ENG item 2 — SUPERSAMPLE-RNSVG. N>0 renders each <Svg> root subtree into an
   // N x offscreen and composites it back with a linear downsample, which
   // synthesises the edge-coverage AA Impeller's tessellated stroke path does not
-  // emit. Default 4 on darwin (where the tessellated-AA gap was measured), 0
-  // (disabled, exact in-place path) elsewhere. --supersample-rnsvg overrides.
-#if defined(__APPLE__)
+  // emit. Default 4 on darwin (where the tessellated-AA gap was measured) and on
+  // Windows (ANGLE D3D11 shows the same gap: 3 luma levels on the HostApp icon rail
+  // at N=0), 0 (disabled, exact in-place path) on linux, whose gates pin it.
+  // --supersample-rnsvg overrides.
+#if defined(__APPLE__) || defined(_WIN32)
   int supersampleRnsvg = 4;
 #else
   int supersampleRnsvg = 0;
@@ -1847,6 +1984,11 @@ int main(int argc, char** argv) {
     else if (a == "--headless") headless = true;
     else if (a == "--window") windowMode = true;
     else if (a == "--frames") frames = atoi(next("--frames").c_str());
+    else if (a == "--frame-timings-out") gFrameTimingsOut = next("--frame-timings-out");
+    else if (a == "--trace-out") {
+      gTraceOut = next("--trace-out");
+      rni::trace::Start(gTraceOut);
+    } else if (a == "--trace-bench") return RunTraceBench(atol(next("--trace-bench").c_str()));
     // ── P12-01 idle-frame damage-skip flags ──────────────────────────────────
     //   --idle-skip           enable the dirty-frame skip + glfwWaitEventsTimeout
     //                         sleep (default OFF so every existing gate keeps its
@@ -1863,6 +2005,18 @@ int main(int argc, char** argv) {
     //   --idle-offthread-after F  at frame F fire an OFF-thread scene bump once;
     //                         the off-thread repaint witness uses it with
     //                         --idle-log to prove M3 stalls and HEAD wakes.
+    // FP-11: --vsync auto|swap|software|off|platform (default auto: swap
+    // interval 1, software 60 Hz clock if the swap does not block; a bounded
+    // --frames N run defaults to platform, see below); --vsync-log prints
+    // vsync_request / vsync_present lines for tools/ci-vsync.sh.
+    else if (a == "--vsync") {
+      const std::string v = next("--vsync");
+      gVsyncSet = true;
+      if (!rni::FrameScheduler::ParseSource(v.c_str(), &gVsyncSource)) {
+        fprintf(stderr, "rn-impeller: FATAL: --vsync wants auto|swap|software|off|platform (got '%s')\n", v.c_str());
+        return 2;
+      }
+    } else if (a == "--vsync-log") gVsyncLog = true;
     else if (a == "--idle-skip") { idleSkip = true; idleSkipSet = true; }
     else if (a == "--no-idle-skip") { idleSkip = false; idleSkipSet = true; }
     else if (a == "--idle-run-sec") idleRunSec = atof(next("--idle-run-sec").c_str());
@@ -2462,6 +2616,10 @@ int main(int argc, char** argv) {
     // handsPending guard keeps every frame-anchored windowed gate (resize/click/
     // scroll/hover/stall/screenshot/--frames) painting on schedule regardless.
     if (!idleSkipSet && frames == 0) idleSkip = true;
+    // FP-11: a bounded --frames N run is a test run: frame-anchored hooks plus
+    // --screenshot-after deadlines in ms calibrated on the unpaced loop. Keep
+    // its pre-FP-11 timing unless --vsync asks otherwise.
+    if (!gVsyncSet && frames > 0) gVsyncSource = rni::FrameScheduler::Source::kPlatform;
     gWindowedTypeSpec = typeSpec;  // ENG-18
     return RunWindowed(sourceUrl, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl,
@@ -2861,22 +3019,54 @@ int main(int argc, char** argv) {
     // The clock is the LOOP COUNTER, not wall time: pumping the NativeAnimated
     // engine once per iteration means `--frames N` advances the animation by
     // exactly N steps on a fast machine and a slow one alike.
+    // FP-01: headless frames have no swap; "present" is the stamp after the
+    // draw into the offscreen target returns.
+    rni::FrameTimings headlessTimings;
+    int headlessPresents = 0;
     if (frames > 0) {
+      // Per-frame JS-work baseline, taken after boot settled: everything
+      // counted from here on happened DURING the stepped frames.
+      const unsigned long loopTimers0 = host.jsTimersFired();
+      const unsigned long loopMountTx0 = sceneGraph.mountTransactions();
+      const unsigned long loopTicks0 = host.nativeAnimatedTicks();
+      const unsigned long long loopTickUs0 = host.nativeAnimatedTickMicros();
       for (int frameIndex = 1; frameIndex <= frames; ++frameIndex) {
-        // One NativeAnimated step. Posts to the JS thread, so drain it before
-        // painting or the capture races the value update it is meant to show.
+        // One NativeAnimated step, run on this thread (FP-10). The idle wait
+        // still drains what it posts to JS (onEnd, layout-prop commits).
+        auto hf = std::make_unique<rni::FrameTimingsRecorder>();
+        hf->RecordVsync();
+        hf->RecordBuildStart();
         host.pumpNativeAnimated();
         host.waitForJsIdle(5000);
 
+        TRACE_EVENT0("frame", "Frame");
         ImpellerDisplayListBuilder fb = ImpellerDisplayListBuilderNew(nullptr);
-        sceneGraph.paint(fb, pointScale);
-        ImpellerDisplayList fdl =
-            ImpellerDisplayListBuilderCreateDisplayListNew(fb);
+        {
+          TRACE_EVENT0("paint", "PaintWalk");
+          sceneGraph.paint(fb, pointScale);
+        }
+        ImpellerDisplayList fdl;
+        {
+          TRACE_EVENT0("paint", "DisplayListBuild");
+          fdl = ImpellerDisplayListBuilderCreateDisplayListNew(fb);
+        }
+        hf->RecordBuildEnd();
+        hf->RecordRasterStart();
         if (fdl != nullptr) {
+          TRACE_EVENT0("raster", "Draw");
           surface.drawDisplayList(fdl);
           ImpellerDisplayListRelease(fdl);
         }
         ImpellerDisplayListBuilderRelease(fb);
+        hf->RecordRasterEnd();
+        {
+          // Headless has no swap; the readback below is its present.
+          TRACE_EVENT0("raster", "Present");
+          hf->RecordPresent();
+        }
+        ++headlessPresents;
+        rni::glvalidation::OnFrame();  // FP-05 test hook
+        headlessTimings.Commit(std::move(hf));
 
         // Frame-0 capture, taken AFTER the first real paint so it is a
         // rendered frame and not an uninitialised buffer. This plus the final
@@ -2917,9 +3107,27 @@ int main(int argc, char** argv) {
       // animation ran" and "the animation worked".
       printf("rn-impeller: directprop_updates=%lu\n",
              sceneGraph.directPropUpdates());
+      // Cost of an animation DURING the stepped frames, per the Mac's ask
+      // (DS-INPUT-SPIN item 4). js_timers = JS timer callbacks run (rAF is a
+      // setTimeout(0) here, so a JS-driven Animated loop shows ~1 per frame);
+      // mount_tx = React commits that reached the scene (a JS-driven loop
+      // commits every frame). Both stay 0 for a native-driven loop.
+      // tick_us = time inside RN's C++ onRender, on the frame-loop thread
+      // since FP-10; it executes no JS.
+      const unsigned long loopTicks = host.nativeAnimatedTicks() - loopTicks0;
+      const unsigned long long loopTickUs =
+          host.nativeAnimatedTickMicros() - loopTickUs0;
+      printf("rn-impeller: frameloop frames=%d js_timers=%lu mount_tx=%lu "
+             "nativeanimated_ticks=%lu tick_us_total=%llu tick_us_avg=%.1f\n",
+             frames, host.jsTimersFired() - loopTimers0,
+             sceneGraph.mountTransactions() - loopMountTx0, loopTicks,
+             loopTickUs, loopTicks ? (double)loopTickUs / loopTicks : 0.0);
       fflush(stdout);
     }
 
+    auto finalFrame = std::make_unique<rni::FrameTimingsRecorder>();
+    finalFrame->RecordVsync();
+    finalFrame->RecordBuildStart();
     ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
     painted = sceneGraph.paint(builder, pointScale);
     // ENG-10: GPU sprite quads actually issued this paint (gate arm).
@@ -2933,6 +3141,8 @@ int main(int argc, char** argv) {
     // and readback — there is no surface to draw into. Do NOT abort.
     if (havePixels) {
       ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
+      finalFrame->RecordBuildEnd();
+      finalFrame->RecordRasterStart();
       if (dl == nullptr) {
         fprintf(stderr, "rn-impeller: FATAL: CreateDisplayListNew returned null\n");
         return 1;
@@ -2942,8 +3152,19 @@ int main(int argc, char** argv) {
         return 1;
       }
       ImpellerDisplayListRelease(dl);
+      finalFrame->RecordRasterEnd();
+      finalFrame->RecordPresent();
+      ++headlessPresents;
+      headlessTimings.Commit(std::move(finalFrame));
+    } else {
+      headlessTimings.Discard(std::move(finalFrame));
     }
     ImpellerDisplayListBuilderRelease(builder);
+    printf("rn-impeller: presents=%d\n", headlessPresents);
+    FinishFrameTimings(headlessTimings);
+    FinishTrace();
+    rni::glvalidation::Finish();
+    rni::typography::PrintSummary();  // FP-12
   }
 
   std::vector<rni::Px> px;

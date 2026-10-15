@@ -130,6 +130,11 @@ struct SceneNode {
   bool hasLayerShadow{false};
   ShadowSpec layerShadow;
   std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+  // The props the transform was resolved WITH, kept so a NativeAnimated
+  // update (which sends only the operation list) resolves exactly as a mount
+  // would: same origin, same backface rule. See ResolveViewTransform.
+  facebook::react::TransformOrigin transformOrigin{};
+  bool backfaceVisibilityHidden{false};
 
   bool overflowHidden{false};
   // Style audit items 1-4 (scenegraph/Shadows.h). `shadows` holds the iOS
@@ -562,6 +567,13 @@ class SceneGraph {
   // no known key is indistinguishable, from the outside, from no call at all.
   unsigned long directPropUpdates() const { return directPropUpdates_; }
 
+  // Non-empty mounting transactions applied so far. A native-driven loop
+  // must not add any per frame; a JS-driven one adds about one per frame (a
+  // React commit). The headless frame loop prints the delta over the loop.
+  unsigned long mountTransactions() const {
+    return mountTransactions_.load(std::memory_order_relaxed);
+  }
+
   // ── Idle-frame damage signal + wake (P12-01) ──────────────────────────────
   // A monotonic revision, bumped once per applyMutations, per applied direct-
   // prop update (the NativeAnimated path), per text-input edit/focus change,
@@ -978,8 +990,7 @@ class SceneGraph {
     // GL texture handle -- stored as uint32_t (GLuint's real underlying type
     // on every platform this engine targets) so this header does not need to
     // pull in a GL headers just to declare the cache; GLES3/gl3.h is only
-    // ever included from the .cpp, and only on the two platforms
-    // RNI_SUPERSAMPLE_GL covers.
+    // ever included from the .cpp (via SceneGraphGl.h), and never on Android.
     uint32_t glTex{0};
     int texW{0};
     int texH{0};
@@ -994,6 +1005,9 @@ class SceneGraph {
   int spritesDrawn_{0};  // reset per paint(); see worldSpritesDrawn()
   // ENG-06. Count of PROPS applied by updateViewProps(), not calls made.
   unsigned long directPropUpdates_{0};
+  // Count of non-empty mounting transactions applied (React commits that
+  // reached the scene). Atomic: written on the JS thread, read by main.
+  std::atomic<unsigned long> mountTransactions_{0};
   // P12-01: idle-frame damage revision, bumped by bumpVersion(). Atomic so an
   // off-thread producer (JS applyMutations / updateViewProps) can bump it while
   // the GLFW loop reads it on the main thread with no scene lock held.
@@ -1011,7 +1025,12 @@ class SceneGraph {
   std::function<void()> damageWake_;
   std::unordered_map<facebook::react::Tag, SceneNode> nodes_;
   std::vector<facebook::react::Tag> roots_;
+  // The surface's context, created on and bound to the paint thread. Non-null
+  // means text is on; every USE goes through threadTypography() (FP-12).
   ImpellerTypographyContext typography_{nullptr};
+  // The calling thread's own context (text/TypographyContexts.h): main paints
+  // with the surface's, JS (content size, commands) with its own.
+  ImpellerTypographyContext threadTypography() const;
   // <TextInput>. ENG-01b. Focus is a singleton: at most one field edits at a
   // time. tiFocused_==0 means no field is focused (caret not painted anywhere).
   // tiEditValue_ is the live buffer the keystroke loop mutates; tiCaret_ is the

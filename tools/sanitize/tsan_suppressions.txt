@@ -1,0 +1,22 @@
+# ThreadSanitizer suppressions for tools/ci-tsan.sh (FP-04). Modelled on Flutter's
+# engine/src/flutter/testing/tsan_suppressions.txt ("race:dart::*": the VM is not
+# instrumented). THIRD-PARTY CODE ONLY: a race in engine/ (ours) is fixed or, if a later
+# pass owns the fix, listed in tools/sanitize/tsan_known.txt where the gate still counts it.
+
+# libimpeller.so is prebuilt without -fsanitize=thread. Its internal locks (Skia's SkMutex
+# is an atomic fast path + semaphore, the glyph/strike caches behind it) are invisible to
+# TSan, so a memset/memcpy/free it makes through an intercepted libc call reports a race
+# against itself (seen: memset in a 96-byte block realloc'd by paragraph layout on the JS
+# thread and rewritten by the display-list draw on main). Our OWN use of Impeller objects
+# that impeller.h says are single-thread is still checked: engine/base/TsanAnnotate.h
+# records it at our call sites, which this entry does not cover.
+called_from_lib:libimpeller.so
+
+# Mesa's llvmpipe driver (libgallium-*.so, the xvfb GL) is not instrumented. Its worker
+# threads ('llvmpipe-N') lock and broadcast on a fence mutex/cond the main thread then
+# destroys inside the same driver; the ordering is through atomics TSan cannot see (seen
+# once in 6 text-window runs during FP-12: pthread_mutex_destroy / pthread_cond_destroy,
+# every frame inside libgallium, allocated and created by it). No engine/ frame is involved.
+# race:, not called_from_lib: (the latter hides the driver's mutex calls and TSan then
+# reports lock-order inversions against our locks that it can no longer order).
+race:libgallium

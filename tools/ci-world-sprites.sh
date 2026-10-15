@@ -82,6 +82,8 @@ npm install --no-audit --no-fund --silent \
 npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
 ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
+# RNI_BIN overrides the installed engine (tools/ci-sanitize.sh runs this gate on the ASan build).
+[ -z "${RNI_BIN:-}" ] || ENGINE="$RNI_BIN"
 
 run_headless() {
   local entry="$1" appname="$2" bundle_out="$3" shot="$4" log="$5"
