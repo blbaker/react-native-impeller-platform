@@ -74,6 +74,8 @@
 #include "host/FrameScheduler.h"
 #include "host/AnimRowProbe.h"
 #include "host/UniformProbe.h"
+#include "host/PoisonProbe.h"
+#include "scenegraph/IoUploader.h"
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
 #include "base/GlValidation.h"
@@ -772,6 +774,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       std::vector<rni::Px> px;
       if (surface.readPixels(&px)) {
         rni::uniformprobe::OnPresent(px, surface.gpuWidth(), surface.gpuHeight(), n);
+      }
+    }
+    if (rni::poisonprobe::Enabled()) {  // FP-17 hand-off-before-fence probe
+      std::vector<rni::Px> px;
+      if (surface.readPixels(&px)) {
+        rni::poisonprobe::OnPresent(px, surface.gpuWidth(), surface.gpuHeight(), n);
       }
     }
   };
@@ -1877,10 +1885,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   scheduler.PrintSummary();
   rasterizer.PrintSummary();  // FP-13 pipeline + FP-15 raster thread
   rni::uniformprobe::PrintSummary();  // FP-15 test hook
+  rni::poisonprobe::PrintSummary();  // FP-17 test hook
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
   rni::image::PrintStats();  // FP-16
+  rni::io::PrintStats();  // FP-17
   rni::typography::PrintSummary();  // FP-12
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
@@ -2130,7 +2140,14 @@ int main(int argc, char** argv) {
         return 2;
       }
     } else if (a == "--vsync-log") gVsyncLog = true;
-    else if (a == "--raster-thread") {
+    else if (a == "--io-upload") {  // FP-17
+      const std::string v = next("--io-upload");
+      if (v != "on" && v != "off") {
+        fprintf(stderr, "rn-impeller: FATAL: --io-upload wants on|off (got '%s')\n", v.c_str());
+        return 2;
+      }
+      rni::io::SetEnabled(v == "on");
+    } else if (a == "--raster-thread") {
       const std::string v = next("--raster-thread");
       if (v != "on" && v != "off") {
         fprintf(stderr, "rn-impeller: FATAL: --raster-thread wants on|off (got '%s')\n", v.c_str());
@@ -3317,6 +3334,7 @@ int main(int argc, char** argv) {
     FinishTrace();
     rni::glvalidation::Finish();
     rni::image::PrintStats();  // FP-16
+    rni::io::PrintStats();  // FP-17
     rni::typography::PrintSummary();  // FP-12
   }
 

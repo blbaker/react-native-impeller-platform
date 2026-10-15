@@ -19,7 +19,7 @@ FRAME_CHILDREN = ["PaintWalk", "DisplayListBuild", "Draw", "Present"]
 HOME = {"Frame": "main", "Record": "main", "Raster": "main", "PaintWalk": "main", "DisplayListBuild": "main", "Draw": "main",
         "Present": "main", "NativeAnimatedPump": "main", "NativeAnimatedTick": "main",
         "JsCommit": "js", "MountTransaction": "js", "TextMeasure": "js",
-        "ImageFetch": "image-io", "ImageDecode": "image-io", "ImageUpload": "main",
+        "ImageFetch": "image-io", "ImageDecode": "image-io", "ImageUpload": "main", "IoUpload": "io",
         "RasterJobs": "main", "Offscreen": "main", "TextureUpload": "main"}
 RASTER_SPANS = ["Raster", "Draw", "Present", "RasterJobs", "Offscreen"]
 

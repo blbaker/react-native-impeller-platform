@@ -1,5 +1,6 @@
 #include "base/ContextFlags.h"
 #include "base/GlLimits.h"
+#include "host/IoContextEgl.h"
 #include "base/GlValidation.h"
 #include "fabric/ImageStore.h"
 #include "host/HeadlessSurface.h"
@@ -26,6 +27,7 @@ void* ProcAddr(const char* name, void*) { return (void*)eglGetProcAddress(name);
 }  // namespace
 
 HeadlessSurface::~HeadlessSurface() {
+  rni::ioegl::Stop();  // FP-17
   rni::recordgl::SetContextHooks({});
   if (typography_) {
     rni::typography::Unbind(typography_);
@@ -215,6 +217,7 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   rni::contextflags::Report(context_);
   if (!context_) return fail("ImpellerContextCreateOpenGLESNew returned null");
 
+  rni::ioegl::StartFromCurrent();  // FP-17: IO upload context in this share group
   typography_ = ImpellerTypographyContextNew();
   if (!typography_) return fail("ImpellerTypographyContextNew returned null");
   // FP-12: the paint thread's context; other threads (measure on JS) get their own.

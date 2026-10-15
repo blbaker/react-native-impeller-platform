@@ -39,6 +39,11 @@ struct Table {
   PFNGLTEXPARAMETERIPROC TexParameteri = nullptr;
   PFNGLTEXSUBIMAGE2DPROC TexSubImage2D = nullptr;
   PFNGLVIEWPORTPROC Viewport = nullptr;
+  // FP-17 IO upload fence
+  PFNGLFENCESYNCPROC FenceSync = nullptr;
+  PFNGLCLIENTWAITSYNCPROC ClientWaitSync = nullptr;
+  PFNGLDELETESYNCPROC DeleteSync = nullptr;
+  PFNGLFLUSHPROC Flush = nullptr;
 };
 extern Table gGl;
 
@@ -69,6 +74,10 @@ bool Load();
 #define glTexParameteri ::rni::scenegraph_gl::gGl.TexParameteri
 #define glTexSubImage2D ::rni::scenegraph_gl::gGl.TexSubImage2D
 #define glViewport ::rni::scenegraph_gl::gGl.Viewport
+#define glFenceSync ::rni::scenegraph_gl::gGl.FenceSync
+#define glClientWaitSync ::rni::scenegraph_gl::gGl.ClientWaitSync
+#define glDeleteSync ::rni::scenegraph_gl::gGl.DeleteSync
+#define glFlush ::rni::scenegraph_gl::gGl.Flush
 
 namespace rni::scenegraph_gl {
 inline bool Ready() { return Load(); }

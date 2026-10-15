@@ -6,6 +6,7 @@
 #include "base/GlValidation.h"
 #include "fabric/ImageStore.h"
 #include "host/GlfwSurface.h"
+#include "host/IoContextEgl.h"
 #include "text/TypographyContexts.h"
 
 #if defined(_WIN32)
@@ -832,6 +833,7 @@ bool GlfwSurface::initGpu(bool rasterThread, std::string* error) {
       context_, 0u, kImpellerPixelFormatRGBA8888, &size);
   if (!surface_) return fail("ImpellerSurfaceCreateWrappedFBONew returned null");
   installRecordHooks(rasterThread);  // FP-14
+  rni::ioegl::StartFromCurrent();  // FP-17: IO upload context in this share group
 
   std::printf("rn-impeller: GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
   // ⛔ REPORT WHAT GL GRANTED, NOT WHAT WE ASKED FOR. GLFW_SAMPLES is a HINT:
@@ -934,6 +936,7 @@ void GlfwSurface::releaseGpu() {
   std::printf("rn-impeller: gpu_release gl_current=%d tid=%lld\n", glCurrent ? 1 : 0,
               rni::CurrentThreadTag());
   std::fflush(stdout);
+  rni::ioegl::Stop();  // FP-17: before the share group's raster context dies
   rni::recordgl::SetContextHooks({});
   if (surface_) ImpellerSurfaceRelease(surface_);
   surface_ = nullptr;

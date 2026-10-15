@@ -45,6 +45,7 @@ std::unordered_map<uint64_t, std::shared_ptr<Job>> gTickets;
 uint64_t gNextTicket = 0;
 int gInFlight = 0, gJobs = 0, gDedup = 0, gCanceled = 0;
 std::atomic<int> gSync{0};
+std::atomic<UploadHook> gUploadHook{nullptr};  // FP-17
 // FP-06 teardown fence: completions that finish after StopCallbacks() drop their waiters;
 // StopCallbacks() returns only once no completion callback is still running.
 bool gCallbacksStopped = false;
@@ -138,6 +139,16 @@ void DecodeJob(const std::shared_ptr<Job>& job) {
   } else {
     if (ReadSourceBytes(job->uri, local)) r.image = RunDecode(local.data(), local.size(), job->boxW, job->boxH, job->uri);
     if (!r.image) r.error = "could not load " + job->uri;
+  }
+  if (UploadHook upload = gUploadHook.load(); upload && r.image) {
+    // FP-17: the load completes after the IO thread's upload, still in flight
+    // for WaitIdle until then.
+    std::shared_ptr<const Decoded> image = r.image;
+    upload(std::move(image), [job, r] {
+      Complete(job, r, true);
+      Finish(job);
+    });
+    return;
   }
   Complete(job, r, r.image || !job->remote);
   Finish(job);
@@ -311,6 +322,8 @@ void PrintStats() {
   }
 #endif
 }
+
+void SetUploadHook(UploadHook hook) { gUploadHook.store(hook); }
 
 void StopCallbacks() {
   std::unique_lock<std::mutex> lock(gMutex);

@@ -105,6 +105,13 @@ void PrintStats();
 void StopCallbacks();
 void StartCallbacks();
 
+// FP-17 (model: ImageDecoderImpeller::UploadTextureToPrivate): when set, a
+// successful pool decode is handed to `hook(image, done)` and the load completes
+// (cache insert, waiters) only when `done` runs, after the GPU upload. `done`
+// must run exactly once, on any thread. Null restores immediate completion.
+using UploadHook = void (*)(std::shared_ptr<const Decoded> image, std::function<void()> done);
+void SetUploadHook(UploadHook hook);
+
 // Exposed for tests: the bytes a local URI names, or false.
 bool ReadSourceBytes(const std::string& uri, std::vector<uint8_t>& out);
 

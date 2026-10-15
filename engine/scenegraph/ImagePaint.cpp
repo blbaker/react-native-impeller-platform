@@ -7,6 +7,7 @@
 #include <cstdlib>
 
 #include "fabric/ImageStore.h"
+#include "scenegraph/IoUploader.h"
 
 namespace rni {
 
@@ -46,7 +47,14 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
     const auto& d = f.image;
     Entry e;
     e.decoded = d;
-    if (jobs) {
+    // FP-17: the IO thread already uploaded it; wrapping a name makes no GL call.
+    const char* where = jobs ? "raster" : "record";
+    if (const uint32_t ioName = io::Take(d.get()); ioName != 0) {
+      where = nullptr;  // IoUploader logged it
+      ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {d->width, d->height}, 1};
+      e.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(context, &desc, ioName);
+      if (e.texture == nullptr) return nullptr;
+    } else if (jobs) {
       uint32_t name = 0;
       e.texture = jobs->WrapNewName(d->width, d->height, &name);
       if (e.texture == nullptr) return nullptr;  // pool empty: next frame
@@ -61,8 +69,10 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
           context, &desc, &mapping, new std::shared_ptr<const image::Decoded>(d));
     }
     static const bool log = std::getenv("RNI_IMAGE_LOG") != nullptr;
-    if (log) std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f\n", d->width,
-                         d->height, d->srcWidth, d->srcHeight, boxW, boxH);
+    if (log && where) {
+      std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f thread=%s\n",
+                  d->width, d->height, d->srcWidth, d->srcHeight, boxW, boxH, where);
+    }
     it = entries_.emplace(d.get(), std::move(e)).first;
   }
   const image::Decoded& d = *it->second.decoded;

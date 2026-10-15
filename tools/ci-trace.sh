@@ -7,7 +7,7 @@
 #   C  tracing on, headless 300 frames: valid JSON, balanced, spans on the right threads
 #   D  off-mode overhead = spans/frame (C) x ns/span (B) / frame time (A) < 1%
 #   E  tracing on, windowed 60 frames (xvfb on Linux)
-#   F  image-net fixture: ImageFetch/ImageDecode on image-io, ImageUpload on main
+#   F  image-net fixture: ImageFetch/ImageDecode on image-io, IoUpload on io (FP-17; was ImageUpload on main)
 #   G  line-height fixture: TextMeasure on js
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -95,7 +95,7 @@ for _ in $(seq 50); do
 done
 run img "$BIN" --headless --probe-banner off --bundle "$IMG" --app-name probe --width 440 --height 130 \
   --scale 1 --supersample-rnsvg 0 --trace-out "$WORK/img.json"
-check "$WORK/img.json" --expect ImageFetch@image-io:1 --expect ImageDecode@image-io:1 --expect ImageUpload@main:1
+check "$WORK/img.json" --expect ImageFetch@image-io:1 --expect ImageDecode@image-io:1 --expect IoUpload@io:1
 
 echo "== G: text measure span =="
 run txt "${HL[@]}" --bundle "$LH" --app-name Eng23LineHeight --frames 3 --trace-out "$WORK/txt.json"

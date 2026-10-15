@@ -8,7 +8,8 @@
 #   3. runs the animated / text / image / native-transform fixtures windowed (xvfb) AND
 #      headless, plus the FP-04 stress fixture (text churn every 4 ms + a native-driver
 #      loop), the FP-12 typography fixture, and the ci-text / ci-native-transform / ci-image-net /
-#      ci-image-io (FP-16) / ci-raster-thread (FP-15) gates on the TSan binary
+#      ci-image-io (FP-16) / ci-raster-thread (FP-15) gates on the TSan binary, and the FP-17
+#      image-upload fixture (IO upload thread) windowed and headless
 #   4. tools/tsan_check.py: any report outside tools/sanitize/tsan_known.txt FAILS; each
 #      known entry (a race a later pass owns) must still be seen
 # libimpeller.so / libhermesvm.so are prebuilt and uninstrumented: engine/base/TsanAnnotate.h
@@ -165,6 +166,16 @@ if want image-window || want image-headless; then
   run image-headless headless "$IM" probe 5
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
   [ -s "$WORK/requests.log" ] || fail "image runs made no HTTP requests"
+fi
+if want fp17-window || want fp17-headless; then
+  # FP-17: decode pool -> IO upload thread -> load completion -> painter Take, then teardown.
+  mkdir -p "$WORK/fp17img"
+  python3 tools/image_upload_gate.py gen "$WORK/fp17img" 12 300 || fail "fp17 images not generated"
+  FQ="fp17://run?dir=$WORK/fp17img&count=12&startMs=200&intervalMs=40&box=300"
+  run fp17-window   window   fp17-image-upload/prebuilt/fp17-image-upload.bundle Fp17ImageUpload 240 \
+    --initial-url "$FQ" --vsync software
+  run fp17-headless headless fp17-image-upload/prebuilt/fp17-image-upload.bundle Fp17ImageUpload 30 \
+    --initial-url "$FQ"
 fi
 gate tools/ci-text.sh
 gate tools/ci-native-transform.sh
