@@ -53,11 +53,21 @@ class NativeAnimatedPump {
  public:
   // NativeAnimatedNodesManager::StartOnRenderCallback
   void start(std::function<void()>&& onRender, bool /*isAsync*/) {
+    std::function<void()> hook;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       onRender_ = std::move(onRender);
+      hook = startHook_;
     }
     active_.store(true, std::memory_order_release);
+    if (hook) hook();
+  }
+
+  // FP-11: called (on the starting thread) each time an animation starts, so
+  // the frame scheduler can request the first frame of a sleeping window.
+  void setStartHook(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    startHook_ = std::move(hook);
   }
 
   // NativeAnimatedNodesManager::StopOnRenderCallback
@@ -113,6 +123,7 @@ class NativeAnimatedPump {
  private:
   mutable std::mutex mutex_;
   std::function<void()> onRender_;
+  std::function<void()> startHook_;
   std::atomic<bool> active_{false};
   std::atomic<unsigned long> ticks_{0};
   std::atomic<unsigned long long> tickNanos_{0};

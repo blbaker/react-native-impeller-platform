@@ -67,6 +67,7 @@
 #include <process.h>
 #endif
 #include "host/FrameTimings.h"
+#include "host/FrameScheduler.h"
 #include "host/AnimRowProbe.h"
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
@@ -438,6 +439,10 @@ static std::string EscapeNewlines(const std::string& v) {
 // scope (like gFontDirs) so RunWindowed's long positional signature does not
 // grow again. Empty = no windowed typing.
 static std::string gWindowedTypeSpec;
+// FP-11: --vsync auto|swap|software|off and --vsync-log (windowed only).
+static rni::FrameScheduler::Source gVsyncSource = rni::FrameScheduler::Source::kAuto;
+static bool gVsyncSet = false;
+static bool gVsyncLog = false;
 
 // FP-01: --frame-timings-out <file.json>. File scope for the same reason.
 static std::string gFrameTimingsOut;
@@ -689,6 +694,17 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // flutter/flow/frame_timings.h). Idle-skipped loop frames are discarded.
   rni::FrameTimings frameTimings;
 
+  // FP-11: frame requests + vsync (model: flutter/shell/common/animator.cc and
+  // vsync_waiter_fallback.cc). Idle-skip M3 keeps the request but drops the
+  // wake, so a sleeping loop only notices it at the end of its budget.
+  rni::FrameScheduler scheduler(
+      rni::FrameScheduler::Options{gVsyncSource, 60.0, gVsyncLog},
+      [&surface](double s) { surface.waitEvents(s); },
+      (idleSkip && idleMutant == 3)
+          ? rni::FrameScheduler::WakeFn()
+          : rni::FrameScheduler::WakeFn([&surface]() { surface.postEmptyEvent(); }),
+      [&surface](int interval) { surface.setSwapInterval(interval); });
+
   auto paintFrame = [&](std::unique_ptr<rni::FrameTimingsRecorder> frame) -> int {
     // ⛔ THE PAINT-IN-FLIGHT SCOPE GOES HERE, AT THE ONE SHARED BODY.
     // Both the frame loop and the window-refresh callback paint through this
@@ -734,7 +750,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     }
     {
       TRACE_EVENT0("raster", "Present");
+      scheduler.WillPresent();
       surface.present();
+      scheduler.DidPresent(paintsTotal + 1);
     }
     frame->RecordPresent();
     frameTimings.Commit(std::move(frame));
@@ -1144,19 +1162,23 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // full budget, proving the wake is load-bearing. Wired only under --idle-skip:
   // every existing gate keeps its unconditional paint-every-frame loop.
   if (idleSkip) {
-    if (idleMutant != 3) {
-      sceneGraph.setDamageWake([&surface]() { surface.postEmptyEvent(); });
+    // FP-11: every damage source is a frame request; the scheduler posts the
+    // wake (glfwPostEmptyEvent) unless M3 built it without one.
+    sceneGraph.setDamageWake([&scheduler]() { scheduler.RequestFrame("damage"); });
+    host.setNativeAnimatedStartHook([&scheduler]() { scheduler.RequestFrame("animation"); });
+    {
       // ENG-09: a WorldRaster.setPixels write is scene damage the version
       // counter is otherwise blind to (it runs on the JS thread and never
       // touches the scene graph). Route it through bumpVersion() — the SAME
       // signal a Fabric commit uses — so the next frame is dirty AND a loop
       // asleep in glfwWaitEventsTimeout wakes. Without this the animation
       // freezes on the last painted frame under the default windowed idle-skip.
-      // Gated on mutant!=3 exactly like the wake above, so M3 (no wake) also
+      // It reaches the scheduler through bumpVersion, so M3 (no wake) also
       // covers the store path and its off-thread witness stalls the full budget.
       host.worldRasterStore()->setDamageHook(
           [&sceneGraph]() { sceneGraph.bumpVersion(); });
-    } else {
+    }
+    if (idleMutant == 3) {
       printf("rn-impeller: [idle] MUTANT M3: damage wake NOT installed\n");
       fflush(stdout);
     }
@@ -1164,11 +1186,6 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
            idleBudgetMs, idleMutant, idleRunSec);
     fflush(stdout);
   }
-  // The last version() we actually PRESENTED. A frame is dirty when it advanced,
-  // an animation clock is live, or a CLI hand is still pending (folded in at the
-  // loop head). Starts at 0 == the initial version, so the first frame is forced
-  // dirty explicitly below.
-  uint64_t lastPresentedVersion = 0;
 
   // ENG-18: windowed --type. Settle the mount, focus the field at X,Y (layout
   // points, the same coordinates headless --type takes), then feed ONE token
@@ -1202,9 +1219,38 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   int typeDoneFrame = -1;
   const auto typeStart = std::chrono::steady_clock::now();
 
+  // Any frame-anchored test hand not yet fully consumed keeps the loop
+  // painting, so resize/stall/click/scroll/hover/screenshot gates and any
+  // bounded --frames N run keep their exact frame counts. A --frames run
+  // paints every frame by construction (idle gate uses --idle-run-sec, an
+  // unbounded loop with a wall-clock exit, NOT --frames).
+  auto handsPending = [&]() -> bool {
+    return frames > 0 ||
+           (resizeAfterFrames > 0 && frameIndex <= resizeAfterFrames + 5) ||
+           (stallAfterFrames > 0 && frameIndex <= stallAfterFrames) ||
+           (clickAfterFrames > 0 && frameIndex <= clickAfterFrames) ||
+           (scrollAfterFrames > 0 && frameIndex <= scrollAfterFrames) ||
+           (hoverAfterFrames > 0 &&
+            frameIndex <= hoverAfterFrames + (int)hoverPoints.size()) ||
+           (keyAfterFrames > 0 &&
+            frameIndex <= keyAfterFrames + (int)keySequence.size()) ||
+           (charAfterFrames > 0 &&
+            frameIndex <= charAfterFrames + (int)charSequence.size()) ||
+           (mouseAfterFrames > 0 &&
+            frameIndex <= mouseAfterFrames + (int)mouseSequence.size()) ||
+           (!screenshotFirstPath.empty() && !capturedFirst) ||
+           (!screenshotPath.empty() && !capturedTimed) ||
+           (typePlan && (!typeDone || frameIndex <= typeDoneFrame + 3));
+  };
+
   while (!surface.shouldClose()) {
-    // FP-01: the loop wake is this engine's vsync (no vsync source yet; FP-11).
     auto loopFrame = std::make_unique<rni::FrameTimingsRecorder>();
+    // FP-11: the loop's own requests. Without --idle-skip every iteration is a
+    // frame (the old paint-every-frame loop, now paced by vsync); with it only
+    // the first frame and a pending test hand ask here. Everything else
+    // (damage, NativeAnimated start, a live clock, resize) requests itself.
+    if (!idleSkip || frameIndex == 0 || handsPending()) scheduler.RequestFrame("loop");
+    if (scheduler.FramePending()) scheduler.AwaitVsync();
     loopFrame->RecordVsync();
     surface.pollEvents();
 
@@ -1212,7 +1258,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // in the normal (non-drag) case; the window-refresh callback installed
     // above is the path that runs when this loop is blocked inside
     // pollEvents(). Both go through applyResizeIfDirty, deliberately.
-    applyResizeIfDirty();
+    if (applyResizeIfDirty()) scheduler.RequestFrame("resize");
 
     // item 5. Drain the ClipboardBridge's queued main-thread tasks every
     // iteration, same discipline as applyResizeIfDirty: a getString()/
@@ -1279,64 +1325,31 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       fflush(stdout);
     }
 
-    // ENG-06: advance RN's animation engine once per frame, BEFORE painting,
-    // so this frame shows the value this tick produced. Near-free when nothing
-    // is animating (one atomic load) -- see ReactHost::pumpNativeAnimated.
+    // ── FP-11: BeginFrame (was P12-01's damage computation) ──────────────────
+    // No request, no frame. Without --idle-skip the loop requested above, so
+    // every iteration paints exactly as before. With it a clean iteration skips
+    // the paint and SLEEPS below (that sleep, not the paint-skip, is what drops
+    // CPU). M1 forces a frame every iteration so the CPU gate fails.
     loopFrame->RecordBuildStart();
-    const unsigned long ticksBefore = host.nativeAnimatedTicks();
-    host.pumpNativeAnimated();
-    // P12-01: did an animation actually advance this frame? A NativeAnimated
-    // ramp drives props through updateViewProps (which bumps version_), but a
-    // frame that ticked the clock without yet moving a pixel still must not be
-    // mistaken for idle -- treat any tick as a live animation clock.
-    const bool animatedThisFrame = host.nativeAnimatedTicks() != ticksBefore;
-
-    // ── P12-01: compute this frame's damage (idle-skip only) ─────────────────
-    // With --idle-skip OFF, shouldPaint stays true and the loop is byte-for-byte
-    // its old paint-every-frame self -- every existing gate is untouched. ON, a
-    // frame is dirty iff the scene version advanced, an animation clock is live
-    // (a NativeAnimated tick this frame OR a focused field whose caret blinks),
-    // the first frame, or a frame-anchored CLI test hook is still pending.
-    // Otherwise the paint is skipped and the loop SLEEPS below (that sleep, not
-    // the paint-skip, is what drops CPU).
-    bool shouldPaint = true;
-    if (idleSkip) {
-      const uint64_t curVersion = sceneGraph.version();
-      const bool versionAdvanced = curVersion != lastPresentedVersion;
-      // Any frame-anchored test hand not yet fully consumed keeps the loop
-      // painting, so resize/stall/click/scroll/hover/screenshot gates and any
-      // bounded --frames N run keep their exact frame counts. A --frames run
-      // paints every frame by construction (idle gate uses --idle-run-sec, an
-      // unbounded loop with a wall-clock exit, NOT --frames).
-      const bool handsPending =
-          frames > 0 ||
-          (resizeAfterFrames > 0 && frameIndex <= resizeAfterFrames + 5) ||
-          (stallAfterFrames > 0 && frameIndex <= stallAfterFrames) ||
-          (clickAfterFrames > 0 && frameIndex <= clickAfterFrames) ||
-          (scrollAfterFrames > 0 && frameIndex <= scrollAfterFrames) ||
-          (hoverAfterFrames > 0 &&
-           frameIndex <= hoverAfterFrames + (int)hoverPoints.size()) ||
-          (keyAfterFrames > 0 &&
-           frameIndex <= keyAfterFrames + (int)keySequence.size()) ||
-          (charAfterFrames > 0 &&
-           frameIndex <= charAfterFrames + (int)charSequence.size()) ||
-          (mouseAfterFrames > 0 &&
-           frameIndex <= mouseAfterFrames + (int)mouseSequence.size()) ||
-          (!screenshotFirstPath.empty() && !capturedFirst) ||
-          (!screenshotPath.empty() && !capturedTimed) ||
-          (typePlan && (!typeDone || frameIndex <= typeDoneFrame + 3));
-      // A caret blink is a time-based clock nothing marks dirty: refuse the skip
-      // while a field is focused or the cached frame would freeze mid-blink.
-      const bool clockLive =
-          animatedThisFrame || sceneGraph.focusedTextInput() != 0 ||
-          sceneGraph.spinnerAnimating();
-      // First frame ALWAYS paints (lastPresentedVersion starts at 0 == the
-      // initial version). M1 forces dirty every frame so the CPU gate fails,
-      // proving the skip is load-bearing.
-      const bool computedDirty =
-          frameIndex == 0 || versionAdvanced || clockLive || handsPending;
-      shouldPaint = (idleMutant == 1) ? true : computedDirty;
-      if (shouldPaint) lastPresentedVersion = curVersion;
+    const bool shouldPaint =
+        (idleSkip && idleMutant == 1) ? true : scheduler.FramePending();
+    // ENG-06: advance RN's animation engine once per frame, BEFORE painting,
+    // so this frame shows the value this tick produced (BeginFrame fan-out:
+    // Animator::BeginFrame -> OnAnimatorBeginFrame).
+    bool animatedThisFrame = false;
+    if (shouldPaint) {
+      scheduler.BeginFrame();
+      const unsigned long ticksBefore = host.nativeAnimatedTicks();
+      host.pumpNativeAnimated();
+      animatedThisFrame = host.nativeAnimatedTicks() != ticksBefore;
+    }
+    // A live clock asks for the next frame: a NativeAnimated animation in
+    // flight, a focused field's caret blink, a spinning ActivityIndicator.
+    // Nothing marks those dirty, so without this they freeze mid-cycle.
+    if (idleSkip && (animatedThisFrame || host.nativeAnimatedActive() ||
+                     sceneGraph.focusedTextInput() != 0 ||
+                     sceneGraph.spinnerAnimating())) {
+      scheduler.RequestFrame("clock");
     }
 
     // Decide BEFORE the paint which captures this frame serves, and arm the
@@ -1652,11 +1665,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 
       const bool clean = !shouldPaint;
       int sleptMs = 0;
+      // A request that landed after the decision posted its wake already, so
+      // the wait below returns at once; skip it outright when one is pending.
       // THE SLEEP THAT DROPS CPU. Block up to budget ms; any input OR a posted
       // wake returns early. M2 deliberately KEEPS the non-blocking poll (no
       // sleep) so the loop busy-spins -- the CPU gate must catch that exact
       // wrong fix, proving the sleep, not the paint-skip, is what matters.
-      if (clean && idleMutant != 2) {
+      if (clean && idleMutant != 2 && !scheduler.FramePending()) {
         const auto t0 = std::chrono::steady_clock::now();
         surface.waitEvents((double)idleBudgetMs / 1000.0);
         sleptMs = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1739,6 +1754,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // to a window mid-destruction. Safe even though the JS thread is already torn
   // down by this point -- belt and braces, same discipline as the handlers.
   sceneGraph.setDamageWake(nullptr);
+  host.setNativeAnimatedStartHook(nullptr);  // FP-11: captures `scheduler`
 
 
   // Machine-readable evidence that the modal-loop repaint path executed. A
@@ -1747,6 +1763,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
   // FP-01: presents counted at surface.present(), independent of the recorder.
   printf("rn-impeller: presents=%d\n", paintsTotal);
+  scheduler.PrintSummary();
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
@@ -1986,6 +2003,18 @@ int main(int argc, char** argv) {
     //   --idle-offthread-after F  at frame F fire an OFF-thread scene bump once;
     //                         the off-thread repaint witness uses it with
     //                         --idle-log to prove M3 stalls and HEAD wakes.
+    // FP-11: --vsync auto|swap|software|off|platform (default auto: swap
+    // interval 1, software 60 Hz clock if the swap does not block; a bounded
+    // --frames N run defaults to platform, see below); --vsync-log prints
+    // vsync_request / vsync_present lines for tools/ci-vsync.sh.
+    else if (a == "--vsync") {
+      const std::string v = next("--vsync");
+      gVsyncSet = true;
+      if (!rni::FrameScheduler::ParseSource(v.c_str(), &gVsyncSource)) {
+        fprintf(stderr, "rn-impeller: FATAL: --vsync wants auto|swap|software|off|platform (got '%s')\n", v.c_str());
+        return 2;
+      }
+    } else if (a == "--vsync-log") gVsyncLog = true;
     else if (a == "--idle-skip") { idleSkip = true; idleSkipSet = true; }
     else if (a == "--no-idle-skip") { idleSkip = false; idleSkipSet = true; }
     else if (a == "--idle-run-sec") idleRunSec = atof(next("--idle-run-sec").c_str());
@@ -2585,6 +2614,10 @@ int main(int argc, char** argv) {
     // handsPending guard keeps every frame-anchored windowed gate (resize/click/
     // scroll/hover/stall/screenshot/--frames) painting on schedule regardless.
     if (!idleSkipSet && frames == 0) idleSkip = true;
+    // FP-11: a bounded --frames N run is a test run: frame-anchored hooks plus
+    // --screenshot-after deadlines in ms calibrated on the unpaced loop. Keep
+    // its pre-FP-11 timing unless --vsync asks otherwise.
+    if (!gVsyncSet && frames > 0) gVsyncSource = rni::FrameScheduler::Source::kPlatform;
     gWindowedTypeSpec = typeSpec;  // ENG-18
     return RunWindowed(sourceUrl, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl,

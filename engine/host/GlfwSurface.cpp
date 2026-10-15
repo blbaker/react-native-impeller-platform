@@ -1314,6 +1314,14 @@ bool GlfwSurface::shouldClose() const {
   return window_ ? glfwWindowShouldClose(window_) : true;
 }
 
+void GlfwSurface::setSwapInterval(int interval) {
+#if defined(__APPLE__)
+  eglSwapInterval(display_, interval);
+#else
+  glfwSwapInterval(interval);
+#endif
+}
+
 void GlfwSurface::present() {
 #if defined(__APPLE__)
   // glfwSwapBuffers is a NO-OP for a GLFW_NO_API window — GLFW has no context

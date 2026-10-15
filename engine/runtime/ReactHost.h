@@ -140,6 +140,10 @@ class ReactHost {
   // How many times RN's animation engine actually ran, for gates. See
   // NativeAnimatedPump.h for why a pixel diff alone cannot prove ENG-06.
   unsigned long nativeAnimatedTicks() const;
+  // FP-11: true while an animation is in flight (one atomic load), and a hook
+  // run whenever one starts (any thread) so a sleeping loop requests a frame.
+  bool nativeAnimatedActive() const;
+  void setNativeAnimatedStartHook(std::function<void()> hook);
 
   // Per-frame JS-work instruments for the native-driven-loop cost check.
   // jsTimersFired: JS timer callbacks run (setTimeout/setInterval and

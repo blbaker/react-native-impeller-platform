@@ -511,6 +511,14 @@ void ReactHost::pumpNativeAnimated() {
   nativeAnimatedPump_->tick();
 }
 
+bool ReactHost::nativeAnimatedActive() const {
+  return nativeAnimatedPump_ && nativeAnimatedPump_->isActive();
+}
+
+void ReactHost::setNativeAnimatedStartHook(std::function<void()> hook) {
+  if (nativeAnimatedPump_) nativeAnimatedPump_->setStartHook(std::move(hook));
+}
+
 unsigned long ReactHost::nativeAnimatedTicks() const {
   return nativeAnimatedPump_ ? nativeAnimatedPump_->ticks() : 0UL;
 }
