@@ -474,24 +474,29 @@ ReactHost::~ReactHost() {
   }
 }
 
-// ENG-06. Called once per frame from the host's render loop, so the animation
-// clock IS the frame counter: `--frames N` advances the animation the same
-// number of steps on every machine. Wall-clock driving would make every
-// animation gate a race.
+// ENG-06 / FP-10. Called once per frame from the host's frame loop, so the
+// animation clock IS the frame counter: `--frames N` advances the animation the
+// same number of steps on every machine.
 //
-// ⛔ THE EARLY-OUT IS LOAD-BEARING, NOT AN OPTIMISATION. scheduleWork() on an
-// idle app would post a JS task every single frame, which keeps the JS thread
-// permanently non-idle and makes waitForJsIdle() -- the thing every headless
-// gate blocks on -- never return. Two acquire loads and out.
+// ⛔ onRender RUNS HERE, ON THE FRAME-LOOP THREAD, NOT ON THE JS QUEUE. That is
+// RN's contract: iOS ticks from a CADisplayLink on the main thread
+// (RCTNativeAnimatedNodesManager.mm) and the C++ manager calls it its "UI tick
+// listener" (NativeAnimatedNodesManager.cpp handleAnimatedEvent). The manager
+// is built for it: JS-thread module calls are queued through scheduleOnUI and
+// drained inside onRender, isOnRenderThread_ (thread_local) is set on this
+// thread, direct-manipulation props go through
+// schedulerShouldSynchronouslyUpdateViewOnUIThread -> SceneGraph::updateViewProps
+// (which takes the scene mutex, so a concurrent Fabric commit is ordered), layout
+// props go to Fabric through MergedValueDispatcher's jsInvoker, and onEnd /
+// value listeners are AsyncCallback / emitDeviceEvent, which post to JS. Before
+// FP-10 this hopped through RuntimeScheduler::scheduleWork, so a busy JS thread
+// froze every "native" animation, the one thing the native driver exists to
+// prevent.
 void ReactHost::pumpNativeAnimated() {
   if (!nativeAnimatedPump_ || !instance_) {
     return;
   }
   if (!nativeAnimatedPump_->isActive()) {
-    return;
-  }
-  auto scheduler = instance_->getRuntimeScheduler();
-  if (!scheduler) {
     return;
   }
   // ⛔ ADVANCE THE CLOCK BEFORE THE TICK, NOT AFTER.
@@ -503,10 +508,7 @@ void ReactHost::pumpNativeAnimated() {
   // for one extra frame on every restart.
   advanceAnimationClock();
   TRACE_EVENT0("animated", "NativeAnimatedPump");
-  // Hop to the JS thread: tick() walks the animated node graph and touches the
-  // shadow tree and JSI, which is JS-thread work in this engine.
-  scheduler->scheduleWork(
-      [pump = nativeAnimatedPump_](facebook::jsi::Runtime&) { pump->tick(); });
+  nativeAnimatedPump_->tick();
 }
 
 unsigned long ReactHost::nativeAnimatedTicks() const {
@@ -556,6 +558,10 @@ void ReactHost::installFrameCountedAnimationClock() {
 
 void ReactHost::advanceAnimationClock() {
   g_animationFrames.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint64_t ReactHost::animationClockFrames() {
+  return g_animationFrames.load(std::memory_order_relaxed);
 }
 
 void ReactHost::setKnownComponents(std::vector<std::string> names) {

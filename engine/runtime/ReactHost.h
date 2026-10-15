@@ -9,6 +9,7 @@
 #include <react/renderer/runtimescheduler/RuntimeScheduler.h>
 #include <react/runtime/ReactInstance.h>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -132,7 +133,8 @@ class ReactHost {
   // ENG-06. One NativeAnimated tick, driven by the host's frame loop so the
   // clock IS the frame counter and `--frames N` is deterministic. Safe and
   // near-free to call every frame: a relaxed atomic load when nothing is
-  // animating. Hops to the JS thread itself -- call it from the render loop.
+  // animating. Runs RN's onRender on the CALLING thread (FP-10): call it from
+  // the frame loop, never from the JS thread.
   void pumpNativeAnimated();
 
   // How many times RN's animation engine actually ran, for gates. See
@@ -145,7 +147,7 @@ class ReactHost {
   // Animated loop fires one per frame; a native-driven one fires none.
   // nativeAnimatedTickMicros: wall time spent inside RN's C++ onRender (the
   // node-graph walk + prop apply), summed over every tick. That walk runs on
-  // the JS thread's queue (see pumpNativeAnimated) but executes no JS.
+  // the frame-loop thread (see pumpNativeAnimated) and executes no JS.
   unsigned long jsTimersFired() const {
     return jsTimersFired_->load(std::memory_order_relaxed);
   }
@@ -160,6 +162,8 @@ class ReactHost {
   // advances it. See ReactHost.cpp for the one-clock-per-process caveat.
   static void installFrameCountedAnimationClock();
   static void advanceAnimationClock();
+  // Frames the animation clock has advanced (FP-10 probe reads it per present).
+  static uint64_t animationClockFrames();
 
  private:
   std::shared_ptr<JsThread> jsThread_;

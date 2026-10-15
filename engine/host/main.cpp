@@ -67,6 +67,7 @@
 #include <process.h>
 #endif
 #include "host/FrameTimings.h"
+#include "host/AnimRowProbe.h"
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
 #include "base/GlValidation.h"
@@ -722,6 +723,14 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     if (grabArmed) {
       grabOk = surface.readPixels(&grabPx);
       grabArmed = false;
+    }
+    if (rni::animrow::Enabled()) {  // FP-10 test hook, see AnimRowProbe.h
+      std::vector<rni::Px> rowPx;
+      if (surface.readPixels(&rowPx)) {
+        rni::animrow::OnPresent(rowPx, surface.width(), surface.height(),
+                                paintsTotal + 1,
+                                rni::ReactHost::animationClockFrames());
+      }
     }
     {
       TRACE_EVENT0("raster", "Present");
@@ -2987,8 +2996,8 @@ int main(int argc, char** argv) {
       const unsigned long loopTicks0 = host.nativeAnimatedTicks();
       const unsigned long long loopTickUs0 = host.nativeAnimatedTickMicros();
       for (int frameIndex = 1; frameIndex <= frames; ++frameIndex) {
-        // One NativeAnimated step. Posts to the JS thread, so drain it before
-        // painting or the capture races the value update it is meant to show.
+        // One NativeAnimated step, run on this thread (FP-10). The idle wait
+        // still drains what it posts to JS (onEnd, layout-prop commits).
         auto hf = std::make_unique<rni::FrameTimingsRecorder>();
         hf->RecordVsync();
         hf->RecordBuildStart();
@@ -3068,8 +3077,8 @@ int main(int argc, char** argv) {
       // setTimeout(0) here, so a JS-driven Animated loop shows ~1 per frame);
       // mount_tx = React commits that reached the scene (a JS-driven loop
       // commits every frame). Both stay 0 for a native-driven loop.
-      // tick_us = time inside RN's C++ onRender, which runs on the JS thread's
-      // queue but executes no JS.
+      // tick_us = time inside RN's C++ onRender, on the frame-loop thread
+      // since FP-10; it executes no JS.
       const unsigned long loopTicks = host.nativeAnimatedTicks() - loopTicks0;
       const unsigned long long loopTickUs =
           host.nativeAnimatedTickMicros() - loopTickUs0;

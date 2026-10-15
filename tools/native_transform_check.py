@@ -137,6 +137,6 @@ if m.get('mount_tx', 0) <= 0:
 if failures:
     print('NT_FAIL: %d check(s) failed; first: %s' % (len(failures), failures[0]))
     sys.exit(1)
-print('NATIVE_TRANSFORM_PASS (rotate %s, opacity luma %s, native tick avg %s us on the JS thread, '
+print('NATIVE_TRANSFORM_PASS (rotate %s, opacity luma %s, native tick avg %s us on the frame-loop thread, '
       'JS control js_timers=%d mount_tx=%d)'
       % (seen, lumas, '/'.join('%.1f' % t for t in ticks_us), m['js_timers'], m['mount_tx']))

@@ -244,6 +244,7 @@ add_executable(rn-impeller
   host/Pixel.cpp
   host/OsAppearance.cpp
   host/FrameTimings.cpp
+  host/AnimRowProbe.cpp
   base/Trace.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp

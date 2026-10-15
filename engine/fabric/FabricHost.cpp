@@ -1045,12 +1045,15 @@ void FabricHost::emitScroll(int tag, float offsetX, float offsetY,
           .count() /
       1000.0f;
 
-  // Hop to the JS thread, for the same reason dispatchTouch does: the emitter
-  // reaches into the runtime.
-  runtimeScheduler_->scheduleWork(
-      [scrollEmitter, event](facebook::jsi::Runtime&) {
-        scrollEmitter->onScroll(event);
-      });
+  // FP-10: dispatched on the CALLING thread, which for wheel input is the
+  // platform/frame-loop thread, as RN iOS emits onScroll from the UI thread.
+  // onScroll only queues the event (EventQueue is locked, the payload is built
+  // on JS later) and first offers it to the event listeners, where RN's
+  // NativeAnimatedNodesManager::handleAnimatedEvent runs native Animated.event
+  // drivers ONLY when it is on its render thread. NativeAnimated ticks on the
+  // frame-loop thread since FP-10, so a JS-thread hop here would silently drop
+  // every useNativeDriver onScroll.
+  scrollEmitter->onScroll(event);
 }
 
 // ENG-09 hover/cursor.

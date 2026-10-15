@@ -34,10 +34,10 @@
 // advances the clock by exactly one 60fps frame interval. See
 // ReactHost::advanceAnimationClock().
 //
-// The onRender callback is invoked ON THE JS THREAD (hopped via
-// RuntimeScheduler::scheduleWork) because it walks the animated node graph and
-// calls uiManager->synchronouslyUpdateViewOnUIThread / updateShadowTree --
-// shadow-tree + JSI work, which is JS-thread work in this engine.
+// FP-10: the onRender callback runs ON THE FRAME-LOOP THREAD (RN's UI-tick
+// contract), called directly by ReactHost::pumpNativeAnimated. JS-thread work
+// it triggers (onEnd, value listeners, layout-prop commits) is posted to JS by
+// RN itself. See ReactHost::pumpNativeAnimated for the thread-safety argument.
 #pragma once
 
 #include "base/Trace.h"
@@ -68,7 +68,7 @@ class NativeAnimatedPump {
   // Cheap main-thread early-out: true only while an animation is in flight.
   bool isActive() const { return active_.load(std::memory_order_acquire); }
 
-  // Runs the manager's onRender if still active. Call ON THE JS THREAD.
+  // Runs the manager's onRender if still active. Call on the frame-loop thread.
   void tick() {
     if (!isActive()) {
       return;
@@ -92,8 +92,7 @@ class NativeAnimatedPump {
   }
 
   // Wall time spent inside onRender, summed over all ticks, in microseconds.
-  // This is the JS-THREAD cost of a native-driven animation: C++ only, no JS
-  // executes, but it does occupy the JS thread's queue once per frame.
+  // Frame-loop-thread cost of a native-driven animation; no JS executes.
   unsigned long long tickMicros() const {
     return tickNanos_.load(std::memory_order_relaxed) / 1000ULL;
   }
