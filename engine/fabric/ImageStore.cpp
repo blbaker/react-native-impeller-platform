@@ -14,6 +14,8 @@
 #define STBI_NO_STDIO
 #include "stb_image.h"
 
+#include <condition_variable>
+
 namespace rni::image {
 namespace {
 
@@ -24,6 +26,11 @@ std::unordered_map<std::string, std::shared_ptr<const Decoded>> gCache;
 std::unordered_map<std::string, std::vector<LoadDone>> gPending;
 Fetcher gFetch;
 std::function<void()> gBegin, gEnd;
+// FP-06 teardown fence: completions that finish after StopCallbacks() drop their waiters;
+// StopCallbacks() returns only once no completion callback is still running.
+bool gCallbacksStopped = false;
+int gCallbacksRunning = 0;
+std::condition_variable gCallbacksIdle;
 
 int HexVal(char c) {
   if (c >= '0' && c <= '9') return c - '0';
@@ -231,10 +238,27 @@ void LoadAsync(const std::string& uri, const Headers& headers, LoadDone done) {
       if (r.image) gCache[uri] = r.image;
       waiters = std::move(gPending[uri]);
       gPending.erase(uri);
+      if (gCallbacksStopped) waiters.clear();
+      else ++gCallbacksRunning;
     }
-    for (auto& w : waiters) w(r);
+    if (!waiters.empty()) {
+      for (auto& w : waiters) w(r);
+      std::lock_guard<std::mutex> lock(gMutex);
+      if (--gCallbacksRunning == 0) gCallbacksIdle.notify_all();
+    }
     if (end) end();
   }).detach();
+}
+
+void StopCallbacks() {
+  std::unique_lock<std::mutex> lock(gMutex);
+  gCallbacksStopped = true;
+  gCallbacksIdle.wait(lock, [] { return gCallbacksRunning == 0; });
+}
+
+void StartCallbacks() {
+  std::lock_guard<std::mutex> lock(gMutex);
+  gCallbacksStopped = false;
 }
 
 }  // namespace rni::image

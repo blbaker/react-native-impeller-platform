@@ -72,6 +72,7 @@
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
 #include "base/GlValidation.h"
+#include "base/TestSync.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
@@ -151,6 +152,9 @@ void Usage() {
           "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
+          "                   [--screenshot-after-frames N] [--quit-on-term]\n"
+          "                     (windowed; FP-06 frame-anchored capture, clean\n"
+          "                     exit on SIGTERM/SIGINT)\n"
           "                   [--frame-timings-out <file.json>]  one record per\n"
           "                     presented frame (FP-01)\n"
           "                   [--trace-out <file.json>]  Chrome/Perfetto trace of\n"
@@ -440,6 +444,11 @@ static std::string EscapeNewlines(const std::string& v) {
 // scope (like gFontDirs) so RunWindowed's long positional signature does not
 // grow again. Empty = no windowed typing.
 static std::string gWindowedTypeSpec;
+// FP-06: --screenshot-after-frames N (capture on the first painted frame >= N, so the capture is
+// anchored to the frame-anchored hooks, not to a wall clock a loaded box outruns) and
+// --quit-on-term (SIGTERM/SIGINT end the loop like a window close). -1 / false = off.
+static int gScreenshotAfterFrames = -1;
+static bool gQuitOnTerm = false;
 // FP-11: --vsync auto|swap|software|off and --vsync-log (windowed only).
 static rni::FrameScheduler::Source gVsyncSource = rni::FrameScheduler::Source::kAuto;
 static bool gVsyncSet = false;
@@ -657,14 +666,14 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // app's first committed tree, not a blank window. The headless path keeps
   // waitForJsIdle: its frames are deterministic snapshots, not a live clock.
   const int bootWaitStart = SinceLaunchMs();
-  const bool bundleDrained = host.waitForJsQueueDrained(10000);
+  const bool bundleDrained = host.waitForJsQueueDrained(rni::testsync::ScaledMs(10000));
   // parity item 14: a bundle from Metro starts HMR (Fast Refresh).
   host.devServerSetup(sourceUrl);
   host.connectInspector(sourceUrl, appName);  // parity item 24
   // startSurface takes DEVICE PIXELS and divides by pointScale itself
   // (FabricHost.cpp:279) — so it gets the framebuffer size, not the request.
   fabric.startSurface(appName, 1, (float)pxWidth, (float)pxHeight, pointScale);
-  const bool surfaceDrained = host.waitForJsQueueDrained(10000);
+  const bool surfaceDrained = host.waitForJsQueueDrained(rni::testsync::ScaledMs(10000));
   printf("rn-impeller: boot_wait_ms=%d drained=%d/%d\n",
          SinceLaunchMs() - bootWaitStart, bundleDrained ? 1 : 0,
          surfaceDrained ? 1 : 0);
@@ -875,7 +884,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // BUFFERED executor: it is queued, not synchronous, so sampling on the same
   // turn reads the tree from before React re-rendered.
   auto reportNodesAfterResize = [&]() {
-    host.waitForJsIdle(2000);
+    host.waitForJsIdle(rni::testsync::ScaledMs(2000));
     printf("rn-impeller: scene_nodes_after_resize=%zu\n", sceneGraph.nodeCount());
     fflush(stdout);
   };
@@ -1244,7 +1253,23 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
            (typePlan && (!typeDone || frameIndex <= typeDoneFrame + 3));
   };
 
+  if (gQuitOnTerm) rni::testsync::InstallQuitSignals();
+  if (rni::testsync::FrameDelayMs() > 0) {
+    printf("rn-impeller: test_frame_delay_ms=%d\n", rni::testsync::FrameDelayMs());
+    fflush(stdout);
+  }
   while (!surface.shouldClose()) {
+    // FP-06: a quit signal ends the loop at a frame boundary, after the JS
+    // thread drained what the last input posted (its handlers' counters are
+    // printed below), exactly like a window close.
+    if (gQuitOnTerm && rni::testsync::QuitRequested()) {
+      const bool idle = host.waitForJsIdle(rni::testsync::ScaledMs(5000));
+      printf("rn-impeller: quit_requested signal=%d frame=%d js_idle=%d\n",
+             rni::testsync::QuitSignal(), frameIndex, idle ? 1 : 0);
+      fflush(stdout);
+      break;
+    }
+    rni::testsync::DelayFrame();
     auto loopFrame = std::make_unique<rni::FrameTimingsRecorder>();
     // FP-11: the loop's own requests. Without --idle-skip every iteration is a
     // frame (the old paint-every-frame loop, now paced by vsync); with it only
@@ -1367,12 +1392,19 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // without --screenshot-after.
     const bool typeCaptureReady =
         typePlan && typeDone && frameIndex >= typeDoneFrame + 2;
+    // FP-06: --screenshot-after-frames alone arms the capture; with
+    // --screenshot-after too, both must hold.
+    const bool framesReady =
+        gScreenshotAfterFrames < 0 || frameIndex >= gScreenshotAfterFrames;
+    const bool msReady = screenshotAfterMs >= 0
+                             ? sinceStartMs >= screenshotAfterMs
+                             : gScreenshotAfterFrames >= 0;
     const bool wantTimed =
         shouldPaint && !screenshotPath.empty() && !capturedTimed &&
+        framesReady &&
         (typePlan ? (typeCaptureReady && (screenshotAfterMs < 0 ||
                                           sinceStartMs >= screenshotAfterMs))
-                  : (screenshotAfterMs >= 0 &&
-                     sinceStartMs >= screenshotAfterMs));
+                  : msReady);
     grabOk = false;
     grabArmed = wantFirst || wantTimed;
 
@@ -1405,7 +1437,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       // immediately and then exiting at --frames would end the process before
       // any handler ran, making a WORKING dispatch look dead. Same reasoning
       // as the headless --tap probe's waitForJsIdle.
-      host.waitForJsIdle(5000);
+      host.waitForJsIdle(rni::testsync::ScaledMs(5000));
     }
 
     // ⛔ SYNTHETIC-SCROLL HOOK — WEAKER EVIDENCE, EXACTLY LIKE THE CLICK ONE.
@@ -1423,7 +1455,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       // Same reason the click hook waits: onScroll is dispatched onto the JS
       // thread, so exiting at --frames without draining it would make a working
       // emitter look dead.
-      host.waitForJsIdle(5000);
+      host.waitForJsIdle(rni::testsync::ScaledMs(5000));
     }
 
     // ENG-09 hover/cursor. Synthetic-hover hook, and DELIBERATELY THE WEAKER
@@ -1449,7 +1481,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                p.first, p.second);
         fflush(stdout);
         surface.synthesiseHover(p.first, p.second);
-        host.waitForJsIdle(5000);
+        host.waitForJsIdle(rni::testsync::ScaledMs(5000));
       } else if (idx == hoverPoints.size() && hoverLeaveAtEnd) {
         // After the last point, optionally drive the cursor OUT of the window,
         // exercising the cursor-enter(leave) path and asserting the hovered
@@ -1457,7 +1489,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         printf("rn-impeller: hover_leave_requested (cursor exits window)\n");
         fflush(stdout);
         surface.synthesiseCursorLeave();
-        host.waitForJsIdle(5000);
+        host.waitForJsIdle(rni::testsync::ScaledMs(5000));
       }
     }
 
@@ -1498,7 +1530,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                   ks.key.c_str());
           return 1;
         }
-        host.waitForJsIdle(5000);
+        host.waitForJsIdle(rni::testsync::ScaledMs(5000));
       }
     }
 
@@ -1522,7 +1554,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                   "installed\n");
           return 1;
         }
-        host.waitForJsIdle(5000);
+        host.waitForJsIdle(rni::testsync::ScaledMs(5000));
       }
     }
 
@@ -1544,7 +1576,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
           printf("rn-impeller: type_focus=%d at=%.1f,%.1f\n", typeFocusTag,
                  typeX, typeY);
           fflush(stdout);
-          host.waitForJsIdle(5000);
+          host.waitForJsIdle(rni::testsync::ScaledMs(5000));
         }
       } else if (typeNext < typeTokens.size()) {
         const TypeToken& tk = typeTokens[typeNext++];
@@ -1577,9 +1609,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
             fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
             break;
         }
-        host.waitForJsIdle(5000);
+        host.waitForJsIdle(rni::testsync::ScaledMs(5000));
       } else {
-        host.waitForJsIdle(5000);
+        host.waitForJsIdle(rni::testsync::ScaledMs(5000));
         // Read the field the plan focused, even if Enter blurred it since.
         const int tag = typeFocusTag;
         const std::string v = sceneGraph.textInputValueFor(tag);
@@ -1619,7 +1651,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         // double-click interval, which a real mouse never does (GLFW
         // callbacks do not wait for JS). One event per frame (~16 ms) keeps
         // a synthetic double click as tight as a human one.
-        if (idx + 1 == mouseSequence.size()) host.waitForJsIdle(5000);
+        if (idx + 1 == mouseSequence.size()) host.waitForJsIdle(rni::testsync::ScaledMs(5000));
       }
     }
 
@@ -2038,6 +2070,10 @@ int main(int argc, char** argv) {
     // yields two frames to compare; see tools/ci-animate.sh for why a single
     // capture cannot prove the repaint loop is alive.
     else if (a == "--screenshot-first") screenshotFirst = next("--screenshot-first");
+    // FP-06 (windowed): capture --screenshot on the first painted frame >= N.
+    else if (a == "--screenshot-after-frames") gScreenshotAfterFrames = atoi(next("--screenshot-after-frames").c_str());
+    // FP-06 (windowed): SIGTERM/SIGINT quit the loop cleanly (exit counters printed).
+    else if (a == "--quit-on-term") gQuitOnTerm = true;
     // "--stall-after-frames N:MS" — starve the frame loop for MS milliseconds
     // after frame N while GLFW keeps dispatching events. Reproduces the macOS
     // modal-resize condition (loop blocked, callbacks still firing) on every

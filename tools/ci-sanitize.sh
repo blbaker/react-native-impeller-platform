@@ -17,6 +17,9 @@ BUILD="$ROOT/engine/build-asan"
 SAN_BIN="$BUILD/stage/bin/rn-impeller"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ci-sanitize.XXXX")"
 fail() { echo "SANITIZE_FAIL: $*"; exit 1; }
+# FP-06: the instrumented binary is 2-5x slower; every gate scales its wait ceilings (never its
+# measured intervals) by this, and so does the engine (base/TestSync.h).
+export RNI_TIME_SCALE="${RNI_TIME_SCALE:-4}"
 
 echo "== 1. build engine/build-asan (RNI_SANITIZE=address,undefined)"
 cmake -S engine -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -35,7 +38,9 @@ echo "== 2. instrumentation"
 SYMS="$(nm "$SAN_BIN" 2>/dev/null)"
 grep -q ' __asan_init$' <<<"$SYMS" || fail "no __asan_init in $SAN_BIN: not ASan-instrumented"
 grep -q ' __ubsan_handle_add_overflow$' <<<"$SYMS" || fail "no __ubsan_handle_add_overflow in $SAN_BIN: not UBSan-instrumented"
-ldd "$SAN_BIN" | grep -q "$BUILD/stage/bin/libimpeller.so" || fail "libimpeller.so not resolved from the stage dir"
+# ldd output captured first: grep -q on the pipe SIGPIPEs ldd under pipefail (flaked under load, FP-06).
+LDD="$(ldd "$SAN_BIN")"
+grep -q "$BUILD/stage/bin/libimpeller.so" <<<"$LDD" || fail "libimpeller.so not resolved from the stage dir"
 SYMBOLIZER="$(command -v llvm-symbolizer || ls /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -1)"
 [ -n "$SYMBOLIZER" ] || fail "no llvm-symbolizer: reports would have no function names"
 export ASAN_SYMBOLIZER_PATH="$SYMBOLIZER"
@@ -70,6 +75,8 @@ run_gate() {  # gate
   echo "ok $g runs=$stamps reports=0 ($(tail -1 "$dir/gate.log" | cut -c1-110))"
 }
 
+# --build-only: stop after the instrumented build (tools/ci-load-proof.sh builds before its hog).
+if [ "${1:-}" = --build-only ]; then echo "SANITIZE_BUILT"; exit 0; fi
 echo "== 3. gates on the sanitized binary"
 if [ -n "${SANITIZE_GATES:-}" ]; then
   read -r -a GATES <<<"$SANITIZE_GATES"

@@ -249,6 +249,7 @@ add_executable(rn-impeller
   base/Trace.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
+  base/TestSync.cpp
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/OsAppearanceDarwin.mm>
   # The offscreen surface, one implementation per platform. Selected here rather
   # than with #ifdefs inside one file: the two share no context-acquisition code

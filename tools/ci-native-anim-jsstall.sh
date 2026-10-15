@@ -41,7 +41,7 @@ trap cleanup EXIT
 run() {  # app tag frames [extra args...]
   local app="$1" tag="$2" frames="$3" rc=0; shift 3
   ( cd "$(dirname "$BIN")" && RNI_TEST_ANIM_ROW=150 timeout 180 \
-      xvfb-run -a -s "-screen 0 1280x1024x24" "$BIN" --window --scale 1 \
+      xvfb-run -a -f "$WORK/xvfb.auth" -s "-screen 0 1280x1024x24" "$BIN" --window --scale 1 \
       --width 400 --height 300 --bundle "$BUNDLE" --app-name "$app" \
       --probe-banner off --supersample-rnsvg 0 --frames "$frames" "$@" ) \
     > "$WORK/$tag.log" 2>&1 || rc=$?

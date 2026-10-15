@@ -26,7 +26,7 @@ for b in "$ROT" "$IMG" "$LH"; do [ -s "$b" ] || fail "missing committed bundle $
 WORK="$(mktemp -d)"; SRV=""
 cleanup() { [ -n "$SRV" ] && kill "$SRV" 2> /dev/null; [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"; }
 trap cleanup EXIT
-WIN=(); [ "$(uname -s)" = Linux ] && WIN=(xvfb-run -a -s "-screen 0 1280x1024x24")
+WIN=(); [ "$(uname -s)" = Linux ] && WIN=(xvfb-run -a -f "$WORK/xvfb.auth" -s "-screen 0 1280x1024x24")
 run() {  # arm args...
   local arm="$1" rc=0; shift
   ( cd "$(dirname "$BIN")" && timeout 300 "$@" ) > "$WORK/$arm.log" 2>&1 || rc=$?

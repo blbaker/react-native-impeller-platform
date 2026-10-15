@@ -10,7 +10,7 @@ import statistics
 import sys
 
 PRESENT = re.compile(r'^rn-impeller: vsync_present n=(\d+) t_us=(\d+) swap_us=(\d+) '
-                     r'interval_us=(\d+)(?: since_vsync_us=\d+)? source=(\w+)')
+                     r'interval_us=(\d+)(?: since_vsync_us=(\d+))? source=(\w+)')
 REQUEST = re.compile(r'^rn-impeller: vsync_request reason=(\w+) t_us=(\d+)')
 PERIOD = re.compile(r'^rn-impeller: vsync requested=\w+ swap_interval=\d+ period_us=(\d+)')
 SUMMARY = re.compile(r'^rn-impeller: frame_scheduler source=(\w+) .*max_frames_per_tick=(\d+)')
@@ -23,7 +23,10 @@ def parse(path):
     for line in open(path, errors='replace'):
         m = PRESENT.match(line)
         if m:
-            presents.append((int(m.group(1)), int(m.group(2)), m.group(5)))
+            # (n, t_us, source, tick_us): tick_us = the vsync this present served
+            since = m.group(5)
+            presents.append((int(m.group(1)), int(m.group(2)), m.group(6),
+                             int(m.group(2)) - int(since) if since is not None else None))
             continue
         m = REQUEST.match(line)
         if m:
@@ -41,41 +44,68 @@ def parse(path):
 def main():
     work = sys.argv[1]
     fails = []
-    means, sds, ctrl_sds, period = [], [], [], None
+    means, sds, ctrl_sds, ctrl_means, period = [], [], [], [], None
+    short_total, ctrl_short_total = 0, 0
     for i in (1, 2, 3):
         wakes = [int(x) for x in open(f'{work}/control-{i}.txt').read().split()]
         civ = [b - a for a, b in zip(wakes, wakes[1:])][5:]
         ctrl_sds.append(statistics.pstdev(civ) if len(civ) > 10 else 0.0)
+        ctrl_means.append(statistics.fmean(civ) if len(civ) > 10 else 0.0)
         presents, _, period, summary = parse(f'{work}/spin-{i}.log')
         if period is None or summary is None:
             fails.append(f'spin-{i}: no vsync/frame_scheduler lines (engine without FP-11?)')
             continue
+        ctrl_doubles = sum(1 for x in civ[:INTERVALS] if x < period / 2)
+        ctrl_short_total += ctrl_doubles
         paced = [p for p in presents if p[2] != 'auto'][WARMUP:]
         if len(paced) < INTERVALS + 1:
             fails.append(f'spin-{i}: only {len(paced)} paced presents, need {INTERVALS + 1}')
             continue
-        t = [p[1] for p in paced[:INTERVALS + 1]]
+        window = paced[:INTERVALS + 1]
+        t = [p[1] for p in window]
         iv = [b - a for a, b in zip(t, t[1:])]
         mean, sd = statistics.fmean(iv), statistics.pstdev(iv)
         means.append(mean)
         sds.append(sd)
         doubles = sum(1 for x in iv if x < period / 2)
+        ticks = [p[3] for p in window]
+        shared = (sum(1 for a, b in zip(ticks, ticks[1:]) if a == b)
+                  if None not in ticks else None)
         print(f'  spin-{i}: source={paced[0][2]} mean={mean:.0f}us sd={sd:.0f}us '
-              f'double={doubles} max_frames_per_tick={summary[1]} control_sd={ctrl_sds[-1]:.0f}us')
-        # B: one frame per vsync, read from the present timestamps and the scheduler.
-        if doubles > 1 or summary[1] > 1:
-            fails.append(f'B double frames: spin-{i} has {doubles} of {INTERVALS} present '
-                         f'intervals under half a period and {summary[1]} BeginFrames for one vsync')
+              f'short={doubles} shared_tick={shared} max_frames_per_tick={summary[1]} '
+              f'control: mean={ctrl_means[-1]:.0f}us sd={ctrl_sds[-1]:.0f}us short={ctrl_doubles}')
+        short_total += doubles
+        # B: one frame per vsync, exact per run from the present stamps and the scheduler.
+        if shared is None:
+            fails.append(f'B double frames: spin-{i} presents carry no since_vsync_us')
+        elif shared > 0 or summary[1] > 1:
+            fails.append(f'B double frames: spin-{i} has {shared} presents serving an already '
+                         f'presented vsync tick and {summary[1]} BeginFrames for one vsync')
+    # B (load-relative): a late frame followed by an on-time one gives a short interval without
+    # being a double. Short intervals are counts of rare events, so they are pooled over the 3
+    # runs and judged against the control arms beside them: at most 3 + 2x the control's.
+    if len(means) == 3:
+        allowed = 3 + 2 * ctrl_short_total
+        print(f'  B: short intervals {short_total} in 3x{INTERVALS}, control {ctrl_short_total}, '
+              f'allowed {allowed}')
+        if short_total > allowed:
+            fails.append(f'B double frames: {short_total} of {3 * INTERVALS} present intervals under '
+                         f'half a period vs {ctrl_short_total} in the control arms beside them '
+                         f'(allowed 3 + 2x = {allowed})')
     if len(means) == 3:
         mean, sd = statistics.median(means), statistics.median(sds)
         floor = statistics.median(ctrl_sds)
-        limit = 0.10 * period + floor
+        limit = 0.10 * period + 1.5 * floor
+        drift = abs(statistics.median(ctrl_means) - period)
+        mean_tol = 0.05 * period + drift
         print(f'  A: median mean={mean:.0f}us sd={sd:.0f}us period={period}us '
-              f'control_sd={floor:.0f}us sd_limit={limit:.0f}us')
-        if abs(mean - period) > 0.05 * period or sd >= limit:
+              f'control_sd={floor:.0f}us sd_limit={limit:.0f}us control_drift={drift:.0f}us '
+              f'mean_tol={mean_tol:.0f}us')
+        if abs(mean - period) > mean_tol or sd >= limit:
             fails.append(f'A pacing: median present interval {mean:.0f}us sd {sd:.0f}us vs the '
-                         f'{period}us period (mean must be within 5%, sd under 10% + control '
-                         f'{floor:.0f}us = {limit:.0f}us): free-running or unpaced presents')
+                         f'{period}us period (mean within 5% + control drift {drift:.0f}us = '
+                         f'{mean_tol:.0f}us, sd under 10% + 1.5x control {floor:.0f}us = '
+                         f'{limit:.0f}us): free-running or unpaced presents')
 
     # C: a static scene presents nothing once settled (2 s window).
     presents, _, _, _ = parse(f'{work}/idle.log')

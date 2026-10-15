@@ -62,6 +62,13 @@ using LoadDone = std::function<void(const LoadResult&)>;
 // share one fetch. Remote failures are not cached, so a later load retries.
 void LoadAsync(const std::string& uri, const Headers& headers, LoadDone done);
 
+// FP-06: teardown fence. A remote completion's waiters dispatch RN events (onLoad) from the
+// fetch thread; ~FabricHost calls StopCallbacks() before stopSurface's empty-tree commit, so no
+// waiter reads an EventEmitter while that commit unmounts it. Completions after it are dropped.
+// StartCallbacks() re-arms delivery (FabricHost's constructor).
+void StopCallbacks();
+void StartCallbacks();
+
 // Exposed for tests: the bytes a local URI names, or false.
 bool ReadSourceBytes(const std::string& uri, std::vector<uint8_t>& out);
 
