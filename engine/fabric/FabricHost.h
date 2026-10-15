@@ -32,8 +32,9 @@ class FabricHost {
  public:
   // instance and sceneGraph must outlive this host. Installs UIManagerBinding
   // into the runtime via the Scheduler's bridgelessBindingsExecutor.
-  // typography is the surface's ImpellerTypographyContext: it backs the real
-  // TextLayoutManager, without which every <Text> measures 0x0 (RN's cxx stub).
+  // typography is the surface's ImpellerTypographyContext; non-null turns on the
+  // real TextLayoutManager (without it every <Text> measures 0x0, RN's cxx stub),
+  // which measures on its own thread's context (FP-12, text/TypographyContexts.h).
   FabricHost(facebook::react::ReactInstance& instance, SceneGraph* sceneGraph,
              ImpellerTypographyContext typography, bool logMutations,
              std::shared_ptr<DisplayMetrics> displayMetrics = nullptr);

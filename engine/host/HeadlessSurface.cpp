@@ -1,5 +1,6 @@
 #include "base/GlValidation.h"
 #include "host/HeadlessSurface.h"
+#include "text/TypographyContexts.h"
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -21,7 +22,10 @@ void* ProcAddr(const char* name, void*) { return (void*)eglGetProcAddress(name);
 }  // namespace
 
 HeadlessSurface::~HeadlessSurface() {
-  if (typography_) ImpellerTypographyContextRelease(typography_);
+  if (typography_) {
+    rni::typography::Unbind(typography_);
+    ImpellerTypographyContextRelease(typography_);
+  }
   if (surface_) ImpellerSurfaceRelease(surface_);
   if (context_) ImpellerContextRelease(context_);
 }
@@ -205,6 +209,8 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
 
   typography_ = ImpellerTypographyContextNew();
   if (!typography_) return fail("ImpellerTypographyContextNew returned null");
+  // FP-12: the paint thread's context; other threads (measure on JS) get their own.
+  rni::typography::Bind(typography_);
 
   if (!fboComplete || forceFboFail) {
     // Degraded: no drawable. surface_ stays null; the caller falls back to a

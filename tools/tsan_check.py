@@ -50,6 +50,11 @@ def summary(block):
     """Kind + the first frame of the first stack that is not a TSan interceptor."""
     m = re.search(r"WARNING: ThreadSanitizer: ([a-z -]+)", block)
     kind = m.group(1).strip() if m else "report"
+    if typography_context(block):
+        # FP-12: name the defect, not the annotation frame both stacks start with.
+        st = [v for k, v in stacks(block).items() if re.match(r"(Previous )?(write|Write|read|Read) of size", k)]
+        callers = sorted({next((f for f in s[1:] if "NoteExclusiveUse" not in f), "?") for s in st})
+        return f"typography-context race (one ImpellerTypographyContext used from two threads) in {' / '.join(callers)}"[:220]
     for line in block.splitlines():
         f = re.match(r"^\s+#\d+ (.*)", line)
         if f and not re.match(r"(__tsan_|__interceptor_|<null>|mem(set|cpy|move)|free|malloc|realloc|operator (new|delete))", f.group(1)):

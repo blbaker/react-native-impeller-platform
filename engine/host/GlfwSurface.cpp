@@ -3,6 +3,7 @@
 #include <chrono>
 #include "base/GlValidation.h"
 #include "host/GlfwSurface.h"
+#include "text/TypographyContexts.h"
 
 #if defined(_WIN32)
 // Windows: keep GLFW from pulling in <GL/gl.h> (opengl32's GL 1.1). The
@@ -290,7 +291,10 @@ bool GlfwKeyFromName(const std::string& name, int* outKey) {
 }  // namespace
 
 GlfwSurface::~GlfwSurface() {
-  if (typography_) ImpellerTypographyContextRelease(typography_);
+  if (typography_) {
+    rni::typography::Unbind(typography_);
+    ImpellerTypographyContextRelease(typography_);
+  }
   if (surface_) ImpellerSurfaceRelease(surface_);
   if (context_) ImpellerContextRelease(context_);
   // ENG-09 hover/cursor. Destroy the standard cursors before glfwTerminate,
@@ -792,6 +796,8 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
 
   typography_ = ImpellerTypographyContextNew();
   if (!typography_) return fail("ImpellerTypographyContextNew returned null");
+  // FP-12: the paint thread's context; other threads (measure on JS) get their own.
+  rni::typography::Bind(typography_);
 
   std::printf("rn-impeller: GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
   // ⛔ REPORT WHAT GL GRANTED, NOT WHAT WE ASKED FOR. GLFW_SAMPLES is a HINT:

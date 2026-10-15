@@ -77,6 +77,7 @@
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
 #include "text/FontRegistry.h"
+#include "text/TypographyContexts.h"
 
 // ENG-22: --font-dir values, registered with each surface's typography context
 // right after init and BEFORE anything measures (see text/FontRegistry.h).
@@ -1767,6 +1768,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
+  rni::typography::PrintSummary();  // FP-12
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
   // a completely different failure from touch_downs=3 touch_hits=0 (clicks
@@ -3162,6 +3164,7 @@ int main(int argc, char** argv) {
     FinishFrameTimings(headlessTimings);
     FinishTrace();
     rni::glvalidation::Finish();
+    rni::typography::PrintSummary();  // FP-12
   }
 
   std::vector<rni::Px> px;

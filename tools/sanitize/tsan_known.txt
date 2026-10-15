@@ -3,6 +3,5 @@
 # an entry is no longer seen (delete the line in the pass that fixes it). One per line:
 #   <matcher in tools/tsan_check.py> <owning pass>
 
-# measure (ImpellerTextLayoutManager, JS thread) and paint (SceneGraph, main thread) share the
-# surface's ONE ImpellerTypographyContext; impeller.h says typography contexts are single-thread.
-typography-context FP-12
+# (none: FP-12 gave measure and paint their own typography contexts. tools/tsan_check.py still
+# names a typography-context race as such, and it FAILS like any other new report.)

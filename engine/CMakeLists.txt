@@ -300,6 +300,7 @@ add_executable(rn-impeller
   scenegraph/BorderDashRounded.cpp
   text/ImpellerTextLayoutManager.cpp
   text/FontRegistry.cpp
+  text/TypographyContexts.cpp
   text/FontFamily.cpp
   text/FontFallback.cpp
   fabric/platform/impeller/PlatformColorTable.cpp
