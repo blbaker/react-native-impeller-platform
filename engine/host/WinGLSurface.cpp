@@ -27,6 +27,7 @@
 #include "base/GlValidation.h"
 #include "fabric/ImageStore.h"
 #include "host/WinGLSurface.h"
+#include "text/TypographyContexts.h"
 
 #include <cstdio>
 
@@ -71,7 +72,10 @@ const char* EglErrStr(EGLint e) {
 }  // namespace
 
 WinGLSurface::~WinGLSurface() {
-  if (typography_) ImpellerTypographyContextRelease(typography_);
+  if (typography_) {
+    rni::typography::Unbind(typography_);
+    ImpellerTypographyContextRelease(typography_);
+  }
   if (surface_) ImpellerSurfaceRelease(surface_);
   if (context_) ImpellerContextRelease(context_);
   if (g_active == this) g_active = nullptr;
@@ -237,6 +241,8 @@ bool WinGLSurface::init(int width, int height, std::string* error) {
 
   typography_ = ImpellerTypographyContextNew();
   if (!typography_) return fail("ImpellerTypographyContextNew returned null");
+  // FP-12: the paint thread's context; other threads (measure on JS) get their own.
+  rni::typography::Bind(typography_);
 
   // Say the backend's own name, unconditionally. Same rule as the Linux
   // GL_RENDERER line: whenever a fallback exists, assume you are on it until a

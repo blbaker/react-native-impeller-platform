@@ -244,6 +244,7 @@ add_executable(rn-impeller
   host/Pixel.cpp
   host/OsAppearance.cpp
   host/FrameTimings.cpp
+  host/FrameScheduler.cpp
   host/AnimRowProbe.cpp
   base/Trace.cpp
   base/SanitizerHooks.cpp
@@ -301,6 +302,7 @@ add_executable(rn-impeller
   scenegraph/BorderDashRounded.cpp
   text/ImpellerTextLayoutManager.cpp
   text/FontRegistry.cpp
+  text/TypographyContexts.cpp
   text/FontFamily.cpp
   text/FontFallback.cpp
   fabric/platform/impeller/PlatformColorTable.cpp

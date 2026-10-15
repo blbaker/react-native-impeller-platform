@@ -3,7 +3,10 @@
 # rebuilds the TSan binary through the gate, and must make it FAIL naming the defect.
 #   A  SceneGraph::applyMutations drops its mutex_ lock     -> new data race in SceneGraph
 #   B  the scene version counter becomes a plain uint64_t   -> new data race on version()/bumpVersion
-#   C  TsanAnnotate.h NoteExclusiveUse becomes a no-op       -> known typography race "not seen"
+#   C  measure shares paint's typography context again (FP-12 per-thread slot made process-wide)
+#                                                            -> new typography-context race
+#      (until FP-12 this arm made NoteExclusiveUse a no-op and expected the then-known race to go
+#      unseen; FP-12 fixed that race, so the arm now re-introduces it instead)
 # Arms run only the stress fixture (TSAN_RUNS): JS commits overlap main paints, and its <Image>
 # re-fetches so the fetch thread bumps the scene version while main reads it (--idle-skip).
 set -uo pipefail
@@ -11,7 +14,7 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/bin:$PATH"; unset RNI_BIN
 LOG="$(mktemp -d "${TMPDIR:-/tmp}/mut-tsan.XXXX")"
 killed=0
-FILES=(engine/scenegraph/SceneGraph.cpp engine/scenegraph/SceneGraph.h engine/base/TsanAnnotate.h)
+FILES=(engine/scenegraph/SceneGraph.cpp engine/scenegraph/SceneGraph.h engine/text/TypographyContexts.cpp)
 for f in "${FILES[@]}"; do cp "$f" "$LOG/$(basename "$f").bak"; done
 restore() { for f in "${FILES[@]}"; do cp "$LOG/$(basename "$f").bak" "$f"; done; }
 trap restore EXIT
@@ -57,10 +60,11 @@ mutate engine/scenegraph/SceneGraph.cpp \
 '  ++*reinterpret_cast<uint64_t*>(&version_);  // MUTANT B'
 arm B '^  NEW \[churn-[a-z]+\] data race in rni::SceneGraph::(version|bumpVersion)'
 
-mutate engine/base/TsanAnnotate.h \
-'  if (object != nullptr) __tsan_write1(const_cast<void*>(object));' \
-'  (void)object;  // MUTANT C'
-arm C "known race 'typography-context' was not seen"
+mutate engine/text/TypographyContexts.cpp \
+'thread_local Slot tSlot;' \
+'Slot tSlot;  // MUTANT C: one typography context for every thread'
+arm C '^  NEW \[churn-[a-z]+\] typography-context race'
+
 
 trap - EXIT
 for f in "${FILES[@]}"; do cmp -s "$f" "$LOG/$(basename "$f").bak" || die "$f not restored"; done

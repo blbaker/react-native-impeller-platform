@@ -17,3 +17,11 @@ tools/ci-hover.sh             # windowed input
 tools/ci-scroll.sh            # ScrollView
 tools/ci-image-net.sh         # network images
 tools/ci-exit-race.sh         # teardown order
+# Light gates added by parity passes (each < ~2 min). A pass whose new gate is light appends it here,
+# so later passes keep it green (FP-10 broke FP-02's ci-trace because it was not in this set).
+tools/ci-frame-timings.sh     # FP-01 frame-timing records
+tools/ci-trace.sh             # FP-02 trace spans on the right threads
+tools/ci-gl-validation.sh     # FP-05 zero KHR_debug errors
+tools/ci-native-anim-jsstall.sh  # FP-10 native animation survives JS stalls
+tools/ci-vsync.sh             # FP-11 vsync pacing, one frame per vsync, idle = 0 presents
+tools/ci-typography-threads.sh  # FP-12 measure == paint, one typography context per thread (TSan)

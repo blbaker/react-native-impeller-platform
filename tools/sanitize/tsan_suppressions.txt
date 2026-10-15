@@ -11,3 +11,12 @@
 # that impeller.h says are single-thread is still checked: engine/base/TsanAnnotate.h
 # records it at our call sites, which this entry does not cover.
 called_from_lib:libimpeller.so
+
+# Mesa's llvmpipe driver (libgallium-*.so, the xvfb GL) is not instrumented. Its worker
+# threads ('llvmpipe-N') lock and broadcast on a fence mutex/cond the main thread then
+# destroys inside the same driver; the ordering is through atomics TSan cannot see (seen
+# once in 6 text-window runs during FP-12: pthread_mutex_destroy / pthread_cond_destroy,
+# every frame inside libgallium, allocated and created by it). No engine/ frame is involved.
+# race:, not called_from_lib: (the latter hides the driver's mutex calls and TSan then
+# reports lock-order inversions against our locks that it can no longer order).
+race:libgallium

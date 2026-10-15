@@ -9,10 +9,11 @@
 // inside a dir is registered under the family name stored IN the font (no
 // alias), which is the same name RN passes through TextAttributes::fontFamily.
 //
-// Must run right after the surface creates its typography context and BEFORE
-// FabricHost mounts anything: measure (ImpellerTextLayoutManager) and paint
-// (SceneGraph) share this one context, and a face registered after the first
-// measure would leave already-measured boxes sized for the fallback.
+// Must run right after the surface creates (and binds) its typography context and
+// BEFORE FabricHost mounts anything: the files join the process-wide font list
+// (text/TypographyContexts.h) that the measure context (JS thread) and the paint
+// context (main thread) both register before first use, and a face added after
+// the first measure would leave already-measured boxes sized for the fallback.
 #include <impeller.h>
 
 #include <string>

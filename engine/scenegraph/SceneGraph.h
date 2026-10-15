@@ -1025,7 +1025,12 @@ class SceneGraph {
   std::function<void()> damageWake_;
   std::unordered_map<facebook::react::Tag, SceneNode> nodes_;
   std::vector<facebook::react::Tag> roots_;
+  // The surface's context, created on and bound to the paint thread. Non-null
+  // means text is on; every USE goes through threadTypography() (FP-12).
   ImpellerTypographyContext typography_{nullptr};
+  // The calling thread's own context (text/TypographyContexts.h): main paints
+  // with the surface's, JS (content size, commands) with its own.
+  ImpellerTypographyContext threadTypography() const;
   // <TextInput>. ENG-01b. Focus is a singleton: at most one field edits at a
   // time. tiFocused_==0 means no field is focused (caret not painted anywhere).
   // tiEditValue_ is the live buffer the keystroke loop mutates; tiCaret_ is the

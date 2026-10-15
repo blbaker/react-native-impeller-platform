@@ -29,7 +29,7 @@ class ImpellerTextLayoutManager : public facebook::react::TextLayoutManager {
  public:
   ImpellerTextLayoutManager(
       const std::shared_ptr<const facebook::react::ContextContainer>& contextContainer,
-      ImpellerTypographyContext typography);
+      bool haveTypography);
 
   facebook::react::TextMeasurement measure(
       const facebook::react::AttributedStringBox& attributedStringBox,
@@ -38,7 +38,9 @@ class ImpellerTextLayoutManager : public facebook::react::TextLayoutManager {
       const facebook::react::LayoutConstraints& layoutConstraints) const override;
 
  private:
-  ImpellerTypographyContext typography_{nullptr};
+  // FP-12: measure uses the calling thread's own typography context
+  // (text/TypographyContexts.h), never the paint thread's.
+  bool haveTypography_{false};
 };
 
 }  // namespace rni

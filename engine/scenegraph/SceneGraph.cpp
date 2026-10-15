@@ -42,6 +42,7 @@
 #include "text/SecureText.h"
 #include "text/TextStyle.h"
 #include "text/TextTransform.h"
+#include "text/TypographyContexts.h"
 
 // ENG item 2 — supersample offscreen render. Direct GL entry points link on
 // Linux (EGL GLESv2) and macOS (ANGLE dylibs). On Windows they are resolved at
@@ -378,6 +379,10 @@ bool ParseTransformOps(const folly::dynamic& value, react::Transform& out) {
 
 SceneGraph::SceneGraph(ImpellerTypographyContext typography)
     : typography_(typography) {}
+
+ImpellerTypographyContext SceneGraph::threadTypography() const {
+  return typography_ != nullptr ? rni::typography::ForThisThread() : nullptr;
+}
 
 SceneGraph::~SceneGraph() {
   {
@@ -1844,8 +1849,8 @@ ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const
                                                     float w, int shadow) {
   if (typography_ == nullptr) return nullptr;
   std::vector<ImpellerPaint> runPaints;
-  rni::tsan::NoteExclusiveUse(typography_);  // FP-04: impeller.h typography contexts are single-thread
-  ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
+  rni::tsan::NoteExclusiveUse(threadTypography());  // FP-04: impeller.h typography contexts are single-thread
+  ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(threadTypography());
   if (pb == nullptr) return nullptr;
   for (const TextRun& run : runs) {
     if (run.attachment) {
@@ -1901,7 +1906,7 @@ ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const
     ApplyTextDecoration(style, run.decoLine, run.decoStyle, decoC);
     // SC-19: one push per fallback segment (text/FontFallback.h); same split in measure.
     const std::string primary = run.fontFamily.empty() ? "" : rni::ResolveFontFamily(run.fontFamily);
-    const std::vector<rni::FontSegment> segs = rni::SplitFontFallback(typography_, primary, run.text);
+    const std::vector<rni::FontSegment> segs = rni::SplitFontFallback(threadTypography(), primary, run.text);
     for (const rni::FontSegment& seg : segs) {
       rni::ApplySegmentFamily(style, primary, seg, segs.size() == 1);
       ImpellerParagraphBuilderPushStyle(pb, style);
@@ -2606,12 +2611,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     // content box, and textAlignVertical overrides either.
     const float lineH = TextInputLineH(node);  // ENG-23 TextInput
     // ENG-25: the same helper the multiline hit test uses (TiGeomOf).
-    const float ty = TextInputTextTop(typography_, node, y, w, h, drawStr);
+    const float ty = TextInputTextTop(threadTypography(), node, y, w, h, drawStr);
     const auto& insets = node.layoutMetrics.contentInsets;
     // A small left inset so the glyphs (and caret) do not sit on the border.
     // Shared with glyphBoundariesLocked (item 3 click-to-caret): a click and
     // the painted text must agree on where the text starts.
-    const float pad = TextInputPadL(node) + TextInputAlignDx(typography_, node, drawStr, w);
+    const float pad = TextInputPadL(node) + TextInputAlignDx(threadTypography(), node, drawStr, w);
     const float padR = TextInputPadR(node);
     // ENG-24: a single-line field lays its text out on ONE line (it used to
     // wrap at the box and spill below it) and scrolls sideways to keep the
@@ -2643,12 +2648,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerParagraphStyleSetForeground(style, tPaint);
       // ENG-25: built by the SAME helper the multiline hit test uses.
       ImpellerParagraph paragraph =
-          BuildTextInputParagraph(typography_, node, drawStr, w, tPaint);
+          BuildTextInputParagraph(threadTypography(), node, drawStr, w, tPaint);
       if (paragraph != nullptr) {
         auto prefixW = [&](size_t n) -> float {
           if (n == 0) return 0.0f;
-          rni::tsan::NoteExclusiveUse(typography_);  // FP-04: impeller.h typography contexts are single-thread
-          ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(typography_);
+          rni::tsan::NoteExclusiveUse(threadTypography());  // FP-04: impeller.h typography contexts are single-thread
+          ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(threadTypography());
           ImpellerParagraphBuilderPushStyle(sb, style);
           ImpellerParagraphBuilderAddText(sb, (const uint8_t*)editMeasured.data(), n);
           ImpellerParagraph sp = ImpellerParagraphBuilderBuildParagraphNew(sb, 1e6f);
@@ -4319,7 +4324,7 @@ bool SceneGraph::absoluteOriginLocked(facebook::react::Tag tag, float* ox,
 ImpellerParagraph SceneGraph::buildTextInputParagraphLocked(
     const SceneNode& node, const std::string& raw, float boxW) {
   const std::string shown = node.tiSecure ? SecureMask(raw) : raw;
-  return BuildTextInputParagraph(typography_, node, shown, boxW, nullptr);
+  return BuildTextInputParagraph(threadTypography(), node, shown, boxW, nullptr);
 }
 
 bool SceneGraph::textInputKeyTraits(facebook::react::Tag tag, bool* multiline,
@@ -4395,7 +4400,7 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
       node.tiSecure ? SecureMask(raw) : raw, node.tiFace.transform);  // SC-20
   // ENG-24: a focused single-line field may be scrolled sideways.
   const float alignDx = TextInputAlignDx(
-      typography_, node, shown.empty() ? node.tiPlaceholder : shown,
+      threadTypography(), node, shown.empty() ? node.tiPlaceholder : shown,
       (float)node.layoutMetrics.frame.size.width);
   const float textX = ox + TextInputPadL(node) + alignDx -
                       ((tiFocused_ == tag && !node.tiMultiline) ? tiScrollX_ : 0.0f);
@@ -4411,8 +4416,8 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   for (size_t i = 1; i <= raw.size(); ++i) {
     if (i < raw.size() && (((unsigned char)raw[i]) & 0xC0) == 0x80) continue;
     const size_t mi = node.tiSecure ? SecureMaskOffset(raw, i) : i;
-    rni::tsan::NoteExclusiveUse(typography_);  // FP-04: impeller.h typography contexts are single-thread
-    ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
+    rni::tsan::NoteExclusiveUse(threadTypography());  // FP-04: impeller.h typography contexts are single-thread
+    ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(threadTypography());
     ImpellerParagraphBuilderPushStyle(pb, style);
     ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shown.data(), mi);
     ImpellerParagraph par = ImpellerParagraphBuilderBuildParagraphNew(pb, 1e6f);
@@ -4443,7 +4448,7 @@ size_t SceneGraph::caretIndexForClick(facebook::react::Tag tag, float screenX,
         typography_ != nullptr && absoluteOriginLocked(tag, &ox, &oy)) {
       const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
       TiGeom g;
-      TiGeomOf(typography_, it->second, raw, ox, oy,
+      TiGeomOf(threadTypography(), it->second, raw, ox, oy,
                (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
       size_t L = g.lines.size() - 1;
       for (size_t i = 0; i < g.lines.size(); ++i) {
@@ -4487,7 +4492,7 @@ std::string SceneGraph::glyphBoundaryReportFor(facebook::react::Tag tag) {
         typography_ != nullptr && absoluteOriginLocked(tag, &ox, &oy)) {
       const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
       TiGeom g;
-      TiGeomOf(typography_, it->second, raw, ox, oy,
+      TiGeomOf(threadTypography(), it->second, raw, ox, oy,
                (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
       xs = g.xs;
       lineReport = "\nrn-impeller: ti_glyph_lines tag=" + std::to_string((int)tag) +
@@ -4538,7 +4543,7 @@ size_t SceneGraph::textInputVerticalMove(facebook::react::Tag tag, size_t caret,
   }
   const std::string raw = (tiFocused_ == tag) ? tiEditValue_ : it->second.tiValue;
   TiGeom g;
-  TiGeomOf(typography_, it->second, raw, ox, oy,
+  TiGeomOf(threadTypography(), it->second, raw, ox, oy,
                (tiFocused_ == tag) ? tiScrollY_ : 0.0f, &g);
   size_t cur = 0;
   for (size_t i = 0; i < g.offsets.size(); ++i) {

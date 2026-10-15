@@ -7,7 +7,7 @@
 #   2. proves the binary is instrumented (__tsan_init, prints sanitizers=thread)
 #   3. runs the animated / text / image / native-transform fixtures windowed (xvfb) AND
 #      headless, plus the FP-04 stress fixture (text churn every 4 ms + a native-driver
-#      loop) and the ci-text / ci-native-transform / ci-image-net / ci-image-io gates on the TSan binary
+#      loop), the FP-12 typography fixture, and the ci-text / ci-native-transform / ci-image-net / ci-image-io gates on the TSan binary
 #   4. tools/tsan_check.py: any report outside tools/sanitize/tsan_known.txt FAILS; each
 #      known entry (a race a later pass owns) must still be seen
 # libimpeller.so / libhermesvm.so are prebuilt and uninstrumented: engine/base/TsanAnnotate.h
@@ -143,6 +143,11 @@ run anim-window     window   "$AN" Sc26NwAnimate 300
 run anim-headless   headless "$AN" Sc26NwAnimate 31
 run text-window     window   "$TX" Eng22FontFamily 120 --font-dir "$FONTS"
 run text-headless   headless "$TX" Eng22FontFamily 5 --font-dir "$FONTS"
+# FP-12: regular / bold / custom-font / fallback-emoji text re-rendered every 4 ms; measure (js)
+# and paint (main) each on their own typography context.
+TY=fp12-typography/prebuilt/fp12-typography.bundle
+run fp12-window     window   "$TY" Fp12Typography 600 --idle-skip --font-dir "$FONTS"
+run fp12-headless   headless "$TY" Fp12Typography 60 --font-dir "$FONTS"
 if want image-window || want image-headless; then
   # The image fixture fetches from ci-image-net.sh's local server: reuse that server verbatim.
   sed -n "/^cat > \"\$WORK\/server.py\" <<'PY'\$/,/^PY\$/p" tools/ci-image-net.sh | sed '1d;$d' > "$WORK/server.py"

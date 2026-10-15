@@ -643,7 +643,7 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
   contextContainer->insert(
       "TextLayoutManager",
       std::shared_ptr<react::TextLayoutManager>(
-          std::make_shared<ImpellerTextLayoutManager>(contextContainer, typography)));
+          std::make_shared<ImpellerTextLayoutManager>(contextContainer, typography != nullptr)));
   contextContainer->insert(react::ImageManagerKey,
                            std::make_shared<react::ImageManager>(contextContainer));
   // Scheduler's ctor asserts on this key. Weak ptr, same shape as RCTInstance.
