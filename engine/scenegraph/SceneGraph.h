@@ -990,8 +990,7 @@ class SceneGraph {
     // GL texture handle -- stored as uint32_t (GLuint's real underlying type
     // on every platform this engine targets) so this header does not need to
     // pull in a GL headers just to declare the cache; GLES3/gl3.h is only
-    // ever included from the .cpp, and only on the two platforms
-    // RNI_SUPERSAMPLE_GL covers.
+    // ever included from the .cpp (via SceneGraphGl.h), and never on Android.
     uint32_t glTex{0};
     int texW{0};
     int texH{0};

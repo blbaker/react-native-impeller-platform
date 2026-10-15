@@ -44,15 +44,22 @@
 #include "text/TextTransform.h"
 
 // ENG item 2 — supersample offscreen render. Direct GL entry points link on
-// Linux (EGL GLESv2) and macOS (ANGLE dylibs), but NOT on Windows (resolved
-// dynamically in WinGLSurface) or Android (Vulkan). Gate the whole offscreen
-// path on the two platforms where gl* resolves at link time; elsewhere the
-// helper is a stub that returns false and paintNode falls back to in-place.
-#if !defined(_WIN32) && !defined(__ANDROID__)
+// Linux (EGL GLESv2) and macOS (ANGLE dylibs). On Windows they are resolved at
+// first use from ANGLE's libGLESv2.dll (SceneGraphGl.h), and every offscreen
+// hook also checks scenegraph_gl::Ready(), so an unresolved table paints in
+// place. Android is Vulkan: no GL, the offscreen stays compiled out there.
+#if !defined(__ANDROID__)
 #define RNI_SUPERSAMPLE_GL 1
-#include <GLES3/gl3.h>
+#include "scenegraph/SceneGraphGl.h"
 #else
 #define RNI_SUPERSAMPLE_GL 0
+#endif
+// <world> ENG-09/10 GPU textures share those entry points but have never run on
+// Windows; they stay compiled out there until gated on that backend.
+#if RNI_SUPERSAMPLE_GL && !defined(_WIN32)
+#define RNI_WORLD_GL 1
+#else
+#define RNI_WORLD_GL 0
 #endif
 
 #include <algorithm>
@@ -1994,7 +2001,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // control the gate proves does NOT anti-alias. A failure inside the helper
   // returns false and we fall through to the in-place walk below, so a broken
   // offscreen degrades to a correct-but-aliased icon, never a blank one.
-  if (node.isSvgRoot && supersample_ >= 1 && renderContext_ != nullptr) {
+  if (node.isSvgRoot && supersample_ >= 1 && renderContext_ != nullptr &&
+      rni::scenegraph_gl::Ready()) {
     if (paintSvgRootSupersampled(builder, node, x, y, w, h)) {
       // ⛔ COUNT THE SUBTREE CACHE-INDEPENDENTLY. The offscreen render (which is
       // the only thing that walks the children, and only on a cache MISS) does
@@ -2007,6 +2015,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       return;
     }
   }
+#endif
+#if RNI_WORLD_GL
   // <world> ENG-09. Same shape as the SVG supersample hook just above: a
   // dedicated node kind short-circuits the ordinary paint (background/
   // border/text/children) walk. Gated on renderContext_ for the SAME reason
@@ -2288,7 +2298,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                       node.outlineStyle, impellerColor(node.outlineColor, OwnAlpha(node)));
   }
 
-#if RNI_SUPERSAMPLE_GL
+#if RNI_WORLD_GL
   // ENG-10: a <world> with a sprite list but NO setPixels buffer still
   // composites its sprites, over its own background painted just above. (With
   // a buffer, the early return in the <world> hook already drew them.)
@@ -3936,7 +3946,8 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   pointScale_ = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;  // elevation DPR
   painted_ = 0;  // per frame: the root hook's inner walk counts into it (else N>=2 sums frames)
   spritesDrawn_ = 0;  // same rule: world_sprites_drawn is one frame's count
-  if (supersample_ >= 2 && paintTreeSupersampled(builder, pointScaleFactor)) {
+  if (supersample_ >= 2 && rni::scenegraph_gl::Ready() &&
+      paintTreeSupersampled(builder, pointScaleFactor)) {
     // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
     // so it already reflects the visited node count.
     collectModalShowsLocked(shows);

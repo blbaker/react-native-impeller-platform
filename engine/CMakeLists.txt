@@ -27,16 +27,12 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(${CMAKE_SOURCE_DIR}/cmake/CompileFlags.cmake)
 
 # ---------------------------------------------------------------------------
-# P9-A: windowed WSI. Default ON on Linux (where tools/window-spike.sh proved
-# the chain) and on APPLE (where the darwin context path goes through ANGLE
-# rather than system EGL — see host/GlfwSurface.cpp). Still OFF on Windows
-# until that platform gets its own GLFW build.
+# P9-A: windowed WSI. Default ON everywhere. Linux and APPLE consume a GLFW
+# built by tools/glfw-fetch.sh; Windows builds the same GLFW 3.4 source from
+# this configure (see the GLFW block below) and reaches GLES3 through ANGLE
+# via GLFW's EGL context path.
 # ---------------------------------------------------------------------------
-if(WIN32)
-  option(RNI_WITH_WINDOW "Build GlfwSurface / --window support" OFF)
-else()
-  option(RNI_WITH_WINDOW "Build GlfwSurface / --window support" ON)
-endif()
+option(RNI_WITH_WINDOW "Build GlfwSurface / --window support" ON)
 
 # ---------------------------------------------------------------------------
 # MSVC-wide definitions (P5). These are DIRECTORY-scoped on purpose: they must
@@ -271,6 +267,9 @@ add_executable(rn-impeller
   modules/ExpoFetch.cpp
   fabric/FabricHost.cpp
   scenegraph/SceneGraph.cpp
+  # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
+  # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
+  $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/scenegraph/SceneGraphGlWin.cpp>
   scenegraph/Shadows.cpp
   scenegraph/BackgroundLayers.cpp
   scenegraph/BackgroundTiles.cpp
@@ -372,7 +371,20 @@ target_sources(rn-impeller PRIVATE
 # exactly: the system image ships libXinerama.so.1 with no linkable -dev
 # symlink, and glfw-fetch.sh stages one into a repo-local sysroot.
 # ---------------------------------------------------------------------------
-if(RNI_WITH_WINDOW)
+if(RNI_WITH_WINDOW AND WIN32)
+  # Windows: GLFW 3.4 from the vendored source tree, compiled by this same
+  # MSVC configure. There is no Windows glfw-fetch step and no prebuilt lib to
+  # keep in sync; the static `glfw` target links straight in. GLFW's win32
+  # backend needs only system DLLs (user32/gdi32/shell32), and its EGL path
+  # LoadLibrary's ANGLE's libEGL.dll/libGLESv2.dll from beside the exe.
+  set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+  set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+  add_subdirectory("${CMAKE_SOURCE_DIR}/third_party/glfw" glfw-win EXCLUDE_FROM_ALL)
+  target_compile_definitions(rn-impeller PRIVATE RNI_WITH_WINDOW=1)
+  target_link_libraries(rn-impeller PRIVATE glfw)
+elseif(RNI_WITH_WINDOW)
   set(GLFW_DIR "${CMAKE_SOURCE_DIR}/third_party/glfw/install")
   if(NOT EXISTS "${GLFW_DIR}/lib/libglfw3.a")
     message(FATAL_ERROR "GLFW not found at ${GLFW_DIR}. Run: bash tools/glfw-fetch.sh")
