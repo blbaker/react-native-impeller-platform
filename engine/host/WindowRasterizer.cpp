@@ -51,6 +51,7 @@ bool WindowRasterizer::Start(std::string* error) {
   long long rasterTid = 0;
   raster_.PostSync([&] {
     ok = surface_.initGpu(raster_.threaded(), error);
+    if (ok) partialEnabled_.store(partial_.Init(partialRequested_), std::memory_order_release);
     rasterTid = ThreadTag();
   });
   started_ = ok;
@@ -122,7 +123,12 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   if (delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay));
   // DrawToSurfaces acquires the frame at the layer tree's size.
   surface_.ensureGpuSize(item->width, item->height);
-  const bool drawn = RasterFrame(*item, [&](ImpellerDisplayList dl) {
+  FrameItem& frame = *item;
+  const bool drawn = RasterFrame(frame, [&](ImpellerDisplayList dl) {
+    // FP-18: through the root buffer (keeps the previous frame), else direct.
+    if (partialEnabled_.load(std::memory_order_relaxed)) {
+      return partial_.Draw(surface_.context(), frame);
+    }
     return surface_.drawDisplayList(dl);
   });
   if (!drawn) drawFailed_.fetch_add(1, std::memory_order_relaxed);
@@ -195,7 +201,11 @@ void WindowRasterizer::Shutdown() {
       RasterAndPresent(std::move(item));
     }) == PipelineConsumeResult::kMoreAvailable) {
     }
-    if (started_) surface_.releaseGpu();
+    if (started_) {
+      partial_.PrintSummary();
+      partial_.Release();  // FP-18: its GL objects die with the context
+      surface_.releaseGpu();
+    }
   });
   raster_.Join();
 }

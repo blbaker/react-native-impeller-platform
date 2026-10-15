@@ -253,6 +253,7 @@ add_executable(rn-impeller
   host/IoContextEgl.cpp
   host/PoisonProbe.cpp
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaint.cpp>
   base/Trace.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
@@ -302,6 +303,7 @@ add_executable(rn-impeller
   scenegraph/Modal.cpp
   scenegraph/ImagePaint.cpp
   scenegraph/RasterJobs.cpp
+  scenegraph/DamageTracker.cpp
   scenegraph/IoUploader.cpp
   scenegraph/ImageEvents.cpp
   scenegraph/TextInputStyle.cpp

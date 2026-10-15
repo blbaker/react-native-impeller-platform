@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "host/FrameItem.h"
+#include "host/PartialRepaint.h"
 #include "host/Pixel.h"
 #include "host/RasterThread.h"
 
@@ -46,6 +47,10 @@ class WindowRasterizer {
   bool Start(std::string* error);
   void SetScheduler(FrameScheduler* scheduler) { scheduler_ = scheduler; }
   void SetHooks(Hooks hooks) { hooks_ = std::move(hooks); }
+  // FP-18: --partial-repaint. Before Start; partialRepaint() is the verdict
+  // (requested and supported), which RECORD reads to allow a clipped list.
+  void SetPartialRepaint(bool on) { partialRequested_ = on; }
+  bool partialRepaint() const { return partialEnabled_.load(std::memory_order_acquire); }
   bool threaded() const { return raster_.threaded(); }
   RasterThread& thread() { return raster_; }
 
@@ -88,6 +93,9 @@ class WindowRasterizer {
   FrameTimings& timings_;
   FrameScheduler* scheduler_ = nullptr;
   Hooks hooks_;
+  PartialRepaint partial_;  // raster thread only
+  bool partialRequested_ = true;
+  std::atomic<bool> partialEnabled_{false};
   FramePipeline pipeline_;
   RasterThread raster_;
   bool started_ = false;

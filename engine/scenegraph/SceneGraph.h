@@ -27,6 +27,7 @@
 
 #include "impeller.h"
 #include "modules/WorldRasterStore.h"
+#include "scenegraph/DamageTracker.h"
 #include "scenegraph/ImageEvents.h"
 #include "scenegraph/ImagePaint.h"
 #include "scenegraph/RasterJobs.h"
@@ -595,6 +596,8 @@ class SceneGraph {
   // / updateViewProps, or a detached test producer) wakes the GLFW loop if it
   // is asleep in glfwWaitEventsTimeout. Main-thread callers (a windowed scroll,
   // a resize) get a harmless glfwPostEmptyEvent the next poll drains.
+  // FP-18: an untagged bump cannot be bounded, so the next frame repaints in
+  // full. Paths that know their node bump through bumpVersionFor().
   void bumpVersion();
 
   // Install the wake fired by every version_ bump. The callback only does
@@ -619,8 +622,14 @@ class SceneGraph {
   // than being upscaled after the fact.
   // FP-14: `jobs` receives every GPU job the walk needs (uploads, supersample
   // offscreens); the walk itself makes no GL call. RasterFrame runs them.
+  // FP-18: `damage` (surfaceW/H in) receives this walk's damage against the
+  // previous walk, computed under the same lock as the walk.
+  // `culled`, when the damage is a non-empty partial: a second walk, same lock,
+  // that skips every subtree whose box misses the damage (Impeller encodes
+  // every op of a list without an rtree, clip or not).
   int paint(ImpellerDisplayListBuilder builder, float pointScaleFactor = 1.0f,
-            RasterJobs* jobs = nullptr);
+            RasterJobs* jobs = nullptr, FrameDamage* damage = nullptr,
+            ImpellerDisplayListBuilder culled = nullptr);
   // A22: the topmost visible modal (0 if none) and its emitter, for Escape.
   facebook::react::Tag topModal(facebook::react::EventEmitter::Shared* emitter);
 
@@ -1018,6 +1027,15 @@ class SceneGraph {
   // off-thread producer (JS applyMutations / updateViewProps) can bump it while
   // the GLFW loop reads it on the main thread with no scene lock held.
   std::atomic<uint64_t> version_{0};
+  // FP-18: changed tags + per-node paint bounds (mutex_, MarkFull atomic).
+  DamageTracker damage_;
+  // FP-18: the revision bump of a change whose node was marked in damage_.
+  void bumpRevision();
+  void recordDamage(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                    float x, float y, float w, float h, bool unbounded);
+  int damageSpread_{0};  // > 0 inside a blur / drop-shadow / content-shadow / SVG subtree
+  bool cullActive_{false};  // FP-18 culled walk: no recording, skip subtrees outside cullBox_
+  DamageTracker::Box cullBox_;
   std::atomic<bool> spinnerAnimating_{false};
   std::chrono::steady_clock::time_point spinnerEpoch_{std::chrono::steady_clock::now()};
   // A19: <Image> textures, one per decoded source.

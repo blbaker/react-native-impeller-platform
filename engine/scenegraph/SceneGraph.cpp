@@ -1189,6 +1189,7 @@ void SceneGraph::applyMutations(
   for (const auto& m : mutations) {
     switch (m.type) {
       case react::ShadowViewMutation::Create: {
+        damage_.MarkTag(m.newChildShadowView.tag);  // FP-18
         SceneNode node;
         updateFromShadowView(node, m.newChildShadowView);
         nodes_[node.tag] = std::move(node);
@@ -1200,6 +1201,7 @@ void SceneGraph::applyMutations(
         break;
       }
       case react::ShadowViewMutation::Delete: {
+        damage_.MarkTag(m.oldChildShadowView.tag);  // FP-18: its old bounds
         nodes_.erase(m.oldChildShadowView.tag);
         if (log) {
           std::printf("[fabric] DELETE tag=%d\n", m.oldChildShadowView.tag);
@@ -1208,6 +1210,7 @@ void SceneGraph::applyMutations(
       }
       case react::ShadowViewMutation::Insert: {
         auto childTag = m.newChildShadowView.tag;
+        damage_.MarkTag(childTag);  // FP-18
         if (auto it = nodes_.find(childTag); it != nodes_.end()) {
           updateFromShadowView(it->second, m.newChildShadowView);
           it->second.parent = m.parentTag;
@@ -1234,6 +1237,7 @@ void SceneGraph::applyMutations(
       }
       case react::ShadowViewMutation::Remove: {
         auto childTag = m.oldChildShadowView.tag;
+        damage_.MarkTag(childTag);  // FP-18
         if (auto p = nodes_.find(m.parentTag); p != nodes_.end()) {
           auto& kids = p->second.children;
           kids.erase(std::remove(kids.begin(), kids.end(), childTag), kids.end());
@@ -1253,6 +1257,7 @@ void SceneGraph::applyMutations(
         // With a plain find(), the root is never inserted, `roots_` stays
         // empty, paint() walks nothing, and every child mounts correctly into
         // a tree with no entry point. Symptom: scene_nodes>0, painted_nodes=0.
+        damage_.MarkTag(tag);  // FP-18
         auto& node = nodes_[tag];
         updateFromShadowView(node, m.newChildShadowView);
         if (log) {
@@ -1293,11 +1298,17 @@ void SceneGraph::applyMutations(
   // wake a commit here would not paint until the next unrelated input. Called
   // while mutex_ is still held: bumpVersion takes only wakeMutex_, never mutex_,
   // so there is no lock-order inversion.
-  bumpVersion();
+  // FP-18: every touched tag is marked above, so this is a bounded change.
+  bumpRevision();
 }
 
 // ── Idle-frame damage signal + wake (P12-01) ────────────────────────────────
 void SceneGraph::bumpVersion() {
+  damage_.MarkFull("untagged");  // FP-18: no node to bound it by
+  bumpRevision();
+}
+
+void SceneGraph::bumpRevision() {
   version_.fetch_add(1, std::memory_order_release);
   std::function<void()> wake;
   {
@@ -1305,6 +1316,34 @@ void SceneGraph::bumpVersion() {
     wake = damageWake_;  // copy under the wake lock; never call it while held
   }
   if (wake) wake();
+}
+
+// FP-18: one visit of `node` for DamageTracker. Effects whose pixels leave the
+// node's box (shadows, filters, images, SVG content) are recorded unbounded.
+void SceneGraph::recordDamage(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                              float x, float y, float w, float h, bool unbounded) {
+  if (cullActive_) return;
+  bool textShadow = false;
+  float font = node.fontSize;
+  for (const auto& r : node.runs) {
+    textShadow = textShadow || r.hasShadow;
+    font = std::max(font, r.fontSize);
+  }
+  unbounded = unbounded || damageSpread_ > 0 || shadowPassNode_ != nullptr ||
+              !node.shadows.empty() || node.elevation > 0.0f || node.hasLayerShadow ||
+              node.blurSigma > 0.0f || !node.dropShadows.empty() || node.isImage ||
+              node.isSwitch || textShadow;
+  float outset = 2.0f;  // hairline strokes centred on the frame edge
+  if (focusedView_ != 0 && focusedView_ == node.tag) outset = 4.0f;  // item 11 ring
+  if (node.outlineWidth > 0.0f) {
+    outset = std::max(outset, node.outlineWidth + std::max(0.0f, node.outlineOffset));
+  }
+  // Glyph ink (italics, descenders, a tight lineHeight) can leave the frame.
+  if (node.isParagraph || node.isTextInput) outset = std::max(outset, std::max(8.0f, font));
+  const bool spinning = node.isSpinner && node.spAnimating;
+  const bool caret = node.isTextInput && node.tag == tiFocused_;
+  damage_.Record(builder, node.tag, node.parent, ImpellerRect{x, y, w, h}, outset, unbounded,
+                 node.overflowHidden, spinning || caret);
 }
 
 void SceneGraph::setDamageWake(std::function<void()> wake) {
@@ -1395,7 +1434,10 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
   // it is scene damage: bump + wake so the idle-skip loop presents this tick
   // instead of freezing the animation on the last painted frame. Bumped only on
   // a real apply, so a call that matched no known key does not falsely wake.
-  if (directPropUpdates_ != before) bumpVersion();
+  if (directPropUpdates_ != before) {
+    damage_.MarkTag(tag);  // FP-18: NativeAnimated moved this node
+    bumpRevision();
+  }
   return true;
 }
 
@@ -2007,6 +2049,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
 
   // A22: a modal paints in its own pass after the app root (Modal.cpp).
   if (node.isModal && node.tag != modalWalk_) return;
+  // FP-18 culled walk: nothing of this subtree reaches the damage.
+  if (cullActive_ && !damage_.MayPaintInside(node.tag, cullBox_)) return;
 
   ++painted_;
 
@@ -2022,6 +2066,9 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // still paint -- which is why registering Symbol WITHOUT this early return
   // would have changed nothing about the bug.
   if (node.isSvgDefinition) return;
+  // FP-18: the paths that return before the transform below are not boxed.
+  const bool damageEarlyOut = node.backfaceHidden || node.isWorldRaster || node.isSvgRoot;
+  if (damageEarlyOut) recordDamage(builder, node, x, y, w, h, /*unbounded=*/true);
 #if RNI_SUPERSAMPLE_GL
   // ENG item 2 — SUPERSAMPLE HOOK. An <Svg> root subtree, when supersampling is
   // enabled AND a render context is wired, is rendered into an N x offscreen and
@@ -2091,6 +2138,17 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerDisplayListBuilderTransform(builder, &m);
     ImpellerDisplayListBuilderTransform(builder, &post);
   }
+  // FP-18: the node's box through every transform above it, its own included.
+  if (!damageEarlyOut) recordDamage(builder, node, x, y, w, h, /*unbounded=*/false);
+  // Effects that spread a descendant's change past its own box.
+  const bool damageSpreads = node.blurSigma > 0.0f || !node.dropShadows.empty() ||
+                             node.hasLayerShadow || node.isSvgRoot;
+  struct SpreadScope {
+    int& depth;
+    bool on;
+    ~SpreadScope() { if (on) --depth; }
+  } spreadScope{damageSpread_, damageSpreads};
+  if (damageSpreads) ++damageSpread_;
 
   // parity item 8: group opacity (see UsesOpacityLayer). Opened AFTER the
   // transform so the layer is in the node's transformed space, and closed
@@ -3715,6 +3773,8 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
     ~JobsScope() { slot = nullptr; }
   } jobsScope{jobs_};
   jobs_ = jobs;
+  if (!cullActive_) damage_.BeginWalk();  // FP-18
+  damageSpread_ = 0;
   // Rebuild the gradient registry before walking the tree: a def may be
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
@@ -3748,6 +3808,8 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   spritesDrawn_ = 0;  // same rule: world_sprites_drawn is one frame's count
   if (supersample_ >= 2 && jobs_ != nullptr &&
       paintTreeSupersampled(builder, pointScaleFactor)) {
+    // FP-18: the inner walk's boxes are in the N x offscreen's space.
+    damage_.ForceFull("root_supersample");
     // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
     // so it already reflects the visited node count.
     collectModalShowsLocked(shows);

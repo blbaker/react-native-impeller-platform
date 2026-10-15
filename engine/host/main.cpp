@@ -473,6 +473,9 @@ static bool gVsyncLog = false;
 // ci-raster-thread hook --main-stall-after-frames N:MS (main sleeps MS right
 // after recording frame N; that item is held ~MS/5 on the raster thread first).
 static bool gRasterThread = true;
+// FP-18: --partial-repaint on|off (windowed: clip RECORD to the damage when it
+// passes Flutter's 0.7 rule and keep the previous frame outside it).
+static bool gPartialRepaint = true;
 static int gMainStallAfterFrames = 0;
 static int gMainStallMs = 0;
 [[maybe_unused]] static long long SteadyNowUs() {  // same clock as the raster_present t_us lines
@@ -603,6 +606,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // shell/common/rasterizer.cc + shell.cc). Main keeps the window, events,
   // input, mount, NativeAnimated, the FrameScheduler and RECORD.
   rni::WindowRasterizer rasterizer(surface, frameTimings, gRasterThread);
+  rasterizer.SetPartialRepaint(gPartialRepaint);
   if (!rasterizer.Start(&error)) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
@@ -837,7 +841,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       return -1;
     }
     auto recorded = rni::RecordFrame(sceneGraph, pointScale, surface.width(),
-                                     surface.height(), std::move(frame));
+                                     surface.height(), std::move(frame), nullptr,
+                                     rasterizer.partialRepaint());
     recorded->vsyncUs = scheduler.lastTickUs();
     const int painted = recorded->painted;
     const uint64_t number = recorded->frameNumber;
@@ -2154,6 +2159,13 @@ int main(int argc, char** argv) {
         return 2;
       }
       rni::io::SetEnabled(v == "on");
+    } else if (a == "--partial-repaint") {  // FP-18
+      const std::string v = next("--partial-repaint");
+      if (v != "on" && v != "off") {
+        fprintf(stderr, "rn-impeller: FATAL: --partial-repaint wants on|off (got '%s')\n", v.c_str());
+        return 2;
+      }
+      gPartialRepaint = v == "on";
     } else if (a == "--raster-thread") {
       const std::string v = next("--raster-thread");
       if (v != "on" && v != "off") {

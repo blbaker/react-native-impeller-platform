@@ -26,6 +26,7 @@
 #include "host/FrameTimings.h"
 #include "host/Pipeline.h"
 #include "impeller.h"
+#include "scenegraph/DamageTracker.h"
 #include "scenegraph/RasterJobs.h"
 
 namespace rni {
@@ -46,6 +47,12 @@ struct FrameItem {
   std::unique_ptr<FrameTimingsRecorder> timings;
   std::unique_ptr<RasterJobs> jobs;  // FP-14: null without a GL context
   int64_t vsyncUs = 0;  // FP-15: the scheduler tick this frame began on (0 = none)
+  // FP-18: damage against the previous walk. When damage.partial, displayList
+  // is the walk clipped to the damage rect (device coordinates), and fullList
+  // is the unclipped walk, kept so RASTER can repaint in full when its back
+  // buffer is not damage.baseSeq.
+  FrameDamage damage;
+  ImpellerDisplayList fullList = nullptr;  // owned; null unless damage.partial
 };
 
 using FramePipeline = Pipeline<FrameItem>;
@@ -53,11 +60,14 @@ using FramePipeline = Pipeline<FrameItem>;
 // Extra drawing appended after the scene (the headless probe banner).
 using RecordExtras = std::function<void(ImpellerDisplayListBuilder)>;
 
-// RECORD. `timings` must be in kBuildStart. Never returns null.
+// RECORD. `timings` must be in kBuildStart. Never returns null. FP-18:
+// `allowPartial` lets a small damage clip the list (windowed consumers that
+// keep the previous frame's pixels); otherwise every item is a full repaint.
 std::unique_ptr<FrameItem> RecordFrame(SceneGraph& scene, float pointScale,
                                        int width, int height,
                                        std::unique_ptr<FrameTimingsRecorder> timings,
-                                       const RecordExtras& extras = nullptr);
+                                       const RecordExtras& extras = nullptr,
+                                       bool allowPartial = false);
 
 // RASTER. Stamps raster start/end around the item's jobs + draw(displayList);
 // false when the item has no display list or draw fails.
