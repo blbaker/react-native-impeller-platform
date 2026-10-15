@@ -25,6 +25,7 @@ if(ANDROID)
 endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(${CMAKE_SOURCE_DIR}/cmake/CompileFlags.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/Sanitize.cmake)
 
 # ---------------------------------------------------------------------------
 # P9-A: windowed WSI. Default ON everywhere. Linux and APPLE consume a GLFW
@@ -177,6 +178,10 @@ endif()
 # ReactCommon: third-party deps, core, Fabric
 # ---------------------------------------------------------------------------
 include(${CMAKE_SOURCE_DIR}/cmake/ReactCommonDeps.cmake)
+# Under ASan folly's headers call annotate_object_collected_impl, defined here.
+if(RNI_SANITIZE MATCHES "address")
+  target_sources(folly_runtime PRIVATE ${FOLLY_DIR}/folly/memory/SanitizeLeak.cpp)
+endif()
 include(${CMAKE_SOURCE_DIR}/cmake/ReactCommonCore.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/ReactCommonFabric.cmake)
 
@@ -240,6 +245,7 @@ add_executable(rn-impeller
   host/OsAppearance.cpp
   host/FrameTimings.cpp
   base/Trace.cpp
+  base/SanitizerHooks.cpp
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/OsAppearanceDarwin.mm>
   # The offscreen surface, one implementation per platform. Selected here rather
   # than with #ifdefs inside one file: the two share no context-acquisition code

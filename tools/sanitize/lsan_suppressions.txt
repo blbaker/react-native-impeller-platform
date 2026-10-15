@@ -1,0 +1,9 @@
+# LeakSanitizer suppressions for tools/ci-sanitize.sh (FP-03). Modelled on Flutter's
+# engine/src/flutter/testing/lsan_suppressions.txt. THIRD-PARTY CODE ONLY: a leak in
+# engine/ (ours) is fixed, never listed here. Every entry carries a one-line reason.
+
+# fontconfig parses its default config (fonts.conf via expat) on the first
+# FcConfigSubstitute and keeps it in a global released only by FcFini, which no
+# process calls. Our caller (engine/text/FontFamily.cpp FcMatchFamily) destroys both
+# patterns it owns. Flutter carries the same entry ("False positives in libfontconfig").
+leak:libfontconfig.so

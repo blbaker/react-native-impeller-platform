@@ -66,6 +66,8 @@ echo "== 2. swap in the text fixture as the app entry =="
 cp "$FIXTURE/index.js" "$APP/index.js"
 npx --no-install react-native init-impeller > /dev/null 2>&1 || fail "init-impeller failed"
 RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" || fail "engine resolver failed"
+# RNI_BIN overrides the installed engine (tools/ci-sanitize.sh runs this gate on the ASan build).
+[ -z "${RNI_BIN:-}" ] || RESOLVED="$RNI_BIN"
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/text.bundle \
     > /dev/null 2>&1

@@ -68,6 +68,7 @@
 #endif
 #include "host/FrameTimings.h"
 #include "base/Trace.h"
+#include "base/SanitizerHooks.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
@@ -1792,6 +1793,7 @@ int main(int argc, char** argv) {
   // been read, and plenty of construction paths read one.
   rni::installFeatureFlags();
   rni::trace::SetThreadName("main");
+  rni::sanitize::RunTestHooks();
 
   std::string bundlePath, appName, screenshot;
   std::string colorScheme = "light";

@@ -1,0 +1,10 @@
+# UBSan suppressions for tools/ci-sanitize.sh (FP-03). Modelled on Flutter's
+# engine/src/flutter/testing/ubsan_suppressions.txt. THIRD-PARTY CODE ONLY, one reason per entry.
+
+# vptr check on libstdc++'s inline shared_ptr release (bits/shared_ptr_base.h
+# _Sp_counted_base::_M_release) for control blocks ALLOCATED inside the prebuilt
+# libhermesvm.so (hermes::vm::Runtime::create). Hermes is built -fno-rtti, so its
+# control-block vtables carry no typeinfo the check can match. Flutter never hits this:
+# it compiles -fno-rtti, where clang turns vptr off. Our own shared_ptr misuse is still
+# caught by ASan (use-after-free / double free).
+vptr:bits/shared_ptr_base.h

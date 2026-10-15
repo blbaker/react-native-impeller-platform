@@ -11,6 +11,8 @@ packages-engine/*/bin/
 # tools/ (sdk-fetch.sh, hermes-build.sh, engine/rn npm install), so none of it
 # belongs in git.
 engine/build/
+engine/build-asan/
+engine/build-tsan/
 engine/rn/node_modules/
 engine/third_party/hermes/
 engine/third_party/hermes-build/
