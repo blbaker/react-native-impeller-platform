@@ -78,6 +78,8 @@
 #include "base/SanitizerHooks.h"
 #include "base/GlValidation.h"
 #include "base/TestSync.h"
+#include "base/ContextFlags.h"
+#include "fabric/ImageStore.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
@@ -155,6 +157,9 @@ void Usage() {
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
           "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
+          "                   [--sdf-aa on|off]  analytic SDF AA for circles, ovals,\n"
+          "                     rects, rounded rects (Impeller Flags::use_sdfs, SDK\n"
+          "                     patch 0003). Default off (FP-22)\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
           "                   [--screenshot-after-frames N] [--quit-on-term]\n"
@@ -1875,6 +1880,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
+  rni::image::PrintStats();  // FP-16
   rni::typography::PrintSummary();  // FP-12
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
@@ -2599,6 +2605,14 @@ int main(int argc, char** argv) {
         return 2;
       }
     }
+    else if (a == "--sdf-aa") {
+      std::string v = next("--sdf-aa");
+      if (v != "on" && v != "off") {
+        fprintf(stderr, "rn-impeller: --sdf-aa wants on|off (got %s)\n", v.c_str());
+        return 2;
+      }
+      rni::contextflags::SetSdfAa(v == "on");
+    }
     else if (a == "--probe") {
       std::string v = next("--probe");
       auto comma = v.find(',');
@@ -2842,6 +2856,10 @@ int main(int argc, char** argv) {
     // React renders, Fabric commits, the delegate applies mutations — all on
     // the JS thread. Idle means that whole chain has drained.
     host.waitForJsIdle(10000);
+    // FP-16: <Image> decodes run on the IO pool, off the JS thread, so an idle
+    // JS thread does not mean the pixels exist. Drain them, then the JS their
+    // load events scheduled (which may mount more images).
+    for (int i = 0; i < 4 && rni::image::WaitIdle(15000); ++i) host.waitForJsIdle(10000);
 
     // ⛔ AN IDLE JS THREAD DOES NOT MEAN THE NETWORK FINISHED.
     // A request runs on a native worker; while it is on the wire there is no
@@ -2866,6 +2884,7 @@ int main(int argc, char** argv) {
       printf("rn-impeller: net_requests_completed=%d net_in_flight=%d\n",
              net->completed.load(), net->inFlight.load());
       host.waitForJsIdle(10000);
+      for (int i = 0; i < 4 && rni::image::WaitIdle(15000); ++i) host.waitForJsIdle(10000);
     }
 
     // Counted AFTER the network settle: nodes mounted by a response handler
@@ -3297,6 +3316,7 @@ int main(int argc, char** argv) {
     FinishFrameTimings(headlessTimings);
     FinishTrace();
     rni::glvalidation::Finish();
+    rni::image::PrintStats();  // FP-16
     rni::typography::PrintSummary();  // FP-12
   }
 

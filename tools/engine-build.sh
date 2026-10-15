@@ -180,6 +180,16 @@ echo "engine-build: configuring + compiling ${TRIPLE} host (cmake)"
 # Setting the policy floor for the sub-projects is the documented escape hatch
 # and changes nothing about how OUR targets are configured. Applied
 # unconditionally so a Linux contributor on cmake 4 gets the same result.
+# FP-22: an SDK rebuilt with this tree's patches (0003 context flags) lives in
+# a real per-worktree dir, never in the shared impeller-sdk-custom*; it wins
+# when present. RNI_IMPELLER_SDK_DIR set by the caller still overrides.
+if [ -z "${RNI_IMPELLER_SDK_DIR:-}" ]; then
+  case "${PLATFORM}" in
+    darwin) PARITY_SDK="engine/third_party/impeller-sdk-custom-parity-darwin" ;;
+    *)      PARITY_SDK="engine/third_party/impeller-sdk-custom-parity" ;;
+  esac
+  [ ! -f "${PARITY_SDK}/include/impeller.h" ] || export RNI_IMPELLER_SDK_DIR="${PARITY_SDK}"
+fi
 cmake -S engine -B engine/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       -DCMAKE_INSTALL_PREFIX="${ROOT}/${PKG}" > /dev/null

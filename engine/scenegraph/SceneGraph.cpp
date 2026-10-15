@@ -2574,13 +2574,14 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // <Image>. A19: the decoded source, clipped to the (rounded) box.
   if (node.isImage && w > 0.0f && h > 0.0f && !node.imgSources.empty()) {
     const SceneNode::ImageSrc& src = PickImageSource(node.imgSources, w, h);
-    int tw = 0, th = 0;
-    ImpellerTexture tex = imageTextures_.Get(renderContext_, jobs_, src.uri, &tw, &th);
+    rni::ImageTextureInfo ti;
+    const float boxW = w * pointScale_, boxH = h * pointScale_;  // FP-16: decode size
+    ImpellerTexture tex = imageTextures_.Get(renderContext_, jobs_, src.uri, boxW, boxH, &ti);
     // Natural size: the source's declared size if JS sent one, else pixels / scale.
     float scale = src.scale > 0.0f ? src.scale : 1.0f;
-    if (src.width > 0.0f) scale = (float)tw / src.width;
+    if (src.width > 0.0f) scale = (float)ti.srcWidth / src.width;
     if (tex == nullptr && !node.imgDefaultUri.empty()) {
-      tex = imageTextures_.Get(renderContext_, jobs_, node.imgDefaultUri, &tw, &th);
+      tex = imageTextures_.Get(renderContext_, jobs_, node.imgDefaultUri, boxW, boxH, &ti);
       scale = 1.0f;
     }
     if (tex != nullptr) {
@@ -2596,7 +2597,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
         ImpellerDisplayListBuilderClipRect(builder, &rect, kImpellerClipOperationIntersect);
       }
       float tint[4] = {node.imgTint[0], node.imgTint[1], node.imgTint[2], node.imgTint[3]};
-      rni::PaintImage(builder, tex, tw, th, scale, x, y, w, h, node.imgResizeMode,
+      rni::PaintImage(builder, tex, ti, scale, x, y, w, h, node.imgResizeMode,
                       node.imgHasTint ? tint : nullptr, OwnAlpha(node));
       ImpellerDisplayListBuilderRestore(builder);
     }

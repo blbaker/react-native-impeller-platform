@@ -3,6 +3,8 @@
 #include "scenegraph/ImagePaint.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 #include "fabric/ImageStore.h"
 
@@ -17,14 +19,23 @@ void ReleaseDecoded(void* userData) {
 }  // namespace
 
 ImageTextures::~ImageTextures() {
-  for (auto& [uri, e] : entries_) {
+  for (auto& [d, e] : entries_) {
     if (e.texture) ImpellerTextureRelease(e.texture);
   }
 }
 
 ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
-                                   const std::string& uri, int* outW, int* outH) {
-  auto it = entries_.find(uri);
+                                   const std::string& uri, float boxW, float boxH,
+                                   ImageTextureInfo* info) {
+  if (!context) return nullptr;
+  // FP-16: the cached decode for this box's size bucket (or the best other
+  // size of the URI). A load in flight paints nothing yet; its completion
+  // wakes the frame loop. Only a local source nobody requested (defaultSource)
+  // is decoded here, synchronously, like RN iOS loads its default image.
+  image::Lookup f = image::Find(uri, boxW, boxH);
+  if (!f.image && !f.failed && !f.pending) f.image = image::DecodeNow(uri, boxW, boxH);
+  if (!f.image) return nullptr;
+  auto it = entries_.find(f.image.get());
   // FP-14: an upload whose frame was dropped never ran; upload again.
   if (it != entries_.end() && JobFailed(it->second.job)) {
     if (it->second.texture) ImpellerTextureRelease(it->second.texture);
@@ -32,44 +43,44 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
     it = entries_.end();
   }
   if (it == entries_.end()) {
+    const auto& d = f.image;
     Entry e;
-    auto d = image::Load(uri);
-    if (d && context && jobs) {
+    e.decoded = d;
+    if (jobs) {
       uint32_t name = 0;
       e.texture = jobs->WrapNewName(d->width, d->height, &name);
       if (e.texture == nullptr) return nullptr;  // pool empty: next frame
       e.job = jobs->AddUpload(e.texture, name, d->width, d->height, d->rgba.data(), d,
                               /*allocate=*/true, /*clampEdges=*/false, /*image=*/true);
-      e.width = d->width;
-      e.height = d->height;
-    } else if (d && context) {
+    } else {
       ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {d->width, d->height}, 1};
       // The mapping keeps the decoded pixels alive until Impeller has uploaded them.
       ImpellerMapping mapping = {d->rgba.data(), (uint64_t)d->rgba.size(), &ReleaseDecoded};
       TRACE_EVENT0("image", "ImageUpload");
       e.texture = ImpellerTextureCreateWithContentsNew(
           context, &desc, &mapping, new std::shared_ptr<const image::Decoded>(d));
-      e.width = d->width;
-      e.height = d->height;
     }
-    // No context yet: do not cache the miss, a later paint may have one.
-    if (!context) return nullptr;
-    // SC-31: a remote source with no pixels yet is still loading (or will retry).
-    if (!d && image::IsRemote(uri)) return nullptr;
-    it = entries_.emplace(uri, e).first;
+    static const bool log = std::getenv("RNI_IMAGE_LOG") != nullptr;
+    if (log) std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f\n", d->width,
+                         d->height, d->srcWidth, d->srcHeight, boxW, boxH);
+    it = entries_.emplace(d.get(), std::move(e)).first;
   }
-  *outW = it->second.width;
-  *outH = it->second.height;
+  const image::Decoded& d = *it->second.decoded;
+  info->texWidth = d.width;
+  info->texHeight = d.height;
+  info->srcWidth = d.srcWidth;
+  info->srcHeight = d.srcHeight;
   return it->second.texture;
 }
 
-void PaintImage(ImpellerDisplayListBuilder builder, ImpellerTexture texture, int texW, int texH,
-                float scale, float x, float y, float w, float h, int resizeMode,
-                const float* tint, float alpha) {
+void PaintImage(ImpellerDisplayListBuilder builder, ImpellerTexture texture,
+                const ImageTextureInfo& info, float scale, float x, float y, float w, float h,
+                int resizeMode, const float* tint, float alpha) {
+  const int texW = info.texWidth, texH = info.texHeight;
   if (texture == nullptr || texW <= 0 || texH <= 0 || w <= 0.0f || h <= 0.0f) return;
   if (scale <= 0.0f) scale = 1.0f;
-  const float iw = (float)texW / scale;  // natural size in points
-  const float ih = (float)texH / scale;
+  const float iw = (float)info.srcWidth / scale;  // natural size in points (source pixels)
+  const float ih = (float)info.srcHeight / scale;
 
   ImpellerPaint paint = ImpellerPaintNew();
   const ImpellerColor base = {1.0f, 1.0f, 1.0f, alpha, kImpellerColorSpaceSRGB};

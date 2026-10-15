@@ -90,3 +90,10 @@ reverse it. The PR description links here; keep it current.
 ## Calls made by triage
 
 (Appended by triage sessions: date, pass, what was chosen, why.)
+
+- 2026-10-15 (lane B, FP-22): SDK patch 0003 uses a process-wide default (`ImpellerContextSetDefaultFlags`,
+  read by every interop backend Create) plus a per-context readback (`ImpellerContextGetFlags`). One entry
+  covers GLES, Metal and Vulkan, and no new Create variants are needed. `--sdf-aa` defaults to off until
+  per-backend goldens agree. The rebuilt SDK lives in lane B's `engine/third_party/impeller-sdk-custom-parity*`.
+  Another worktree that needs it symlinks that dir read-only (parity-merge.sh does this for the merge
+  worktree).

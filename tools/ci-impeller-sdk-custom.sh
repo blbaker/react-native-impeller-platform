@@ -2,8 +2,9 @@
 # SC-32 GATE: the custom Impeller SDK (tools/impeller-sdk-custom-build.sh).
 # Rules, in order (the FAIL line names the first that breaks):
 #   stamp        built from engine/IMPELLER_SHA + the committed patches
-#   header       IMPELLER_RNI_TEXT_EXTENSIONS and the 7 new declarations
-#   exports      libimpeller.so exports the 7 new symbols AND every stock one
+#   header       IMPELLER_RNI_TEXT_EXTENSIONS and the 7 new declarations; with patch 0003
+#                (FP-22) also IMPELLER_RNI_CONTEXT_FLAGS and its 3 declarations
+#   exports      libimpeller.so exports the new symbols AND every stock one
 #   letterSpacing  'IIII' + 8 px letter spacing is 4*8 px wider
 #   wordSpacing    'a b c' + 10 px word spacing is 2*10 px wider
 #   fontFeature    tnum makes '1111' as wide as '0000', pnum does not; smcp
@@ -18,7 +19,9 @@
 # custom SDK with APPLE and with WIN32 set.
 # The probe (tools/impeller-sdk-probe.c) lays text out on the CPU, no GPU.
 #   bash tools/ci-impeller-sdk-custom.sh [--all-platforms]
-# Env: RNI_IMPELLER_SDK_DIR  SDK to judge (default engine/third_party/impeller-sdk-custom)
+# Env: RNI_IMPELLER_SDK_DIR  SDK to judge (default engine/third_party/impeller-sdk-custom-parity
+#                            when built, which tools/engine-build.sh also prefers (FP-22), else
+#                            engine/third_party/impeller-sdk-custom)
 #      RNI_SDK_DARWIN_DIR / RNI_SDK_WIN_DIR  --all-platforms dirs (mutants)
 #      RNI_SDK_STAMP_PATCH  patch file the stamp must name (mutants)
 #      RNI_SDK_PROBE_FONT   font with tnum/pnum/smcp (default FreeSans)
@@ -28,18 +31,28 @@ ROOT="$PWD"
 fail() { echo "IMPELLER_SDK_CUSTOM_GATE_FAIL: $*"; exit 1; }
 ok() { echo "   ok: $*"; }
 DEFAULT_SDK=engine/third_party/impeller-sdk-custom
+# FP-22: the per-worktree rebuild (patch 0003) wins, exactly as in tools/engine-build.sh.
+[ ! -f engine/third_party/impeller-sdk-custom-parity/include/impeller.h ] \
+  || DEFAULT_SDK=engine/third_party/impeller-sdk-custom-parity
 SDK="${RNI_IMPELLER_SDK_DIR:-$DEFAULT_SDK}"
 FONT="${RNI_SDK_PROBE_FONT:-/usr/share/fonts/truetype/freefont/FreeSans.ttf}"
 SHA="$(tr -d ' \n' < engine/IMPELLER_SHA)"
 NEW_SYMS="ImpellerParagraphStyleSetLetterSpacing ImpellerParagraphStyleSetWordSpacing
 ImpellerParagraphStyleSetFontFeature ImpellerParagraphStyleClearFontFeatures
 ImpellerParagraphBuilderAddPlaceholder ImpellerParagraphGetPlaceholderRects"
+# FP-22 patch 0003: required once the patch is committed.
+FLAG_SYMS="ImpellerContextSetDefaultFlags ImpellerContextGetDefaultFlags ImpellerContextGetFlags"
+[ -f engine/impeller-sdk-patches/0003-rni-context-flags.patch ] && NEW_SYMS="$NEW_SYMS $FLAG_SYMS"
 STOCK_H=engine/third_party/impeller-sdk/include/impeller.h
 
 check_header() {  # dir
   local h="$1/include/impeller.h"
   [ -f "$h" ] || fail "header: no $h (run tools/impeller-sdk-custom-build.sh)"
   grep -q '^#define IMPELLER_RNI_TEXT_EXTENSIONS 1' "$h" || fail "header: IMPELLER_RNI_TEXT_EXTENSIONS missing in $h"
+  if [ -f engine/impeller-sdk-patches/0003-rni-context-flags.patch ]; then
+    grep -q '^#define IMPELLER_RNI_CONTEXT_FLAGS 1' "$h" || fail "header: IMPELLER_RNI_CONTEXT_FLAGS missing in $h"
+    grep -q '\bkImpellerContextFlagUseSDFs\b' "$h" || fail "header: kImpellerContextFlagUseSDFs not declared in $h"
+  fi
   for s in $NEW_SYMS kImpellerPlaceholderAlignmentMiddle; do
     grep -q "\b$s\b" "$h" || fail "header: $s not declared in $h"
   done

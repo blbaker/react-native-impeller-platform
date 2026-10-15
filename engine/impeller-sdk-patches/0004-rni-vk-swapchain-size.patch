@@ -1,0 +1,163 @@
+diff --git a/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/swapchain_vk.cc b/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/swapchain_vk.cc
+index ffd91ff..2f93b33 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/swapchain_vk.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/swapchain_vk.cc
+@@ -42,6 +42,12 @@ bool SwapchainVK::IsValid() const {
+   return swapchain_ && swapchain_->IsValid();
+ }
+ 
++void SwapchainVK::SetSize(const ISize& size) {
++  if (IsValid()) {
++    swapchain_->UpdateSurfaceSize(size);
++  }
++}
++
+ ScopedObject<SurfaceVK> SwapchainVK::AcquireNextSurface() {
+   if (!IsValid()) {
+     return nullptr;
+diff --git a/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/swapchain_vk.h b/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/swapchain_vk.h
+index 610af59..0f5c7d3 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/swapchain_vk.h
++++ b/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/swapchain_vk.h
+@@ -29,6 +29,9 @@ class SwapchainVK final
+ 
+   ScopedObject<SurfaceVK> AcquireNextSurface();
+ 
++  // RNI patch 0004: impeller::SwapchainVK::UpdateSurfaceSize.
++  void SetSize(const ISize& size);
++
+  private:
+   ScopedObject<Context> context_;
+   std::shared_ptr<impeller::SwapchainVK> swapchain_;
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.cc b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+index 84e00c9..9b0016b 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+@@ -247,6 +247,12 @@ ImpellerSurface ImpellerVulkanSwapchainAcquireNextSurfaceNew(
+   return GetPeer(swapchain)->AcquireNextSurface().Leak();
+ }
+ 
++IMPELLER_EXTERN_C
++void ImpellerVulkanSwapchainSetSize(ImpellerVulkanSwapchain swapchain,
++                                    const ImpellerISize* size) {
++  GetPeer(swapchain)->SetSize(ToImpellerType(*size));
++}
++
+ IMPELLER_EXTERN_C ImpellerDisplayListBuilder
+ ImpellerDisplayListBuilderNew(const ImpellerRect* cull_rect) {
+   return Create<DisplayListBuilder>(cull_rect).Leak();
+@@ -807,6 +813,17 @@ bool ImpellerSurfacePresent(ImpellerSurface surface) {
+   return GetPeer(surface)->Present();
+ }
+ 
++IMPELLER_EXTERN_C
++bool ImpellerSurfaceGetSize(ImpellerSurface surface, ImpellerISize* out_size) {
++  ISize size;
++  if (!GetPeer(surface)->GetSize(size)) {
++    return false;
++  }
++  out_size->width = size.width;
++  out_size->height = size.height;
++  return true;
++}
++
+ IMPELLER_EXTERN_C
+ void ImpellerDisplayListBuilderDrawTexture(ImpellerDisplayListBuilder builder,
+                                            ImpellerTexture texture,
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.h b/engine/src/flutter/impeller/toolkit/interop/impeller.h
+index 7636986..b4363ae 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.h
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.h
+@@ -879,6 +879,22 @@ IMPELLER_EXPORT IMPELLER_NODISCARD ImpellerSurface IMPELLER_NULLABLE
+ ImpellerVulkanSwapchainAcquireNextSurfaceNew(
+     ImpellerVulkanSwapchain IMPELLER_NONNULL swapchain);
+ 
++// react-native-impeller extension (patch 0004): out-of-band swapchain size and
++// drawable size readback. Not part of upstream Impeller; test with #ifdef.
++#define IMPELLER_RNI_VK_SWAPCHAIN_SIZE 1
++
++//------------------------------------------------------------------------------
++/// @brief      Tell the swapchain the size of the window it presents to. The
++///             next acquire recreates the swapchain at this size when it
++///             differs (KHRSwapchainVK::UpdateSurfaceSize). Android must call
++///             this: the KHR swapchain never reads the surface extent there,
++///             and the interop swapchain is created at 1x1.
++///
++IMPELLER_EXPORT
++void ImpellerVulkanSwapchainSetSize(
++    ImpellerVulkanSwapchain IMPELLER_NONNULL swapchain,
++    const ImpellerISize* IMPELLER_NONNULL size);
++
+ //------------------------------------------------------------------------------
+ // Surface
+ //------------------------------------------------------------------------------
+@@ -973,6 +989,14 @@ bool ImpellerSurfaceDrawDisplayList(ImpellerSurface IMPELLER_NONNULL surface,
+ IMPELLER_EXPORT
+ bool ImpellerSurfacePresent(ImpellerSurface IMPELLER_NONNULL surface);
+ 
++//------------------------------------------------------------------------------
++/// @brief      Read back the pixel size of the surface's render target (patch
++///             0004). Returns false and leaves `out_size` untouched if invalid.
++///
++IMPELLER_EXPORT
++bool ImpellerSurfaceGetSize(ImpellerSurface IMPELLER_NONNULL surface,
++                            ImpellerISize* IMPELLER_NONNULL out_size);
++
+ //------------------------------------------------------------------------------
+ // Path
+ //------------------------------------------------------------------------------
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.hpp b/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
+index c88ec7a..4c92e5b 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
+@@ -215,6 +215,7 @@ struct Proc {
+   PROC(ImpellerSurfaceCreateWrappedFBONew)                        \
+   PROC(ImpellerSurfaceCreateWrappedMetalDrawableNew)              \
+   PROC(ImpellerSurfaceDrawDisplayList)                            \
++  PROC(ImpellerSurfaceGetSize)                                    \
+   PROC(ImpellerSurfacePresent)                                    \
+   PROC(ImpellerSurfaceRelease)                                    \
+   PROC(ImpellerSurfaceRetain)                                     \
+@@ -230,7 +231,8 @@ struct Proc {
+   PROC(ImpellerVulkanSwapchainAcquireNextSurfaceNew)              \
+   PROC(ImpellerVulkanSwapchainCreateNew)                          \
+   PROC(ImpellerVulkanSwapchainRelease)                            \
+-  PROC(ImpellerVulkanSwapchainRetain)
++  PROC(ImpellerVulkanSwapchainRetain)                              \
++  PROC(ImpellerVulkanSwapchainSetSize)
+ 
+ struct ProcTable {
+   bool Initialize(
+diff --git a/engine/src/flutter/impeller/toolkit/interop/surface.cc b/engine/src/flutter/impeller/toolkit/interop/surface.cc
+index 81730a7..fc7bcd0 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/surface.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/surface.cc
+@@ -40,6 +40,14 @@ bool Surface::DrawDisplayList(const DisplayList& dl) const {
+   return result;
+ }
+ 
++bool Surface::GetSize(ISize& out_size) const {
++  if (!IsValid()) {
++    return false;
++  }
++  out_size = surface_->GetSize();
++  return true;
++}
++
+ bool Surface::Present() const {
+   if (!IsValid()) {
+     return false;
+diff --git a/engine/src/flutter/impeller/toolkit/interop/surface.h b/engine/src/flutter/impeller/toolkit/interop/surface.h
+index eb34677..2a8bbb6 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/surface.h
++++ b/engine/src/flutter/impeller/toolkit/interop/surface.h
+@@ -30,6 +30,9 @@ class Surface
+ 
+   bool Present() const;
+ 
++  // RNI patch 0004.
++  bool GetSize(ISize& out_size) const;
++
+  protected:
+   explicit Surface(Context& context,
+                    std::shared_ptr<impeller::Surface> surface);

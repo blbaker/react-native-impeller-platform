@@ -22,7 +22,10 @@
 // which takes a GL framebuffer (the only other one wraps a CAMetalDrawable). A
 // Vulkan context has nothing to render into headlessly, and every pixel gate in
 // this program is headless. GL is not a preference here, it is the only door.
+#include "base/ContextFlags.h"
+#include "base/GlLimits.h"
 #include "base/GlValidation.h"
+#include "fabric/ImageStore.h"
 #include "host/WinGLSurface.h"
 #include "text/TypographyContexts.h"
 
@@ -226,7 +229,10 @@ bool WinGLSurface::init(int width, int height, std::string* error) {
   }
 
   rni::glvalidation::Install(&ImpellerProcAddr, this);  // FP-05
+  rni::image::SetMaxTextureSize(rni::gllimits::MaxTextureSize(&ImpellerProcAddr, this));  // FP-16
+  rni::contextflags::ApplyBeforeCreate();  // FP-22
   context_ = ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ImpellerProcAddr, this);
+  rni::contextflags::Report(context_);
   if (!context_) return fail("ImpellerContextCreateOpenGLESNew returned null");
   ImpellerISize size = {width_, height_};
   surface_ = ImpellerSurfaceCreateWrappedFBONew(

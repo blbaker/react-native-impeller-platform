@@ -11,7 +11,7 @@
 #   M7  getSize reports [height, height]      -> S2 getSize
 set -euo pipefail
 cd "$(dirname "$0")/.."
-FILES=(engine/fabric/ImageStore.cpp engine/scenegraph/ImageEvents.cpp engine/scenegraph/SceneGraph.cpp
+FILES=(engine/fabric/ImageStore.cpp engine/fabric/ImageFetch.cpp engine/scenegraph/ImageEvents.cpp engine/scenegraph/SceneGraph.cpp
   engine/fabric/platform/impeller/react/renderer/imagemanager/ImageManager.cpp
   engine/modules/ImageLoaderModule.cpp)
 BAK="$(mktemp -d)"
@@ -42,7 +42,7 @@ run_gate "$BAK/c.log"; grep -q IMAGE_NET_GATE_PASS "$BAK/c.log" || { tail -5 "$B
 echo "   OK: control passes"
 
 echo "== M1: remote sources never fetched =="
-mutate engine/fabric/ImageStore.cpp "  FetchResult f = fetch(uri, headers);" "  FetchResult f;"
+mutate engine/fabric/ImageFetch.cpp "    f = fetch(uri, headers);" "    f = FetchResult{};"
 run_gate "$BAK/m1.log"; expect_killed M1 "$BAK/m1.log" "T0 remote image"
 restore
 
@@ -62,7 +62,9 @@ run_gate "$BAK/m4.log"; expect_killed M4 "$BAK/m4.log" "T2 defaultSource"
 restore
 
 echo "== M5: in-memory cache never consulted =="
-mutate engine/fabric/ImageStore.cpp "    if (hit != gCache.end()) cached = hit->second;" ""
+# FP-16: two cache layers since then, the decoded images and the fetched bodies
+mutate engine/fabric/ImageStore.cpp "      if (s != u->second.end()) cached = true, hit = s->second;" ""
+mutate engine/fabric/ImageFetch.cpp "  if (it == gBytes.end()) return false;" "  if (true) return false;"
 run_gate "$BAK/m5.log"; expect_killed M5 "$BAK/m5.log" "cache: /(red|yellow)\.png requested 2"
 restore
 

@@ -8,7 +8,7 @@
 #   3. runs the animated / text / image / native-transform fixtures windowed (xvfb) AND
 #      headless, plus the FP-04 stress fixture (text churn every 4 ms + a native-driver
 #      loop), the FP-12 typography fixture, and the ci-text / ci-native-transform / ci-image-net /
-#      ci-raster-thread (FP-15) gates on the TSan binary
+#      ci-image-io (FP-16) / ci-raster-thread (FP-15) gates on the TSan binary
 #   4. tools/tsan_check.py: any report outside tools/sanitize/tsan_known.txt FAILS; each
 #      known entry (a race a later pass owns) must still be seen
 # libimpeller.so / libhermesvm.so are prebuilt and uninstrumented: engine/base/TsanAnnotate.h
@@ -169,6 +169,7 @@ fi
 gate tools/ci-text.sh
 gate tools/ci-native-transform.sh
 gate tools/ci-image-net.sh
+gate tools/ci-image-io.sh   # FP-16: IO pool, cancel, dedup
 gate tools/ci-raster-thread.sh  # FP-15: RECORD on main, RASTER on the raster thread
 [ "${#RUNS[@]}" -gt 0 ] || fail "no runs selected (TSAN_RUNS=${TSAN_RUNS:-})"
 
