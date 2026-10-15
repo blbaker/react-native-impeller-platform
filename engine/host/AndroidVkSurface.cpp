@@ -1,5 +1,7 @@
 #include "host/AndroidVkSurface.h"
 
+#include "base/ContextFlags.h"
+
 #include <android/log.h>
 #include <dlfcn.h>
 
@@ -88,7 +90,9 @@ bool AndroidVkSurface::EnsureContext() {
   settings.proc_address_callback = ImpellerVkProcAddress;
   settings.enable_vulkan_validation = false;
 
+  rni::contextflags::ApplyBeforeCreate();  // FP-22
   context_ = ImpellerContextCreateVulkanNew(IMPELLER_VERSION, &settings);
+  rni::contextflags::Report(context_);
   if (context_ == nullptr) {
     LOGE("ImpellerContextCreateVulkanNew failed (no Vulkan 1.1 device?)");
     return false;

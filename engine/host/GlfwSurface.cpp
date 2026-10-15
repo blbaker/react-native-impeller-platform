@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cmath>
 #include <chrono>
+#include "base/ContextFlags.h"
 #include "base/GlLimits.h"
 #include "base/GlValidation.h"
 #include "fabric/ImageStore.h"
@@ -780,7 +781,9 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
 
   rni::glvalidation::Install(&ProcAddr, nullptr);  // FP-05
   rni::image::SetMaxTextureSize(rni::gllimits::MaxTextureSize(&ProcAddr, nullptr));  // FP-16
+  rni::contextflags::ApplyBeforeCreate();  // FP-22
   context_ = ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ProcAddr, nullptr);
+  rni::contextflags::Report(context_);
   if (!context_) return fail("ImpellerContextCreateOpenGLESNew returned null");
 
   // fbo id 0 — the window's OWN default framebuffer, not one we allocate.

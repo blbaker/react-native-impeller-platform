@@ -71,6 +71,7 @@
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
 #include "base/GlValidation.h"
+#include "base/ContextFlags.h"
 #include "fabric/ImageStore.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
@@ -148,6 +149,9 @@ void Usage() {
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
           "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
+          "                   [--sdf-aa on|off]  analytic SDF AA for circles, ovals,\n"
+          "                     rects, rounded rects (Impeller Flags::use_sdfs, SDK\n"
+          "                     patch 0003). Default off (FP-22)\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
           "                   [--frame-timings-out <file.json>]  one record per\n"
@@ -2443,6 +2447,14 @@ int main(int argc, char** argv) {
                 argv[i]);
         return 2;
       }
+    }
+    else if (a == "--sdf-aa") {
+      std::string v = next("--sdf-aa");
+      if (v != "on" && v != "off") {
+        fprintf(stderr, "rn-impeller: --sdf-aa wants on|off (got %s)\n", v.c_str());
+        return 2;
+      }
+      rni::contextflags::SetSdfAa(v == "on");
     }
     else if (a == "--probe") {
       std::string v = next("--probe");

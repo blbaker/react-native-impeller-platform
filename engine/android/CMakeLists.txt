@@ -31,6 +31,7 @@ endif()
 add_library(reactnativeimpeller SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/../host/AndroidVkSurface.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../host/AndroidJni.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../base/ContextFlags.cpp
 )
 
 target_include_directories(reactnativeimpeller PRIVATE
