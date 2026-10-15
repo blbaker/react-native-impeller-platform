@@ -3,9 +3,15 @@
 
 #include "base/Trace.h"
 
+#include <cstdio>
+
 #if defined(__linux__)
 #include <sys/syscall.h>
 #include <unistd.h>
+#endif
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <sys/qos.h>
 #endif
 
 namespace rni {
@@ -83,8 +89,34 @@ void RasterThread::Join() {
   if (thread_.joinable()) thread_.join();
 }
 
+// FP-19: flutter/shell/platform/darwin/macos/framework/Source/FlutterEngine.mm SetThreadPriority
+// (kRaster): sched priority 47 (the main thread's) + QOS_CLASS_USER_INTERACTIVE. Without it a loaded
+// Mac preempts the raster thread for 8-50 ms between the vsync tick and the present (ci-vsync B).
+// Linux/Windows embedders leave the raster thread at the default priority; so do we.
+static void SetRasterThreadPriority() {
+#if defined(__APPLE__)
+  // QoS first: once pthread_setschedparam has run, the QoS call is refused (EPERM).
+  const int qosRc = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  pthread_t self = pthread_self();
+  qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+  int rel = 0;
+  pthread_get_qos_class_np(self, &qos, &rel);
+  sched_param param;
+  int policy;
+  if (!pthread_getschedparam(self, &policy, &param)) {
+    param.sched_priority = 47;
+    pthread_setschedparam(self, policy, &param);
+  }
+  int prio = pthread_getschedparam(self, &policy, &param) ? -1 : param.sched_priority;
+  std::printf("rn-impeller: raster_thread_priority qos=%s qos_rc=%d sched_priority=%d\n",
+              qos == QOS_CLASS_USER_INTERACTIVE ? "user_interactive" : "other", qosRc, prio);
+  std::fflush(stdout);
+#endif
+}
+
 void RasterThread::Loop() {
   rni::trace::SetThreadName("raster");
+  SetRasterThreadPriority();
   for (;;) {
     Task task;
     {

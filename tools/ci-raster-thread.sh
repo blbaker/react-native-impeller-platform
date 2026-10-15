@@ -14,7 +14,7 @@
 #      and every present on a thread other than main.
 #   B  1000 commits racing raster: the 12 boxes share one colour per commit and
 #      RNI_TEST_UNIFORM_PROBE reads every present back on the raster thread. Runs
-#      until JS logs FP15_COMMITS n=1000, then quits: torn=0, >= 3 distinct
+#      until JS logs FP15_COMMITS n=1000 and 30 frames presented, then quits: torn=0, >= 3 distinct
 #      colours on screen, >= 30 presents. Two runs: raster delay 0 and 3 ms.
 #   C  quit mid-animation x20 (NativeRotateProbe, --quit-on-term, TERM 150-640 ms
 #      after the first present, raster delay alternating 0 / 20 ms): exit 0,
@@ -32,7 +32,9 @@ ROT="$ROOT/fixtures/native-transform/prebuilt/native-transform.bundle"
 fail() { echo "RASTER_THREAD_FAIL: $*" >&2; exit 1; }
 [ -s "$TEAR" ] || fail "no committed bundle at $TEAR"
 [ -s "$ROT" ] || fail "no committed bundle at $ROT"
-[ "$(uname -s)" = Linux ] || fail "linux only (Xvfb); darwin/win32 lanes come with FP-19"
+. tools/lib/host-window.sh
+# darwin (FP-19): real window server, no Xvfb; run through tools/parity-mac.sh gate.
+[ "$(rni_host)" != other ] || fail "linux (Xvfb) or darwin only"
 if [ -n "${RNI_BIN:-}" ]; then
   BIN="$RNI_BIN"
 else
@@ -41,7 +43,7 @@ else
   BIN="$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller"
 fi
 [ -x "$BIN" ] || fail "no engine binary at $BIN (set RNI_BIN)"
-echo "engine: $BIN ($(sha256sum "$BIN" | cut -c1-12))"
+echo "engine: $BIN ($(shasum -a 256 "$BIN" | cut -c1-12)) host=$(rni_host)"
 
 WORK="$(mktemp -d)"
 XPID=""
@@ -51,13 +53,13 @@ cleanup() {
   [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT
-if [ -z "${DISPLAY:-}" ]; then
+if [ "$(rni_host)" = linux ] && [ -z "${DISPLAY:-}" ]; then
   for n in $(seq 160 199); do [ -e "/tmp/.X11-unix/X$n" ] || break; done
   Xvfb ":$n" -screen 0 1280x1024x24 -nolisten tcp > "$WORK/xvfb.log" 2>&1 & XPID=$!
   export DISPLAY=":$n"
   for _ in $(seq 50); do [ -e "/tmp/.X11-unix/X$n" ] && break; sleep 0.1; done
 fi
-echo "DISPLAY=$DISPLAY"
+echo "DISPLAY=${DISPLAY:-} host=$(rni_host)"
 # The stall scales with RNI_TIME_SCALE (ci-sanitize / ci-tsan export 4), like every FP-06 ceiling.
 STALL_MS="$(awk -v s="$(rni_scaled 50)" 'BEGIN { printf "%d", s }')"
 BOXES="50,50;140,50;230,50;320,50;50,140;140,140;230,140;320,140;50,230;140,230;230,230;320,230"
@@ -145,10 +147,12 @@ for i in 1 2 3; do summary_ok "$WORK/a-$i.log" "A run $i"; done
 echo "== B: 1000 commits racing the raster thread, zero torn frames =="
 for delay in 0 3; do
   log="$WORK/b-$delay.log"
-  RNI_TEST_UNIFORM_PROBE="$BOXES" RNI_TEST_RASTER_DELAY_MS="$delay" \
+  RNI_TEST_UNIFORM_PROBE="$BOXES" RNI_TEST_RASTER_DELAY_MS="$delay" RNI_TEST_RASTER_LOG=1 \
     "$BIN" "${COMMON[@]}" --bundle "$TEAR" --app-name RasterTear --quit-on-term > "$log" 2>&1 &
   pid=$!; rni_track "$pid"
   rni_wait_line "$log" '^\[js\] FP15_COMMITS n=1000$' 120 "$pid" || { tail -15 "$log" >&2; fail "B delay $delay: JS never reached 1000 commits"; }
+  # FP-19: an M-series Mac commits 1000 in ~0.45 s (28 presents); wait for 30 presents too.
+  rni_wait_line "$log" '^rn-impeller: raster_present n=30 ' 60 "$pid" || { tail -15 "$log" >&2; fail "B delay $delay: never reached 30 presents"; }
   kill -TERM "$pid" 2> /dev/null || true
   rc=0; rni_wait_exit "$pid" 60 || rc=$?
   teardown_ok "$log" "B delay $delay"
