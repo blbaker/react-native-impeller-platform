@@ -281,6 +281,7 @@ add_executable(rn-impeller
   modules/ExpoFetch.cpp
   fabric/FabricHost.cpp
   fabric/ComponentRegistry.cpp
+  fabric/LayoutAnimations.cpp
   scenegraph/SceneGraph.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.

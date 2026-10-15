@@ -1,4 +1,5 @@
 #include "base/Trace.h"
+#include "fabric/LayoutAnimations.h"
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -119,8 +120,11 @@ ExitRaceProbe* gExitRaceProbe = nullptr;  // leaked on purpose (see above)
 
 class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
  public:
-  ImpellerSchedulerDelegate(SceneGraph* sceneGraph, bool logMutations)
-      : sceneGraph_(sceneGraph), logMutations_(logMutations) {}
+  ImpellerSchedulerDelegate(SceneGraph* sceneGraph, bool logMutations,
+                            std::mutex* mountMutex)
+      : sceneGraph_(sceneGraph),
+        logMutations_(logMutations),
+        mountMutex_(mountMutex) {}
 
   void schedulerDidFinishTransaction(
       const std::shared_ptr<const react::MountingCoordinator>&) override {
@@ -138,6 +142,11 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
     // shouldOverridePullTransaction() is true, so the loop never terminates
     // and the JS thread never returns to its event loop. RN's own consumer
     // pulls exactly once.
+    //
+    // FP-40: JS-thread commits and platform-thread LayoutAnimation ticks both
+    // pull here. The lock spans pull AND apply so transactions mount in the
+    // order they were pulled (fabric/LayoutAnimations.h).
+    std::lock_guard<std::mutex> mountLock(*mountMutex_);
     if (auto transaction = mountingCoordinator->pullTransaction()) {
       if (sceneGraph_ != nullptr) {
         TRACE_EVENT0("fabric", "MountTransaction");
@@ -219,6 +228,7 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
  private:
   SceneGraph* sceneGraph_;
   bool logMutations_;
+  std::mutex* mountMutex_;
 };
 
 // ⛔ The base EventBeat is INERT: request() only sets a flag, and the PLATFORM
@@ -579,13 +589,17 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
                                                *runtimeScheduler);
   };
 
+  // FP-40: RN's LayoutAnimationDriver, wired as on Android/iOS.
+  layoutAnimations_ = std::make_unique<LayoutAnimations>(
+      toolbox.runtimeExecutor, toolbox.contextContainer);
   {
-    auto d = std::make_unique<ImpellerSchedulerDelegate>(sceneGraph, logMutations);
+    auto d = std::make_unique<ImpellerSchedulerDelegate>(
+        sceneGraph, logMutations, &layoutAnimations_->MountMutex());
     d->commandHandler_ = [this](ViewCommand cmd) { postCommand(std::move(cmd)); };
     delegate_ = std::move(d);
   }
   scheduler_ = std::make_unique<react::Scheduler>(
-      toolbox, /*animationDelegate*/ nullptr, delegate_.get());
+      toolbox, layoutAnimations_->AnimationDelegate(), delegate_.get());
   std::printf("[fabric] scheduler up (UIManagerBinding installed)\n");
   std::fflush(stdout);
   if (const char* ms = std::getenv("RNI_TEST_EXIT_RACE_MS")) {
@@ -646,6 +660,28 @@ FabricHost::~FabricHost() {
   scheduler_.reset();
   gSchedulerTornDown = true;
   delegate_.reset();
+  layoutAnimations_.reset();
+}
+
+bool FabricHost::tickLayoutAnimations() {
+  if (!scheduler_ || !layoutAnimations_) return false;
+  return layoutAnimations_->Tick(*scheduler_->getUIManager());
+}
+
+bool FabricHost::layoutAnimationActive() const {
+  return layoutAnimations_ && layoutAnimations_->Active();
+}
+
+void FabricHost::setLayoutAnimationWake(std::function<void()> wake) {
+  if (layoutAnimations_) layoutAnimations_->SetWake(std::move(wake));
+}
+
+void FabricHost::setLayoutAnimationClock(std::function<std::uint64_t()> nowMs) {
+  if (layoutAnimations_) layoutAnimations_->SetClock(std::move(nowMs));
+}
+
+void FabricHost::printLayoutAnimationSummary() const {
+  if (layoutAnimations_) layoutAnimations_->PrintSummary();
 }
 
 void FabricHost::startSurface(const std::string& moduleName, int surfaceId,
@@ -680,6 +716,8 @@ void FabricHost::startSurface(const std::string& moduleName, int surfaceId,
   surfaceHandler_->constraintLayout(constraints, layoutContext);
 
   surfaceHandler_->start();  // → AppRegistry.runApplication on the JS thread
+  // FP-40: after start(), as FabricUIManagerBinding::startSurfaceWithSurfaceHandler does.
+  layoutAnimations_->AttachSurface(*surfaceHandler_);
 
   std::printf("[fabric] surface %d (%s) started %gx%g points @%gx (%gx%g px)\n",
               surfaceId, moduleName.c_str(), (double)pointWidth,

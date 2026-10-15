@@ -148,6 +148,9 @@ run text-headless   headless "$TX" Eng22FontFamily 5 --font-dir "$FONTS"
 TY=fp12-typography/prebuilt/fp12-typography.bundle
 run fp12-window     window   "$TY" Fp12Typography 600 --idle-skip --font-dir "$FONTS"
 run fp12-headless   headless "$TY" Fp12Typography 60 --font-dir "$FONTS"
+# FP-40: LayoutAnimation ticks pull + mount on main while Fabric commits pull + mount on JS.
+LA=fp40-layout-animation/prebuilt/fp40-layout-animation.bundle
+run fp40-window     window   "$LA" Fp40LayoutAnim 0 --idle-skip --idle-run-sec 4
 if want image-window || want image-headless; then
   # The image fixture fetches from ci-image-net.sh's local server: reuse that server verbatim.
   sed -n "/^cat > \"\$WORK\/server.py\" <<'PY'\$/,/^PY\$/p" tools/ci-image-net.sh | sed '1d;$d' > "$WORK/server.py"

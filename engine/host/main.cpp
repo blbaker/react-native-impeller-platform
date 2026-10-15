@@ -1181,6 +1181,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // wake (glfwPostEmptyEvent) unless M3 built it without one.
     sceneGraph.setDamageWake([&scheduler]() { scheduler.RequestFrame("damage"); });
     host.setNativeAnimatedStartHook([&scheduler]() { scheduler.RequestFrame("animation"); });
+    // FP-40: a LayoutAnimation starts inside a JS-thread pull.
+    fabric.setLayoutAnimationWake([&scheduler]() { scheduler.RequestFrame("layout_animation"); });
     {
       // ENG-09: a WorldRaster.setPixels write is scene damage the version
       // counter is otherwise blind to (it runs on the JS thread and never
@@ -1354,14 +1356,17 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     bool animatedThisFrame = false;
     if (shouldPaint) {
       scheduler.BeginFrame();
+      // FP-40: RN's animationTick (LayoutAnimation half), platform thread.
+      if (fabric.tickLayoutAnimations()) animatedThisFrame = true;
       const unsigned long ticksBefore = host.nativeAnimatedTicks();
       host.pumpNativeAnimated();
-      animatedThisFrame = host.nativeAnimatedTicks() != ticksBefore;
+      if (host.nativeAnimatedTicks() != ticksBefore) animatedThisFrame = true;
     }
     // A live clock asks for the next frame: a NativeAnimated animation in
     // flight, a focused field's caret blink, a spinning ActivityIndicator.
     // Nothing marks those dirty, so without this they freeze mid-cycle.
     if (idleSkip && (animatedThisFrame || host.nativeAnimatedActive() ||
+                     fabric.layoutAnimationActive() ||
                      sceneGraph.focusedTextInput() != 0 ||
                      sceneGraph.spinnerAnimating())) {
       scheduler.RequestFrame("clock");
@@ -1779,6 +1784,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // FP-01: presents counted at surface.present(), independent of the recorder.
   printf("rn-impeller: presents=%d\n", paintsTotal);
   scheduler.PrintSummary();
+  fabric.printLayoutAnimationSummary();  // FP-40
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
@@ -2739,8 +2745,15 @@ int main(int argc, char** argv) {
     // Fabric must be up BEFORE the bundle evaluates: the Scheduler installs
     // UIManagerBinding through the unbuffered executor, and ReactFabric reads
     // global.nativeFabricUIManager the moment it initialises.
+    // FP-40: headless LayoutAnimation time is frame-counted (16.667 ms per
+    // stepped frame), like the NativeAnimated clock, so captures are repeatable.
+    // Declared before fabric: the KFM keeps the clock until fabric dies.
+    std::atomic<uint64_t> layoutAnimFrames{0};
     rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                            logMutations, host.displayMetrics());
+    fabric.setLayoutAnimationClock([&layoutAnimFrames]() -> uint64_t {
+      return layoutAnimFrames.load() * 16667 / 1000;
+    });
 
     host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
     host.runScript(std::move(bundle), sourceUrl);
@@ -3080,6 +3093,8 @@ int main(int argc, char** argv) {
         auto hf = std::make_unique<rni::FrameTimingsRecorder>();
         hf->RecordVsync();
         hf->RecordBuildStart();
+        layoutAnimFrames.fetch_add(1);
+        fabric.tickLayoutAnimations();  // FP-40
         host.pumpNativeAnimated();
         host.waitForJsIdle(5000);
         // FP-33: decodes finish off-thread. Their load events are queued to JS before WaitIdle
@@ -3212,6 +3227,7 @@ int main(int argc, char** argv) {
     }
     ImpellerDisplayListBuilderRelease(builder);
     printf("rn-impeller: presents=%d\n", headlessPresents);
+    fabric.printLayoutAnimationSummary();  // FP-40
     FinishFrameTimings(headlessTimings);
     FinishTrace();
     rni::glvalidation::Finish();
