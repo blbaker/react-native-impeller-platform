@@ -183,7 +183,9 @@ ReactHost::ReactHost(bool withInspector) {
   // Weak: TimerManager outlives us only through ReactInstance, and a strong
   // capture here would keep it alive past the runtime it calls into.
   jsThread_->setTimerFireCallback(
-      [weak = std::weak_ptr<react::TimerManager>(timerManager)](uint32_t id) {
+      [weak = std::weak_ptr<react::TimerManager>(timerManager),
+       fired = jsTimersFired_](uint32_t id) {
+        fired->fetch_add(1, std::memory_order_relaxed);
         if (auto tm = weak.lock()) {
           tm->callTimer(static_cast<react::TimerHandle>(id));
         }
@@ -507,6 +509,10 @@ void ReactHost::pumpNativeAnimated() {
 
 unsigned long ReactHost::nativeAnimatedTicks() const {
   return nativeAnimatedPump_ ? nativeAnimatedPump_->ticks() : 0UL;
+}
+
+unsigned long long ReactHost::nativeAnimatedTickMicros() const {
+  return nativeAnimatedPump_ ? nativeAnimatedPump_->tickMicros() : 0ULL;
 }
 
 // ⛔ ENG-06: THE FRAME-COUNTED ANIMATION CLOCK.

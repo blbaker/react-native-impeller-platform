@@ -139,6 +139,18 @@ class ReactHost {
   // NativeAnimatedPump.h for why a pixel diff alone cannot prove ENG-06.
   unsigned long nativeAnimatedTicks() const;
 
+  // Per-frame JS-work instruments for the native-driven-loop cost check.
+  // jsTimersFired: JS timer callbacks run (setTimeout/setInterval and
+  // requestAnimationFrame, which IS a setTimeout(0) here). A JS-driven
+  // Animated loop fires one per frame; a native-driven one fires none.
+  // nativeAnimatedTickMicros: wall time spent inside RN's C++ onRender (the
+  // node-graph walk + prop apply), summed over every tick. That walk runs on
+  // the JS thread's queue (see pumpNativeAnimated) but executes no JS.
+  unsigned long jsTimersFired() const {
+    return jsTimersFired_->load(std::memory_order_relaxed);
+  }
+  unsigned long long nativeAnimatedTickMicros() const;
+
   // ENG-06. Replace RN's animation clock with a FRAME COUNTER, and step it.
   //
   // Ticking the pump alone is not enough: RN's drivers interpolate on elapsed
@@ -151,6 +163,10 @@ class ReactHost {
 
  private:
   std::shared_ptr<JsThread> jsThread_;
+  // Shared with the JsThread timer-fire callback, so the counter stays valid
+  // for whichever of the two is destroyed last.
+  std::shared_ptr<std::atomic<unsigned long>> jsTimersFired_ =
+      std::make_shared<std::atomic<unsigned long>>(0);
   // parity item 24. Declared BEFORE instance_ so it is destroyed AFTER it:
   // the ReactInstance's inspector targets live under its HostTarget.
   std::unique_ptr<InspectorHost> inspector_;

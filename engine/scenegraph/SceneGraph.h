@@ -130,6 +130,11 @@ struct SceneNode {
   bool hasLayerShadow{false};
   ShadowSpec layerShadow;
   std::array<float, 16> transform{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+  // The props the transform was resolved WITH, kept so a NativeAnimated
+  // update (which sends only the operation list) resolves exactly as a mount
+  // would: same origin, same backface rule. See ResolveViewTransform.
+  facebook::react::TransformOrigin transformOrigin{};
+  bool backfaceVisibilityHidden{false};
 
   bool overflowHidden{false};
   // Style audit items 1-4 (scenegraph/Shadows.h). `shadows` holds the iOS
@@ -561,6 +566,13 @@ class SceneGraph {
   // received). A gate needs this: a call that finds the node and then matches
   // no known key is indistinguishable, from the outside, from no call at all.
   unsigned long directPropUpdates() const { return directPropUpdates_; }
+
+  // Non-empty mounting transactions applied so far. A native-driven loop
+  // must not add any per frame; a JS-driven one adds about one per frame (a
+  // React commit). The headless frame loop prints the delta over the loop.
+  unsigned long mountTransactions() const {
+    return mountTransactions_.load(std::memory_order_relaxed);
+  }
 
   // ── Idle-frame damage signal + wake (P12-01) ──────────────────────────────
   // A monotonic revision, bumped once per applyMutations, per applied direct-
@@ -994,6 +1006,9 @@ class SceneGraph {
   int spritesDrawn_{0};  // reset per paint(); see worldSpritesDrawn()
   // ENG-06. Count of PROPS applied by updateViewProps(), not calls made.
   unsigned long directPropUpdates_{0};
+  // Count of non-empty mounting transactions applied (React commits that
+  // reached the scene). Atomic: written on the JS thread, read by main.
+  std::atomic<unsigned long> mountTransactions_{0};
   // P12-01: idle-frame damage revision, bumped by bumpVersion(). Atomic so an
   // off-thread producer (JS applyMutations / updateViewProps) can bump it while
   // the GLFW loop reads it on the main thread with no scene lock held.

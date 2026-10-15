@@ -4,6 +4,10 @@
 #include "scenegraph/CursorKinds.h"
 
 #include <react/renderer/core/ConcreteState.h>
+#include <react/renderer/core/PropsParserContext.h>
+#include <react/renderer/core/RawValue.h>
+#include <react/renderer/components/view/conversions.h>  // fromRawValue(Transform)
+#include <react/utils/ContextContainer.h>
 #include <react/renderer/components/textinput/BaseTextInputProps.h>
 #include <react/renderer/components/iostextinput/TextInputProps.h>
 #include <react/renderer/components/FBReactNativeSpec/Props.h>  // SwitchProps, ENG-15, ActivityIndicatorViewProps
@@ -319,6 +323,49 @@ std::string ellipseToPathData(float cx, float cy, float rx, float ry) {
   return buf;
 }
 
+// ONE transform resolver for BOTH prop paths: the mounting transaction
+// (updateFromShadowView) and the NativeAnimated direct path (updateViewProps).
+// `ops` is the operation list; frame size, transform-origin and the backface
+// rule come from the node, which the mount path filled in. Two copies of this
+// would drift, and a drift shows up as an animated view that pivots or culls
+// differently from the same view at rest.
+void ResolveViewTransform(SceneNode& node, const react::Transform& ops) {
+  node.hasTransform = false;
+  node.backfaceHidden = false;
+  if (ops.operations.empty()) {
+    return;
+  }
+  const auto resolved = react::BaseViewProps::resolveTransform(
+      node.layoutMetrics.frame.size, ops, node.transformOrigin);
+  node.transform = resolved.matrix;
+  node.hasTransform = resolved != react::Transform::Identity();
+  if (node.backfaceVisibilityHidden) {
+    // Orientation of the z=0 plane after the transform: determinant of the
+    // x, y, w rows over columns 0, 1, 3. Negative means the back faces us.
+    const auto& m = node.transform;
+    const double det = m[0] * (m[5] * m[15] - m[13] * m[7]) -
+                       m[4] * (m[1] * m[15] - m[13] * m[3]) +
+                       m[12] * (m[1] * m[7] - m[5] * m[3]);
+    node.backfaceHidden = det < 0;
+  }
+}
+
+// The NativeAnimated `transform` payload is an OPERATION LIST, not a matrix:
+// RN's TransformAnimatedNode builds [{"rotate": 1.57}, {"scale": 2}] with
+// angles already in radians (NativeAnimatedHelper.transformDataType). Parsed
+// by RN's own prop parser, so every operation the mount path accepts
+// (rotate/X/Y/Z, scale/X/Y, translate/X/Y, skewX/Y, perspective, matrix) is
+// accepted here too. False for a non-empty list RN's parser rejects: it
+// returns an empty Transform for ANY bad entry, and applying that would snap
+// the view to identity.
+bool ParseTransformOps(const folly::dynamic& value, react::Transform& out) {
+  static const react::ContextContainer kNoContext;
+  const react::PropsParserContext context{-1, kNoContext};
+  out = react::Transform{};
+  react::fromRawValue(context, react::RawValue(value), out);
+  return value.empty() || !out.operations.empty();
+}
+
 }  // namespace
 
 SceneGraph::SceneGraph(ImpellerTypographyContext typography)
@@ -556,21 +603,10 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     rni::ParseContentFilters(props->filter, node.blurSigma, node.dropShadows);
     node.hasTransform = false;
     node.backfaceHidden = false;
-    if (!props->transform.operations.empty()) {
-      const auto resolved = props->resolveTransform(view.layoutMetrics);
-      node.transform = resolved.matrix;
-      node.hasTransform = resolved != react::Transform::Identity();
-      node.backfaceHidden = false;
-      if (props->backfaceVisibility == react::BackfaceVisibility::Hidden) {
-        // Orientation of the z=0 plane after the transform: determinant of the
-        // x, y, w rows over columns 0, 1, 3. Negative means the back faces us.
-        const auto& m = node.transform;
-        const double det = m[0] * (m[5] * m[15] - m[13] * m[7]) -
-                           m[4] * (m[1] * m[15] - m[13] * m[3]) +
-                           m[12] * (m[1] * m[7] - m[5] * m[3]);
-        node.backfaceHidden = det < 0;
-      }
-    }
+    node.transformOrigin = props->transformOrigin;
+    node.backfaceVisibilityHidden =
+        props->backfaceVisibility == react::BackfaceVisibility::Hidden;
+    ResolveViewTransform(node, props->transform);
 
     // experimental_backgroundImage: linear and radial layers (BackgroundLayers.cpp).
     node.bgLayers = BuildBackgroundLayers(
@@ -1113,6 +1149,9 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
 void SceneGraph::applyMutations(
     const react::ShadowViewMutation::List& mutations, bool log) {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (!mutations.empty()) {
+    mountTransactions_.fetch_add(1, std::memory_order_relaxed);
+  }
   for (const auto& m : mutations) {
     switch (m.type) {
       case react::ShadowViewMutation::Create: {
@@ -1284,9 +1323,23 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
     }
 
     if (key == "transform") {
-      // RN sends the resolved 4x4 as a flat 16-element array, column-major,
-      // the same layout SceneNode::transform already holds.
-      if (!value.isArray() || value.size() != 16) continue;
+      if (!value.isArray()) continue;
+      // ⛔ THE SHAPE RN ACTUALLY SENDS IS AN OPERATION LIST. RN 0.86's C++
+      // TransformAnimatedNode emits [{"rotate": <radians>}, {"scale": 2}],
+      // never a matrix. This branch used to accept ONLY a flat 16-number
+      // matrix, so every native-driven rotate/translate/scale was skipped here
+      // without a log line while nativeanimated_ticks counted up and opacity
+      // (a different key) animated fine (Mac ledger DS-INPUT-SPIN, 2026-09-28).
+      // A flat 16-number array is still accepted below as a column-major matrix.
+      const bool flatMatrix = value.size() == 16 && value[0].isNumber();
+      if (!flatMatrix) {
+        react::Transform ops;
+        if (!ParseTransformOps(value, ops)) continue;
+        ResolveViewTransform(node, ops);
+        ++directPropUpdates_;
+        continue;
+      }
+      // Flat matrix: column-major, the layout SceneNode::transform holds.
       std::array<float, 16> m{};
       bool ok = true;
       for (size_t i = 0; i < 16 && ok; ++i) {

@@ -41,6 +41,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <utility>
@@ -77,9 +78,22 @@ class NativeAnimatedPump {
       cb = onRender_;
     }
     if (cb) {
+      const auto t0 = std::chrono::steady_clock::now();
       cb();
+      tickNanos_.fetch_add(
+          (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - t0)
+              .count(),
+          std::memory_order_relaxed);
       ticks_.fetch_add(1, std::memory_order_relaxed);
     }
+  }
+
+  // Wall time spent inside onRender, summed over all ticks, in microseconds.
+  // This is the JS-THREAD cost of a native-driven animation: C++ only, no JS
+  // executes, but it does occupy the JS thread's queue once per frame.
+  unsigned long long tickMicros() const {
+    return tickNanos_.load(std::memory_order_relaxed) / 1000ULL;
   }
 
   // How many times the manager's onRender actually ran.
@@ -100,6 +114,7 @@ class NativeAnimatedPump {
   std::function<void()> onRender_;
   std::atomic<bool> active_{false};
   std::atomic<unsigned long> ticks_{0};
+  std::atomic<unsigned long long> tickNanos_{0};
 };
 
 }  // namespace rni
