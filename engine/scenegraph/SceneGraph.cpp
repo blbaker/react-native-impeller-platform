@@ -1,4 +1,5 @@
 #include "scenegraph/SceneGraph.h"
+#include "scenegraph/DynamicNumber.h"
 
 #include "scenegraph/CaretBlink.h"
 #include "scenegraph/CursorKinds.h"
@@ -148,7 +149,7 @@ bool svgFillFromDynamic(const folly::dynamic& v, float out[4]) {
   // reached. Read numerics by VALUE, never by storage class.
   auto* type = v.get_ptr("type");
   if (type == nullptr || !type->isNumber()) return false;
-  if (type->asDouble() != 0.0) return false;  // gradient ref / currentColor: not tier 1
+  if (NumberOf(*type) != 0.0) return false;  // gradient ref / currentColor: not tier 1
   auto* payload = v.get_ptr("payload");
   if (payload == nullptr) return false;  // "none"
   // ⛔ THE PAYLOAD DOES NOT FIT IN A SIGNED INT, AND folly SAYS SO BY TYPE.
@@ -169,7 +170,7 @@ bool svgFillFromDynamic(const folly::dynamic& v, float out[4]) {
   // Semi-transparent fills (alpha < 0x80) DO land in int range, so a test
   // using only those would have passed while every solid colour failed.
   if (!payload->isNumber()) return false;  // unresolved brush
-  const auto argb = static_cast<uint32_t>(static_cast<int64_t>(payload->asDouble()));
+  const auto argb = static_cast<uint32_t>(ClampTo<int64_t>(NumberOf(*payload)));
   out[3] = (float)((argb >> 24) & 0xFF) / 255.0f;
   out[0] = (float)((argb >> 16) & 0xFF) / 255.0f;
   out[1] = (float)((argb >> 8) & 0xFF) / 255.0f;
@@ -199,7 +200,7 @@ bool svgBrushFromDynamic(const folly::dynamic& v, float out[4], bool* isRef,
   if (!v.isObject()) return false;
   auto* type = v.get_ptr("type");
   if (type == nullptr || !type->isNumber()) return false;
-  const int t = (int)type->asDouble();
+  const int t = ClampTo<int>(NumberOf(*type));
   if (t == 1) {
     // url(#id) -- the gradient/pattern lives elsewhere in the tree.
     auto* br = v.get_ptr("brushRef");
@@ -242,7 +243,7 @@ std::vector<float> svgDashFromDynamic(const folly::dynamic& v) {
   std::vector<float> raw;
   auto one = [&](const folly::dynamic& e) -> bool {
     if (e.isNumber()) {
-      raw.push_back((float)e.asDouble());
+      raw.push_back((float)NumberOf(e));
       return true;
     }
     if (e.isString()) return svgDashLength(e.asString(), &raw);
@@ -273,7 +274,7 @@ void readSvgPaintProps(SceneNode& node, const P* pp) {
   // strokeWidth is folly::dynamic: a number OR a length string ("2", "2px").
   node.svgStrokeWidth = 1.0f;
   if (pp->strokeWidth.isNumber()) {
-    node.svgStrokeWidth = (float)pp->strokeWidth.asDouble();
+    node.svgStrokeWidth = (float)NumberOf(pp->strokeWidth);
   } else if (pp->strokeWidth.isString()) {
     try {
       node.svgStrokeWidth = std::stof(pp->strokeWidth.asString());
@@ -294,7 +295,7 @@ void readSvgPaintProps(SceneNode& node, const P* pp) {
 // Shape geometry props are folly::dynamic because rnsvg accepts a number or a
 // length string. Same by-value rule as everywhere else in this file.
 float svgLength(const folly::dynamic& v, float fallback = 0.0f) {
-  if (v.isNumber()) return (float)v.asDouble();
+  if (v.isNumber()) return (float)NumberOf(v);
   if (v.isString()) {
     try {
       return std::stof(v.asString());
@@ -371,7 +372,11 @@ bool ParseTransformOps(const folly::dynamic& value, react::Transform& out) {
   static const react::ContextContainer kNoContext;
   const react::PropsParserContext context{-1, kNoContext};
   out = react::Transform{};
-  react::fromRawValue(context, react::RawValue(value), out);
+  try {
+    react::fromRawValue(context, react::RawValue(value), out);
+  } catch (const std::exception&) {  // RN's converters throw on a mistyped entry
+    return false;
+  }
   return value.empty() || !out.operations.empty();
 }
 
@@ -1346,7 +1351,7 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
       // picks int64 for a whole 0 or 1 and double for everything between, so
       // an isDouble() guard drops exactly the endpoints of every 0->1 ramp.
       if (!value.isNumber()) continue;
-      node.opacity = (float)value.asDouble();
+      node.opacity = (float)NumberOf(value);
       ++directPropUpdates_;
       continue;
     }
@@ -1373,7 +1378,7 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
       bool ok = true;
       for (size_t i = 0; i < 16 && ok; ++i) {
         if (!value[i].isNumber()) { ok = false; break; }
-        m[i] = (float)value[i].asDouble();
+        m[i] = (float)NumberOf(value[i]);
       }
       // ⛔ STAGE THEN COMMIT. Writing straight into node.transform and bailing
       // partway through a malformed array would leave the node holding half a
