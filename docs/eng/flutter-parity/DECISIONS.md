@@ -11,6 +11,7 @@ reverse it. The PR description links here; keep it current.
 | 2026-10-14 19:12 | "Use GitHub and open source to research Impeller and how Flutter utilizes Impeller for all aspects of the rendering engine. Make sure we follow that strictly but in a RN way. This needs to be an enterprise grade, bulletproof rendering engine for RN." | <discord-id> (thread <discord-id>) |
 | 2026-10-14 19:41 | "Go now, plan it all out and then get to work until it's done" | <discord-id> |
 | 2026-10-14 23:00 | "Make sure to save all of this for the PR and documentation" | <discord-id> |
+| 2026-10-14 23:09 | "Merge as needed to keep things going but always include this visual and written documentation in the PR and repo. I want this done ASAP without me" | <discord-id> |
 
 ## Research decisions (2026-10-14)
 
@@ -52,8 +53,8 @@ reverse it. The PR description links here; keep it current.
 2. **Branch:** `feat/flutter-parity`, based on `c07048d` (what the Mac runs; it contains main). FP-00
    merged `feat/win-window-on-7111345` into it. The PR therefore targets `feat/native-anim-transform`
    until that branch lands on main.
-3. **Nothing merges without Baker's ✅.** The loop never merges and never opens a non-draft PR. The draft
-   PR is the proposal.
+3. **Merging (superseded 23:09, see below).** Until 23:09 nothing merged without Baker's ✅. His 23:09
+   order made verified merges standing policy.
 4. **Visual evidence:** passes that change pixels post before/after evidence to the thread and save it under
    `evidence/`. They commit to the feature branch without waiting for a per-pass ✅, because Baker
    asked for run-to-done. His review gate is the merge.
@@ -67,3 +68,25 @@ reverse it. The PR description links here; keep it current.
      `docs/eng/flutter-parity/`.
    - `PROGRESS.md` and `PR.md` are regenerated every 20 min by `tools/parity-record-progress.sh`.
    - The draft PR body is synced from `PR.md`.
+
+## Process decisions after the 23:09 order ("merge as needed ... ASAP without me")
+
+9. **Verified merges into main, no per-merge approval.** `tools/parity-merge.sh` (started by the watchdog as unit
+   `rni-parity-merge`) merges a lane when another lane needs its work, when a phase finishes, when the lane is done, or
+   when 3+ passes have waited 4 h. It first proves the lane tip merged with main: fresh linux build, the 16 core gates and
+   every linux gate of the passes being merged. It then opens a PR into main whose body is the generated PR doc (status,
+   the passes, embedded evidence images, Mermaid diagrams, links to every doc) and merges it over the REST API pinned to
+   the verified SHA. To stop merges: `systemctl --user stop rni-parity-watchdog.timer` (also stops restarts and
+   heartbeats) or delete `tools/parity-merge.sh`'s executable bit in lane A's worktree.
+10. **Two lanes for speed.** Lane B (`PASSES-B.md`, branch `feat/flutter-parity-b`) runs FP-16, FP-22, FP-52, FP-24 and
+    FP-25 in parallel with lane A at a lower CPU weight, so timing gates in lane A keep priority. Lanes exchange work
+    through main. Lane A passes that need lane B work (FP-17, FP-23, FP-33) wait for the merge.
+11. **Triage decides instead of asking.** A blocked pass's triage session now picks the next approach itself, records the
+    call below, and posts an FYI. It asks Baker only when nothing can move without his hands, money or credentials.
+12. **Visual docs in the repo and every PR:** `DIAGRAMS.md` (thread model, backend per OS, how a change lands; Mermaid,
+    rendered by GitHub), evidence PNGs under `evidence/`, and the research PDF. Each merge PR embeds the first two
+    diagrams and the evidence of every pass it carries.
+
+## Calls made by triage
+
+(Appended by triage sessions: date, pass, what was chosen, why.)
