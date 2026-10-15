@@ -106,3 +106,4 @@ reverse it. The PR description links here; keep it current.
     ASan+UBSan suite once instead, and the merge job runs at the default CPU weight so timing gates are judged fairly.
 14. **12:55: lane B round 2.** Lane B had finished its five passes and was idle. FP-33, FP-34, FP-40, FP-41, FP-50,
     FP-53 and FP-54 moved to it. Lane A keeps the platform, backend, embedding and final passes (13 left).
+- 2026-10-15 (lane A, FP-19): (a) superseded by FP-26 (Phase 1 proof with darwin ci-vsync limited to scheduler arms C/D) and FP-27 (Phase 2, darwin present pacing on Metal via CVDisplayLink + presentedTime, full ci-vsync). Why: A/B fail from ANGLE-Metal drawable waits on a shared Mac at load 37-122; Flutter macOS paces on Metal, so FP-21 is where pacing can be proven. Phase 1 had no free id, so FP-26 sits in the Phase 1 section with a Phase 2 number.
