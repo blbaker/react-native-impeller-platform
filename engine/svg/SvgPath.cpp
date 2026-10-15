@@ -2,6 +2,9 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <limits>
+#include <string>
 #include <vector>
 
 namespace rni {
@@ -10,7 +13,7 @@ namespace {
 
 class Tokenizer {
  public:
-  explicit Tokenizer(const std::string& s) : s_(s), i_(0) {}
+  explicit Tokenizer(std::string_view s) : s_(s), i_(0) {}
 
   void skipSeparators() {
     while (i_ < s_.size() &&
@@ -66,7 +69,14 @@ class Tokenizer {
         while (j < n && std::isdigit((unsigned char)s_[j])) ++j;
       }
     }
-    *out = std::stod(s_.substr(start, j - start));
+    // strtod, not std::stod: stod THROWS out_of_range on "1e-400" or "1e999"
+    // and nothing above us catches it (FP-52 fuzz finding, seed svg-path/crash-*).
+    // Underflow reads as 0; a value no float can hold is a bad token, so the path
+    // keeps what parsed before it, like any other garbage.
+    const std::string num(s_.substr(start, j - start));
+    const double v = std::strtod(num.c_str(), nullptr);
+    if (!(std::fabs(v) <= (double)std::numeric_limits<float>::max())) return false;
+    *out = v;
     i_ = j;
     return true;
   }
@@ -86,7 +96,9 @@ class Tokenizer {
   }
 
  private:
-  const std::string& s_;
+  // A view, not a string: the FP-52 fuzzer hands the parser libFuzzer's exact-size
+  // buffer, so a read one past the end is an ASan report instead of a silent NUL.
+  std::string_view s_;
   size_t i_;
 };
 
@@ -182,7 +194,7 @@ void ArcToCubics(SvgPathSink& sink, double x0, double y0, double rx,
 
 }  // namespace
 
-bool ParseSvgPath(const std::string& d, SvgPathSink& sink) {
+bool ParseSvgPath(std::string_view d, SvgPathSink& sink) {
   Tokenizer tok(d);
   double curX = 0, curY = 0;       // current point
   double startX = 0, startY = 0;   // subpath start, for Z

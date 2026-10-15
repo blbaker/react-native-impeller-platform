@@ -8,6 +8,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include "impeller.h"
 
@@ -29,7 +30,7 @@ class SvgPathSink {
 };
 
 // Parses `d` onto `sink`. Same return contract as ParseSvgPathToBuilder.
-bool ParseSvgPath(const std::string& d, SvgPathSink& sink);
+bool ParseSvgPath(std::string_view d, SvgPathSink& sink);
 
 // Appends the geometry described by `d` onto `builder` (which the caller
 // already owns — this does not create or release it). Returns false if `d`

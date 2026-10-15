@@ -17,3 +17,16 @@ if(RNI_SANITIZE)
   message(STATUS "RNI_SANITIZE=${RNI_SANITIZE}")
 endif()
 
+
+# FP-52: libFuzzer targets. Coverage instrumentation (fuzzer-no-link) goes on every
+# TU like the sanitizers above; engine/cmake/Fuzz.cmake adds the fuzz/ sources and
+# links libFuzzer without its main, so rn-impeller keeps its own main and
+# `rn-impeller --fuzz <target> [libFuzzer flags]` runs one target.
+option(RNI_FUZZ "Build the libFuzzer targets into rn-impeller (--fuzz); needs clang + RNI_SANITIZE" OFF)
+if(RNI_FUZZ)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR NOT RNI_SANITIZE)
+    message(FATAL_ERROR "RNI_FUZZ needs clang and RNI_SANITIZE (e.g. address,undefined)")
+  endif()
+  add_compile_options(-fsanitize=fuzzer-no-link)
+  add_compile_definitions(RNI_FUZZ=1)
+endif()

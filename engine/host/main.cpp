@@ -71,6 +71,9 @@
 #include "host/AnimRowProbe.h"
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
+#if RNI_FUZZ
+#include "fuzz/Fuzz.h"
+#endif
 #include "base/GlValidation.h"
 #include "base/ContextFlags.h"
 #include "fabric/ImageStore.h"
@@ -1831,6 +1834,10 @@ int main(int argc, char** argv) {
   rni::installFeatureFlags();
   rni::trace::SetThreadName("main");
   rni::sanitize::RunTestHooks();
+#if RNI_FUZZ
+  // FP-52: fuzz builds only. After the feature flags, which props parsing reads.
+  if (rni::fuzz::Requested(argc, argv)) return rni::fuzz::Main(argc, argv);
+#endif
 
   std::string bundlePath, appName, screenshot;
   std::string colorScheme = "light";
