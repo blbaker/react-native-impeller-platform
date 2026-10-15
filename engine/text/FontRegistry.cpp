@@ -1,4 +1,5 @@
 #include "text/FontRegistry.h"
+#include "base/TsanAnnotate.h"
 
 #include "text/FontFamily.h"
 
@@ -61,6 +62,7 @@ std::vector<std::string> FontDirsFrom(const std::vector<std::string>& cliDirs) {
 int RegisterFontDirs(ImpellerTypographyContext typography,
                      const std::vector<std::string>& dirs) {
   if (typography == nullptr) return 0;
+  rni::tsan::NoteExclusiveUse(typography);  // FP-04: impeller.h typography contexts are single-thread
   int registered = 0;
   for (const auto& dir : dirs) {
     // std::filesystem, not dirent.h: the same file builds for win32-x64.

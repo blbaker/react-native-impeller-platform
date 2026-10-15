@@ -1,4 +1,5 @@
 #include "base/Trace.h"
+#include "base/TsanAnnotate.h"
 #include "text/ImpellerTextLayoutManager.h"
 
 #include <react/renderer/attributedstring/AttributedString.h>
@@ -78,6 +79,7 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
 
   // clamp=false lays the text out with no line limit or ellipsis (SC-17 probe).
   const auto build = [&](float scale, bool clamp) -> ImpellerParagraph {
+    rni::tsan::NoteExclusiveUse(typography_);  // FP-04: impeller.h typography contexts are single-thread
     ImpellerParagraphBuilder builder = ImpellerParagraphBuilderNew(typography_);
     if (builder == nullptr) return nullptr;
     // One style push per fragment, so per-fragment font size/weight is honoured

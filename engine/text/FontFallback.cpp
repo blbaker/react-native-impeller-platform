@@ -1,4 +1,5 @@
 #include "text/FontFallback.h"
+#include "base/TsanAnnotate.h"
 
 #include "text/FontFamily.h"
 
@@ -164,6 +165,7 @@ bool Sticks(uint32_t cp) {
 std::vector<FontSegment> SplitFontFallback(ImpellerTypographyContext typography,
                                            const std::string& primary,
                                            const std::string& text) {
+  rni::tsan::NoteExclusiveUse(typography);  // FP-04: impeller.h typography contexts are single-thread
 #if defined(__linux__)
   bool ascii = true;
   for (unsigned char c : text) ascii = ascii && c < 0x80;

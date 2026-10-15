@@ -1,6 +1,7 @@
 #include "base/Trace.h"
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include "fabric/FabricHost.h"
 
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
@@ -703,10 +704,22 @@ FabricHost::~FabricHost() {
   stopSurface();
   // In-flight rendering-update lambdas captured a raw delegate pointer, and
   // the Scheduler only invalidates them behind a feature flag — drop the
-  // delegate reference explicitly before tearing down.
-  if (scheduler_) {
-    scheduler_->setDelegate(nullptr);
-  }
+  // delegate reference explicitly before tearing down. FP-04: the JS thread
+  // reads Scheduler::delegate_ on every NativeAnimated tick, so the detach
+  // runs there (in the drain barrier below) like Flutter's Shell teardown
+  // posts each thread's teardown to that thread; main only does it when JS
+  // has no scheduler or is wedged.
+  struct Detach {
+    std::mutex mutex;
+    facebook::react::Scheduler* scheduler{nullptr};
+    void run() {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (scheduler != nullptr) scheduler->setDelegate(nullptr);
+      scheduler = nullptr;
+    }
+  };
+  auto detach = std::make_shared<Detach>();
+  detach->scheduler = scheduler_.get();
   // EXIT RACE (see ExitRaceProbe above): stop NEW ticks from reaching the
   // event-timing delegate, then wait out the tick that may already hold it.
   // The barrier runs on the JS thread after the current tick, so when it
@@ -716,13 +729,16 @@ FabricHost::~FabricHost() {
     runtimeScheduler_->setEventTimingDelegate(nullptr);
     auto drained = std::make_shared<std::promise<void>>();
     auto done = drained->get_future();
-    runtimeScheduler_->scheduleWork(
-        [drained](facebook::jsi::Runtime&) { drained->set_value(); });
+    runtimeScheduler_->scheduleWork([drained, detach](facebook::jsi::Runtime&) {
+      detach->run();
+      drained->set_value();
+    });
     if (done.wait_for(std::chrono::seconds(3)) != std::future_status::ready) {
       std::fprintf(stderr, "rn-impeller: WARN: JS thread did not drain before "
                            "Scheduler teardown (3 s)\n");
     }
   }
+  detach->run();  // no-op once the JS thread did it
   scheduler_.reset();
   gSchedulerTornDown = true;
   delegate_.reset();

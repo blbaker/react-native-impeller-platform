@@ -68,6 +68,7 @@
 #include <cstdio>
 #include <functional>
 #include <variant>
+#include "base/TsanAnnotate.h"
 
 namespace {
 // <TextInput> text inset from the field's left edge, in layout points. Used by
@@ -1575,6 +1576,7 @@ ImpellerParagraph BuildTextInputParagraph(ImpellerTypographyContext typo,
                              impellerColor(dc, OwnAlpha(node)));
   }
   const std::string shownText = rni::applyTextTransform(text, node.tiFace.transform);
+  rni::tsan::NoteExclusiveUse(typo);  // FP-04: impeller.h typography contexts are single-thread
   ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typo);
   ImpellerParagraphBuilderPushStyle(pb, style);
   ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shownText.data(), shownText.size());
@@ -1842,6 +1844,7 @@ ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const
                                                     float w, int shadow) {
   if (typography_ == nullptr) return nullptr;
   std::vector<ImpellerPaint> runPaints;
+  rni::tsan::NoteExclusiveUse(typography_);  // FP-04: impeller.h typography contexts are single-thread
   ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
   if (pb == nullptr) return nullptr;
   for (const TextRun& run : runs) {
@@ -2643,6 +2646,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       if (paragraph != nullptr) {
         auto prefixW = [&](size_t n) -> float {
           if (n == 0) return 0.0f;
+          rni::tsan::NoteExclusiveUse(typography_);  // FP-04: impeller.h typography contexts are single-thread
           ImpellerParagraphBuilder sb = ImpellerParagraphBuilderNew(typography_);
           ImpellerParagraphBuilderPushStyle(sb, style);
           ImpellerParagraphBuilderAddText(sb, (const uint8_t*)editMeasured.data(), n);
@@ -4406,6 +4410,7 @@ bool SceneGraph::glyphBoundariesLocked(facebook::react::Tag tag,
   for (size_t i = 1; i <= raw.size(); ++i) {
     if (i < raw.size() && (((unsigned char)raw[i]) & 0xC0) == 0x80) continue;
     const size_t mi = node.tiSecure ? SecureMaskOffset(raw, i) : i;
+    rni::tsan::NoteExclusiveUse(typography_);  // FP-04: impeller.h typography contexts are single-thread
     ImpellerParagraphBuilder pb = ImpellerParagraphBuilderNew(typography_);
     ImpellerParagraphBuilderPushStyle(pb, style);
     ImpellerParagraphBuilderAddText(pb, (const uint8_t*)shown.data(), mi);
