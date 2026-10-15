@@ -26,7 +26,7 @@ near-duplicate before extracting shared code.
 
 Touch the fewest files and lines needed to meet the acceptance criteria.
 Don't reformat, reorder imports, or tidy up code outside your change in the
-same diff — that hides the actual change in noise and makes review slower,
+same diff. That hides the actual change in noise and makes review slower,
 not faster.
 
 New files stay at or under 300 lines. If a file you're touching is already
@@ -52,7 +52,7 @@ rather than forcing it to work.
   pulling in a rendering or native dependency where that's avoidable.
 - Validate input at a boundary (a parsed bundle, a network response, a file on
   disk) rather than trusting it blindly.
-- No secrets in code or config — reference them by name (an env var, a
+- No secrets in code or config. Reference them by name (an env var, a
   GitHub Actions secret), never the value.
 - No debug logging left behind, no commented-out code, no emoji in code or
   UI strings.
@@ -67,7 +67,7 @@ acceptance criteria, not implementation details that are free to change later.
 A new guard or check (a CI gate, a validation function, a lint rule) needs a
 positive control: seed a real violation, show the check catches it, remove
 the violation, show the check passes. A check nobody has watched fail is
-decoration, not a guard — see `tools/mutation-verify-*.sh` for the pattern
+decoration, not a guard. See `tools/mutation-verify-*.sh` for the pattern
 this repo already uses for the engine gates, and `tools/standards/` for the
 same idea applied to repo-hygiene checks.
 

@@ -6,9 +6,9 @@ pre-release, so expect some rough edges.
 
 ## Before you start
 
-Read [AGENTS.md](AGENTS.md) and
+Read [AGENTS.md](docs/AGENTS.md.proposed) and
 [docs/engineering-standards.md](docs/engineering-standards.md). They apply
-whether you're a person or an AI agent making the change — AGENTS.md has the
+whether you're a person or an AI agent making the change. AGENTS.md has the
 setup and command reference, the standards doc has the rules changes are held
 to (pragmatic, minimal diffs, root-cause fixes, test first).
 
@@ -64,7 +64,7 @@ bash tools/ci-<name>.sh       # one gate, e.g. tools/ci-headless.sh
 
 Each gate renders a small fixture app and compares the output pixel-by-pixel
 against an oracle. If you touch engine or package code, rebuild before
-re-running a gate — gates read the already-staged binary, they don't rebuild
+re-running a gate. Gates read the already-staged binary, they don't rebuild
 it for you.
 
 ### Mutation-verify: proving a gate can actually fail
@@ -73,7 +73,7 @@ Every `tools/ci-*.sh` gate has a matching `tools/mutation-verify-*.sh`. It
 re-introduces the exact defect the gate exists to catch and checks that the
 gate goes red for that reason, then confirms it goes green again once the
 defect is reverted. A gate nobody has watched fail is not a proof of
-anything — run the mutation-verify script for any gate you add or change:
+anything. Run the mutation-verify script for any gate you add or change:
 
 ```bash
 bash tools/mutation-verify-<name>.sh
@@ -107,7 +107,7 @@ rule set this mechanizes a subset of.
 
 ## Opening a pull request
 
-Use the PR template — it asks for the acceptance criteria you were given and
+Use the PR template. It asks for the acceptance criteria you were given and
 how you checked each one, the exit codes of the gates you ran, and anything
 you were unsure about. A visual change needs a screenshot in the PR.
 
@@ -118,8 +118,11 @@ workflow file changes.
 ## Using an AI agent
 
 If you're using Claude Code, Codex, or a similar coding agent, point it at
-[AGENTS.md](AGENTS.md) first (`CLAUDE.md` at the repo root just points there).
-It has the build commands, the repo layout, and the standing rules — most
+`AGENTS.md` first (`CLAUDE.md` at the repo root just points there; as of
+this writing both are staged at [docs/AGENTS.md.proposed](docs/AGENTS.md.proposed)
+and [docs/CLAUDE.md.proposed](docs/CLAUDE.md.proposed) pending a maintainer
+copying them to the repo root -- see docs/OPEN-SOURCE-READINESS.md).
+It has the build commands, the repo layout, and the standing rules, most
 importantly, that an agent should never push to `main`, merge a PR,
 force-push, or touch the publish guard in `.github/workflows/release.yml`.
 Those stay human actions.
@@ -127,7 +130,7 @@ Those stay human actions.
 ## Release process
 
 Versions are managed by [Release Please](https://github.com/googleapis/release-please)
-based on your commits' conventional-commit types — you don't bump version
+based on your commits' conventional-commit types. You don't bump version
 numbers by hand. See
 [docs/OPEN-SOURCE-READINESS.md](docs/OPEN-SOURCE-READINESS.md) for how the
 release pipeline is gated.
