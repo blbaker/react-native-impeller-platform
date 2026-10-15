@@ -55,7 +55,7 @@ echo "   $NS ns per disabled span"
 echo "== C: tracing on, 300 headless frames =="
 run on "${HL[@]}" --bundle "$ROT" --app-name NativeRotateProbe --frames 300 --trace-out "$WORK/on.json"
 grep -qE '^rn-impeller: trace enabled=0 events=[1-9][0-9]* written=1' "$WORK/on.log" || fail "arm C wrote no trace"
-OUT="$(python3 tools/trace_check.py "$WORK/on.json" --frames 300 --expect NativeAnimatedTick@js:1 --expect NativeAnimatedPump@main:300)" || fail "$OUT"
+OUT="$(python3 tools/trace_check.py "$WORK/on.json" --frames 300 --expect NativeAnimatedTick@main:1 --expect NativeAnimatedPump@main:300)" || fail "$OUT"
 echo "   $OUT"
 SPF=$(echo "$OUT" | sed -n 's/.*spans_per_frame=\([0-9.]*\).*/\1/p')
 
@@ -71,7 +71,7 @@ PY
 echo "== E: tracing on, windowed 60 frames =="
 run win "${WIN[@]}" "$BIN" --window --scale 1 --width 400 --height 300 --supersample-rnsvg 0 \
   --bundle "$ROT" --app-name NativeRotateProbe --frames 60 --trace-out "$WORK/win.json"
-check "$WORK/win.json" --min-frames 60 --expect NativeAnimatedTick@js:1
+check "$WORK/win.json" --min-frames 60 --expect NativeAnimatedTick@main:1
 
 echo "== F: image spans =="
 cat > "$WORK/srv.py" <<'PY'
