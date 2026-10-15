@@ -72,7 +72,8 @@ PY
 echo "== E: tracing on, windowed 60 frames =="
 run win "${WIN[@]}" "$BIN" --window --scale 1 --width 400 --height 300 --supersample-rnsvg 0 \
   --bundle "$ROT" --app-name NativeRotateProbe --frames 60 --trace-out "$WORK/win.json"
-check "$WORK/win.json" --min-frames 60 --expect NativeAnimatedTick@main:1
+# FP-15: windowed RASTER (Raster/Draw/Present) runs on the raster thread.
+check "$WORK/win.json" --min-frames 60 --raster-thread --expect NativeAnimatedTick@main:1 --expect Record@main:60
 
 echo "== F: image spans =="
 cat > "$WORK/srv.py" <<'PY'

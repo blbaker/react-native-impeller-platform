@@ -248,6 +248,9 @@ add_executable(rn-impeller
   host/FrameItem.cpp
   host/RecordNoGl.cpp
   host/AnimRowProbe.cpp
+  host/UniformProbe.cpp
+  host/RasterThread.cpp
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
   base/Trace.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp

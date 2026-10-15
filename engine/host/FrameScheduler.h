@@ -6,8 +6,9 @@
 // vsync_waiter_fallback.cc (one callback per vsync interval; the fallback is a
 // 60 Hz software clock snapped to a fixed phase).
 //
-// Our loop is single-threaded (platform == UI == raster until FP-15), so the
-// "post AwaitVSync to the UI runner" becomes: RequestFrame marks the one
+// The loop runs on the platform thread (RECORD included; FP-15 moved RASTER
+// and the present to a raster thread), so the "post AwaitVSync to the UI
+// runner" becomes: RequestFrame marks the one
 // outstanding request and wakes the loop; the loop calls AwaitVsync() then
 // BeginFrame(). No request, no frame: an idle window parks in its event wait.
 //
@@ -41,7 +42,7 @@ class FrameScheduler {
   using WaitFn = std::function<void(double seconds)>;
   // Wake a loop blocked in WaitFn. Any thread.
   using WakeFn = std::function<void()>;
-  // Set the swap interval on the current GL context. Main thread.
+  // Set the swap interval on the GL context (FP-15: run on the raster thread).
   using SwapIntervalFn = std::function<void(int interval)>;
 
   FrameScheduler(Options options, WaitFn wait, WakeFn wake,
@@ -62,11 +63,15 @@ class FrameScheduler {
   // schedule the next frame. Returns the 1-based BeginFrame number.
   uint64_t BeginFrame();
 
-  // Main thread, around surface.present(). Feeds the kAuto swap probe.
+  // The presenting thread (FP-15: raster), around surface.present(). Feeds
+  // the kAuto swap probe. vsyncUs: the tick the presented frame began on
+  // (since_vsync_us is measured from it; 0 = the last tick).
   void WillPresent();
-  void DidPresent(int presentNumber);
+  void DidPresent(int presentNumber, int64_t vsyncUs = 0);
 
-  Source source() const { return source_; }
+  Source source() const { return source_.load(std::memory_order_acquire); }
+  // FP-15: when the last AwaitVsync returned (steady clock us); FrameItem::vsyncUs.
+  int64_t lastTickUs() const { return tickUs_.load(std::memory_order_acquire); }
   double periodSeconds() const { return period_; }
   // Prints `frame_scheduler source= requests= coalesced= frames= ...`.
   void PrintSummary() const;
@@ -80,9 +85,10 @@ class FrameScheduler {
   WaitFn wait_;
   WakeFn wake_;
   SwapIntervalFn swapInterval_;
-  Source source_;
+  // FP-15: Decide() runs on the presenting (raster) thread, AwaitVsync on main.
+  std::atomic<Source> source_;
   double period_;
-  int64_t phaseUs_;
+  std::atomic<int64_t> phaseUs_;
 
   std::atomic<int> pending_{0};
   std::atomic<uint64_t> requests_{0};
@@ -93,7 +99,7 @@ class FrameScheduler {
   int framesThisTick_ = 0;
   int maxFramesPerTick_ = 0;
 
-  int64_t tickUs_ = 0;  // when the last AwaitVsync returned
+  std::atomic<int64_t> tickUs_{0};  // when the last AwaitVsync returned
   int64_t presentStartUs_ = 0;
   int64_t lastPresentUs_ = 0;
   std::vector<int64_t> probeSwapUs_;

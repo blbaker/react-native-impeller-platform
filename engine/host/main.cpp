@@ -26,6 +26,8 @@
 // and a single frame that tried to answer both would answer neither when it
 // went wrong. The banner never draws in windowed mode; it is a test artifact,
 // not UI.
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -51,6 +53,7 @@
 #endif
 #if RNI_WITH_WINDOW
 #include "host/GlfwSurface.h"
+#include "host/WindowRasterizer.h"
 #include <chrono>
 #include <thread>
 #endif
@@ -70,6 +73,7 @@
 #include "host/FrameItem.h"
 #include "host/FrameScheduler.h"
 #include "host/AnimRowProbe.h"
+#include "host/UniformProbe.h"
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
 #include "base/GlValidation.h"
@@ -454,6 +458,18 @@ static bool gQuitOnTerm = false;
 static rni::FrameScheduler::Source gVsyncSource = rni::FrameScheduler::Source::kAuto;
 static bool gVsyncSet = false;
 static bool gVsyncLog = false;
+// FP-15: --raster-thread on|off (windowed: a dedicated raster thread owns the
+// GL context; off = the one-thread loop, platform == raster) and the
+// ci-raster-thread hook --main-stall-after-frames N:MS (main sleeps MS right
+// after recording frame N; that item is held ~MS/5 on the raster thread first).
+static bool gRasterThread = true;
+static int gMainStallAfterFrames = 0;
+static int gMainStallMs = 0;
+[[maybe_unused]] static long long SteadyNowUs() {  // same clock as the raster_present t_us lines
+  return (long long)std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
 // FP-01: --frame-timings-out <file.json>. File scope for the same reason.
 static std::string gFrameTimingsOut;
@@ -566,7 +582,18 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   surface.setTitle(gWindowTitle);  // before init: glfwCreateWindow takes it
   std::printf("rn-impeller: window_title=%s\n", surface.title().c_str());
   std::fflush(stdout);
-  if (!surface.init(width, height, &error)) {
+  if (!surface.initWindow(width, height, &error)) {
+    fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
+    return 1;
+  }
+  // FP-01: one recorder per frame, committed at the present (model:
+  // flutter/flow/frame_timings.h). Idle-skipped loop frames are discarded.
+  rni::FrameTimings frameTimings;
+  // FP-15: the raster thread takes the GL context here (model:
+  // shell/common/rasterizer.cc + shell.cc). Main keeps the window, events,
+  // input, mount, NativeAnimated, the FrameScheduler and RECORD.
+  rni::WindowRasterizer rasterizer(surface, frameTimings, gRasterThread);
+  if (!rasterizer.Start(&error)) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
   }
@@ -601,7 +628,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // ENG item 2. Wire the supersample render context (the surface's own
   // ImpellerContext — same GL sharegroup the offscreen FBO needs) and N. On
   // Android the offscreen path is compiled out, so these are inert there.
-  sceneGraph.setRenderContext(surface.context());
+  // FP-14 fills the GL name pool here: a GL call, so on the raster thread.
+  rasterizer.thread().PostSync([&] { sceneGraph.setRenderContext(surface.context()); });
   sceneGraph.setSupersample(supersampleRnsvg);
   // ENG item 2b — the root supersample offscreen is sized N x this. Device
   // pixels (surface.width()/height()), re-set on resize below.
@@ -638,6 +666,14 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          logMutations, host.displayMetrics());
+  // FP-15 teardown order (shell.cc OnPlatformViewDestroyed): declared after
+  // host + fabric, so on EVERY exit path the raster thread drains, releases the
+  // GPU objects on itself and joins BEFORE JS goes; the window and its GL
+  // context die last (~GlfwSurface).
+  struct RasterStop {
+    rni::WindowRasterizer* r;
+    ~RasterStop() { r->Shutdown(); }
+  } rasterStop{&rasterizer};
 
   // item 5. A real GLFW window exists here, so wire the ClipboardBridge's
   // "system backend" pair to the surface's glfwGetClipboardString/
@@ -690,11 +726,6 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   printf("rn-impeller: supersample_rnsvg=%d\n", sceneGraph.supersample());
   fflush(stdout);
 
-  // Incremented inside paintFrame at the present, so it counts FRAMES THAT
-  // REACHED THE SCREEN. Declared before paintFrame because that lambda
-  // captures it.
-  int paintsTotal = 0;
-
   // ⛔ WINDOWED CAPTURE READS BACK BEFORE THE PRESENT, NEVER AFTER IT.
   // eglSwapBuffers hands the frame to the compositor and leaves the back
   // buffer UNDEFINED (EGL_BUFFER_DESTROYED is the default swap behaviour). On
@@ -702,105 +733,105 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // darwin windowed --screenshot / --screenshot-first came back as 3,072,000
   // zero bytes at 1280x800 on every frame (ENG-10, 2026-09-26), while Mesa/X11
   // happened to keep the old back buffer, so linux gates never saw it. The
-  // loop arms grabArmed for the frame it wants; paintFrame reads the pixels
-  // between drawDisplayList (which glFinish()es) and present().
-  bool grabArmed = false;
-  bool grabOk = false;
-  std::vector<rni::Px> grabPx;
-
-  // FP-01: one recorder per frame, committed at the present (model:
-  // flutter/flow/frame_timings.h). Idle-skipped loop frames are discarded.
-  rni::FrameTimings frameTimings;
+  // loop asks paintFrame for a readback; the raster thread reads the pixels
+  // between drawDisplayList (which glFinish()es) and present(), and paintFrame
+  // waits for that present (FP-15).
 
   // FP-11: frame requests + vsync (model: flutter/shell/common/animator.cc and
   // vsync_waiter_fallback.cc). Idle-skip M3 keeps the request but drops the
   // wake, so a sleeping loop only notices it at the end of its budget.
+  // FP-15: the swap interval belongs to the GL context, so it is set on the
+  // raster thread (inline when Decide() already runs there, at a present).
   rni::FrameScheduler scheduler(
       rni::FrameScheduler::Options{gVsyncSource, 60.0, gVsyncLog},
       [&surface](double s) { surface.waitEvents(s); },
       (idleSkip && idleMutant == 3)
           ? rni::FrameScheduler::WakeFn()
           : rni::FrameScheduler::WakeFn([&surface]() { surface.postEmptyEvent(); }),
-      [&surface](int interval) { surface.setSwapInterval(interval); });
+      [&surface, &rasterizer](int interval) {
+        rasterizer.thread().PostSync([&] { surface.setSwapInterval(interval); });
+      });
+  rasterizer.SetScheduler(&scheduler);
 
-  // FP-13: platform == raster until FP-15, so one slot (animator.cc).
-  rni::FramePipeline framePipeline(rni::PipelineDepthFor(/*platformIsRaster=*/true));
-
-  // FP-13 RASTER + present: the pipeline consumer. Draws the FrameItem the
-  // RECORD half produced, reads back for captures BEFORE the present (see
-  // grabArmed above), presents, and commits the item's timings.
-  auto rasterAndPresent = [&](std::unique_ptr<rni::FrameItem> item) {
-    rni::RasterFrame(*item, [&](ImpellerDisplayList dl) {
-      return surface.drawDisplayList(dl);
-    });
-    if (grabArmed) {
-      grabOk = surface.readPixels(&grabPx);
-      grabArmed = false;
-    }
+  // FP-15: what the raster thread does around each present besides drawing.
+  rni::WindowRasterizer::Hooks rasterHooks;
+  rasterHooks.beforePresent = [&](int n) {
     if (rni::animrow::Enabled()) {  // FP-10 test hook, see AnimRowProbe.h
       std::vector<rni::Px> rowPx;
       if (surface.readPixels(&rowPx)) {
-        rni::animrow::OnPresent(rowPx, surface.width(), surface.height(),
-                                paintsTotal + 1,
+        rni::animrow::OnPresent(rowPx, surface.gpuWidth(), surface.gpuHeight(), n,
                                 rni::ReactHost::animationClockFrames());
       }
     }
-    {
-      TRACE_EVENT0("raster", "Present");
-      scheduler.WillPresent();
-      surface.present();
-      scheduler.DidPresent(paintsTotal + 1);
+    if (rni::uniformprobe::Enabled()) {  // FP-15 torn-frame probe
+      std::vector<rni::Px> px;
+      if (surface.readPixels(&px)) {
+        rni::uniformprobe::OnPresent(px, surface.gpuWidth(), surface.gpuHeight(), n);
+      }
     }
-    TRACE_COUNTER("presents", paintsTotal + 1);
-    // ⛔ COUNTED HERE, AT THE PRESENT, NOT AT THE CALLER.
-    // refreshPaints is derived from this counter, so "a frame was painted
-    // during the stall" is measured at the only place a frame actually
-    // reaches the screen. Counting in the refresh handler instead would let a
-    // handler that increments a variable and never paints report success --
-    // precisely the mark-only trap this fix exists to avoid, and exactly what
-    // the M2 mutant in tools/mutation-verify-resize.sh does.
-    ++paintsTotal;
+  };
+  rasterHooks.afterPresent = [&](int n) {
     rni::glvalidation::OnFrame();  // FP-05 test hook
     // ⛔ firstFramePresented: THE APP'S "YOU ARE ON SCREEN NOW" SIGNAL.
     // Emitted once, after the first present returns, so a launch animation
     // can start its clock from the moment pixels reach the window instead of
     // from JS start. DeviceEventEmitter.addListener('firstFramePresented').
     // Payload sinceLaunchMs = process start -> this present (wall ms).
-    if (paintsTotal == 1) {
+    // FP-15: emitted from the raster thread, at the real present.
+    if (n == 1) {
       const int ms = SinceLaunchMs();
       printf("rn-impeller: first_present_ms=%d\n", ms);
       fflush(stdout);
       folly::dynamic payload = folly::dynamic::object("sinceLaunchMs", ms);
       host.deviceEvents()->emit("firstFramePresented", payload);
     }
-    item->timings->RecordPresent();
-    frameTimings.Commit(std::move(item->timings));
   };
+  rasterizer.SetHooks(std::move(rasterHooks));
 
-  auto paintFrame = [&](std::unique_ptr<rni::FrameTimingsRecorder> frame) -> int {
+  // FP-15 test hook (ci-raster-thread): the item recorded at the stall frame
+  // is held this long on the raster thread before it draws, so it is still
+  // queued when main's stall begins.
+  int stallItemDelayMs = 0;
+  uint64_t lastSubmitted = 0;  // WindowRasterizer ticket of the last paint
+  uint64_t lastSubmittedNumber = 0;  // and its frame number
+
+  // Returns the nodes the walk painted, or -1 when the frame was dropped
+  // (pipeline full: animator.cc "PipelineFull" re-requests the next frame).
+  auto paintFrame = [&](std::unique_ptr<rni::FrameTimingsRecorder> frame,
+                        bool readback) -> int {
     // ⛔ THE PAINT-IN-FLIGHT SCOPE GOES HERE, AT THE ONE SHARED BODY.
     // Both the frame loop and the window-refresh callback paint through this
     // lambda, so scoping the guard here is what makes it cover every paint
-    // rather than only the callback's. surface.present() below is the call
-    // that can re-enter: eglSwapBuffers -> CAMetalLayer update ->
-    // -[NSView updateLayer] -> _glfwInputWindowDamage -> refresh callback.
-    // With this scope live, that callback is dropped instead of starting a
-    // second paint on top of this one.
+    // rather than only the callback's. In inline mode (--raster-thread off)
+    // surface.present() runs inside it and can re-enter: eglSwapBuffers ->
+    // CAMetalLayer update -> -[NSView updateLayer] -> _glfwInputWindowDamage
+    // -> refresh callback. With this scope live, that callback is dropped
+    // instead of starting a second paint on top of this one.
     rni::GlfwSurface::PaintScope paintScope(&surface);
     TRACE_EVENT0("frame", "Frame");
-    // FP-13: RECORD -> Pipeline -> RASTER (model: shell/common/animator.cc
-    // BeginFrame reserves the slot, the build completes it, the rasterizer
-    // consumes). One thread, depth 1: Consume runs right here.
-    auto slot = framePipeline.Produce();
+    // FP-13/15: RECORD -> Pipeline -> RASTER (model: shell/common/animator.cc
+    // BeginFrame reserves the slot, the build completes it, OnAnimatorDraw
+    // posts Rasterizer::Draw to the raster thread). A full pipeline waits for
+    // the raster thread to free a slot (the one-thread loop was paced by its
+    // own present), then drops the frame.
+    auto slot = rasterizer.AcquireSlot(rni::testsync::ScaledMs(1000));
     if (!slot) {
       frameTimings.Discard(std::move(frame));
-      return 0;
+      scheduler.RequestFrame("pipeline_full");
+      return -1;
     }
     auto recorded = rni::RecordFrame(sceneGraph, pointScale, surface.width(),
                                      surface.height(), std::move(frame));
+    recorded->vsyncUs = scheduler.lastTickUs();
     const int painted = recorded->painted;
-    (void)slot.Complete(std::move(recorded));
-    (void)framePipeline.Consume(rasterAndPresent);
+    const uint64_t number = recorded->frameNumber;
+    if (stallItemDelayMs > 0) rasterizer.DelayFrame(number, stallItemDelayMs);
+    lastSubmittedNumber = number;
+    lastSubmitted = rasterizer.Submit(std::move(slot), std::move(recorded), readback);
+    if (readback && !rasterizer.WaitPresented(lastSubmitted, rni::testsync::ScaledMs(5000))) {
+      fprintf(stderr, "rn-impeller: WARN: frame %llu did not present for its capture\n",
+              (unsigned long long)number);
+    }
     return painted;
   };
 
@@ -918,9 +949,10 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // A refresh paint is its own frame: it begins here, not at a loop vsync.
     auto frame = std::make_unique<rni::FrameTimingsRecorder>();
     frame->RecordVsync();
+    rasterizer.WaitForSlot(rni::testsync::ScaledMs(1000));  // FP-15 back-pressure
     frame->RecordBuildStart();
     applyResizeIfDirty();
-    paintFrame(std::move(frame));
+    (void)paintFrame(std::move(frame), false);
   });
 
   // ⛔ THE WINDOWED PATH'S ONLY ROUTE INTO dispatchTouch.
@@ -1152,18 +1184,19 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // timed capture so the two images are produced by literally the same code
   // path -- if they differed in how they were read back, a difference between
   // them would not prove anything about repainting.
-  // The pixels come from grabPx, filled PRE-PRESENT inside paintFrame (see
-  // grabArmed above); reading fbo 0 here, after the swap, is the darwin
-  // all-zero bug.
+  // The pixels were read PRE-PRESENT on the raster thread for the frame
+  // paintFrame was asked to read back (see the capture note above); reading
+  // fbo 0 here, after the swap, is the darwin all-zero bug.
   auto capture = [&](const std::string& path, const char* label) {
     if (path.empty()) return;
-    if (!grabOk) {
+    std::vector<rni::Px> grabPx;
+    int grabW = 0, grabH = 0;
+    if (!rasterizer.TakeGrab(&grabPx, &grabW, &grabH)) {
       fprintf(stderr, "rn-impeller: WARN: %s readback failed (%s)\n", label,
               path.c_str());
       return;
     }
-    if (!rni::GlfwSurface::writePpm(path, grabPx, surface.width(),
-                                    surface.height()))
+    if (!rni::GlfwSurface::writePpm(path, grabPx, grabW, grabH))
       return;
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   std::chrono::steady_clock::now() - start)
@@ -1345,7 +1378,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // With different Ns the loop consumes the resize normally before the stall
     // begins and painted_during is 0 whether or not the fix is present.
     if (stallAfterFrames > 0 && frameIndex == stallAfterFrames) {
-      const int before = paintsTotal;
+      const int before = rasterizer.presents();
       printf("rn-impeller: stall_begin ms=%d refresh_paints=%d\n", stallMs,
              refreshPaints);
       fflush(stdout);
@@ -1358,9 +1391,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       }
       // Every paint that landed while the loop body was unreachable came from
       // the refresh callback -- nothing else could have produced one.
-      refreshPaints += paintsTotal - before;
+      // FP-15: the refresh paints present on the raster thread; let the last
+      // one land before counting (it was submitted inside the stall).
+      rasterizer.WaitPresented(lastSubmitted, rni::testsync::ScaledMs(1000));
+      const int during = rasterizer.presents() - before;
+      refreshPaints += during;
       printf("rn-impeller: stall_end refresh_paints=%d painted_during=%d\n",
-             refreshPaints, paintsTotal - before);
+             refreshPaints, during);
       fflush(stdout);
     }
 
@@ -1369,9 +1406,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // every iteration paints exactly as before. With it a clean iteration skips
     // the paint and SLEEPS below (that sleep, not the paint-skip, is what drops
     // CPU). M1 forces a frame every iteration so the CPU gate fails.
-    loopFrame->RecordBuildStart();
     const bool shouldPaint =
         (idleSkip && idleMutant == 1) ? true : scheduler.FramePending();
+    // FP-15: a full pipeline (raster still on the last two frames) holds the
+    // build back here, not inside it.
+    if (shouldPaint) rasterizer.WaitForSlot(rni::testsync::ScaledMs(1000));
+    loopFrame->RecordBuildStart();
     // ENG-06: advance RN's animation engine once per frame, BEFORE painting,
     // so this frame shows the value this tick produced (BeginFrame fan-out:
     // Animator::BeginFrame -> OnAnimatorBeginFrame).
@@ -1418,13 +1458,29 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         (typePlan ? (typeCaptureReady && (screenshotAfterMs < 0 ||
                                           sinceStartMs >= screenshotAfterMs))
                   : msReady);
-    grabOk = false;
-    grabArmed = wantFirst || wantTimed;
+    const bool readback = wantFirst || wantTimed;
 
     int painted = 0;
-    if (shouldPaint) painted = paintFrame(std::move(loopFrame));
+    const bool mainStallNow = gMainStallAfterFrames > 0 && frameIndex == gMainStallAfterFrames;
+    if (mainStallNow) stallItemDelayMs = std::max(1, std::min(20, gMainStallMs / 5));
+    if (shouldPaint) painted = paintFrame(std::move(loopFrame), readback);
     else frameTimings.Discard(std::move(loopFrame));
-    grabArmed = false;
+    stallItemDelayMs = 0;
+    const bool dropped = painted < 0;  // FP-15: pipeline full, nothing to capture
+    // FP-15 test hook (ci-raster-thread arm A): a main-thread stall with the
+    // frame just recorded still queued. The raster thread owns the present,
+    // so that frame must reach the screen DURING the stall.
+    if (mainStallNow) {
+      const int before = rasterizer.presents();
+      printf("rn-impeller: main_stall_begin frame=%d item=%llu ms=%d t_us=%lld\n",
+             frameIndex, (unsigned long long)lastSubmittedNumber, gMainStallMs,
+             SteadyNowUs());
+      fflush(stdout);
+      std::this_thread::sleep_for(std::chrono::milliseconds(gMainStallMs));
+      printf("rn-impeller: main_stall_end presents_during=%d t_us=%lld\n",
+             rasterizer.presents() - before, SteadyNowUs());
+      fflush(stdout);
+    }
     ++frameIndex;
     if (shouldPaint && frameIndex == 1) {
       printf("rn-impeller: painted_nodes=%d\n", painted);
@@ -1679,12 +1735,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // a file named "". Also: the flag is now honoured in the HEADLESS path too
     // (see the frame loop in main()), which is where CI can actually use it.
     if (!capturedFirst && frameIndex == 1 && !screenshotFirstPath.empty() &&
-        wantFirst) {
+        wantFirst && !dropped) {
       capture(screenshotFirstPath, "screenshot_first");
       capturedFirst = true;
     }
 
-    if (wantTimed && !capturedTimed) {
+    if (wantTimed && !dropped && !capturedTimed) {
       capture(screenshotPath, "screenshot");
       capturedTimed = true;
     }
@@ -1801,6 +1857,10 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // down by this point -- belt and braces, same discipline as the handlers.
   sceneGraph.setDamageWake(nullptr);
   host.setNativeAnimatedStartHook(nullptr);  // FP-11: captures `scheduler`
+  // FP-15: the raster thread presents what is queued, releases the Impeller
+  // context + surface ON ITSELF and joins, before the counters below are read
+  // and before JS (host/fabric) or the window (surface) are destroyed.
+  rasterizer.Shutdown();
 
 
   // Machine-readable evidence that the modal-loop repaint path executed. A
@@ -1808,9 +1868,10 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // single post-release repaint that was already happening.
   printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
   // FP-01: presents counted at surface.present(), independent of the recorder.
-  printf("rn-impeller: presents=%d\n", paintsTotal);
+  printf("rn-impeller: presents=%d\n", rasterizer.presents());
   scheduler.PrintSummary();
-  rni::PrintPipelineSummary(framePipeline);  // FP-13
+  rasterizer.PrintSummary();  // FP-13 pipeline + FP-15 raster thread
+  rni::uniformprobe::PrintSummary();  // FP-15 test hook
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
@@ -2063,6 +2124,21 @@ int main(int argc, char** argv) {
         return 2;
       }
     } else if (a == "--vsync-log") gVsyncLog = true;
+    else if (a == "--raster-thread") {
+      const std::string v = next("--raster-thread");
+      if (v != "on" && v != "off") {
+        fprintf(stderr, "rn-impeller: FATAL: --raster-thread wants on|off (got '%s')\n", v.c_str());
+        return 2;
+      }
+      gRasterThread = v == "on";
+    } else if (a == "--main-stall-after-frames") {
+      const std::string v = next("--main-stall-after-frames");
+      if (std::sscanf(v.c_str(), "%d:%d", &gMainStallAfterFrames, &gMainStallMs) != 2 ||
+          gMainStallAfterFrames <= 0 || gMainStallMs <= 0) {
+        fprintf(stderr, "rn-impeller: FATAL: --main-stall-after-frames wants N:MS (got '%s')\n", v.c_str());
+        return 2;
+      }
+    }
     else if (a == "--idle-skip") { idleSkip = true; idleSkipSet = true; }
     else if (a == "--no-idle-skip") { idleSkip = false; idleSkipSet = true; }
     else if (a == "--idle-run-sec") idleRunSec = atof(next("--idle-run-sec").c_str());

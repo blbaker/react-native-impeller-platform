@@ -7,8 +7,8 @@
 // builds its item and calls Complete(item); a continuation dropped without
 // Complete releases its slot. Consume() takes the oldest item, runs the
 // consumer, then frees the slot. Depth comes from shell/common/animator.cc:
-// 2 when the raster thread is separate, 1 when platform == raster (non-Metal),
-// which is every mode until FP-15 adds the raster thread.
+// 2 when the raster thread is separate (FP-15 windowed), 1 when platform ==
+// raster (headless, `--raster-thread off`).
 //
 // Semaphores are a mutex + counter (fml::Semaphore is a platform semaphore;
 // only TryWait/Signal are used, so nothing here blocks).
@@ -113,6 +113,13 @@ class Pipeline {
     }
     return left > 0 ? PipelineConsumeResult::kMoreAvailable
                     : PipelineConsumeResult::kDone;
+  }
+
+  // FP-15: slots a Produce() would get now (the platform thread waits for one
+  // before it starts a build, so a full pipeline is not a refused frame).
+  uint32_t FreeSlots() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return empty_;
   }
 
   struct Stats {

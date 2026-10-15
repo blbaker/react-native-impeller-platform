@@ -96,15 +96,23 @@ def frames(log_path, trace_path, timings_path):
     if not m:
         fail("no `pipeline` summary line (the frame never went through the Pipeline)")
     depth, produced, consumed, abandoned, refused, inflight = map(int, m.groups())
-    if depth != 1 or inflight != 1:
+    # FP-15: a windowed run with a raster thread is depth 2 (animator.cc) and
+    # its Raster spans live on the "raster" thread, matched to Record by frame.
+    threaded = re.search(r"^rn-impeller: raster_thread threaded=1", log, re.M) is not None
+    if threaded:
+        if depth != 2 or not 1 <= inflight <= 2:
+            fail("raster-thread pipeline must be depth 2, max_inflight 1..2 (got %d, %d)" % (depth, inflight))
+    elif depth != 1 or inflight != 1:
         fail("single-thread pipeline must be depth 1, max_inflight 1 (got %d, %d)" % (depth, inflight))
     if not (produced == consumed == presents) or refused:
         fail("produced=%d consumed=%d presents=%d refused=%d" % (produced, consumed, presents, refused))
 
     events = json.load(open(trace_path))["traceEvents"]
+    tname = {e["tid"]: e["args"]["name"] for e in events if e.get("ph") == "M" and e.get("name") == "thread_name"}
     spans = sorted((e for e in events if e.get("ph") in ("B", "E")), key=lambda e: e["ts"])
-    stack, done = [], []
+    stacks, done, rasters = {}, [], {}
     for e in spans:
+        stack = stacks.setdefault(e["tid"], [])
         if e["ph"] == "B":
             e["kids"] = []
             if stack:
@@ -115,10 +123,19 @@ def frames(log_path, trace_path, timings_path):
             b["end"] = e["ts"]
             if b["name"] == "Frame":
                 done.append(b)
+            elif b["name"] == "Raster" and not any(x["name"] == "Frame" for x in stack):
+                rasters.setdefault(b.get("args", {}).get("frame"), []).append(b)
     frames_seen = []
     for f in done:
         rec = [k for k in f["kids"] if k["name"] == "Record"]
         ras = [k for k in f["kids"] if k["name"] == "Raster"]
+        if threaded:
+            if ras:
+                fail("a Frame on %s holds a Raster span: raster ran on the platform thread" % tname.get(f["tid"]))
+            if len(rec) == 1:
+                ras = rasters.get(rec[0].get("args", {}).get("frame"), [])
+                if any(tname.get(x["tid"]) != "raster" for x in ras):
+                    fail("Raster span for frame %s is not on the raster thread" % rec[0].get("args", {}).get("frame"))
         if len(rec) != 1 or len(ras) != 1:
             fail("a Frame holds %d Record and %d Raster spans (want 1 and 1)" % (len(rec), len(ras)))
         r, s = rec[0], ras[0]
@@ -148,7 +165,8 @@ def frames(log_path, trace_path, timings_path):
             fail("frame %s: build_end %d after raster_start %d" % (t["frame"], t["build_end_us"], t["raster_start_us"]))
     if sorted(t["frame"] for t in recs) != sorted(frames_seen):
         fail("timing frame numbers differ from the traced Record/Raster frames")
-    print("frames ok n=%d pipeline produced=%d consumed=%d depth=%d" % (presents, produced, consumed, depth))
+    print("frames ok n=%d pipeline produced=%d consumed=%d depth=%d threaded=%d"
+          % (presents, produced, consumed, depth, int(threaded)))
 
 
 def main():

@@ -2,8 +2,9 @@
 //
 // Flutter's UI thread has no GL context at all (the raster and IO threads own
 // the onscreen and resource contexts, shell/gpu/gpu_surface_gl_impeller.cc);
-// our RECORD still shares the raster thread until FP-15, so this is how a gate
-// proves the split is real:
+// headless RECORD still shares its thread with RASTER (and FP-15's windowed
+// raster thread owns the context outright), so this is how a gate proves the
+// split is real:
 //   RNI_ASSERT_NO_GL_IN_RECORD=1  the host releases its context around every
 //     RECORD (surface hooks) and aborts if one is still current inside it
 //     (eglGetCurrentContext() on EGL hosts).

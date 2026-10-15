@@ -15,6 +15,7 @@
 #include <GLES3/gl3.h>
 
 #include "host/PointScale.h"
+#include "host/RasterThread.h"
 #include "host/RecordNoGl.h"
 #include "scenegraph/CursorKinds.h"
 #if !defined(_WIN32) && !defined(__APPLE__)
@@ -434,6 +435,10 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
 #endif
 
 bool GlfwSurface::init(int width, int height, std::string* error) {
+  return initWindow(width, height, error) && initGpu(false, error);
+}
+
+bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   auto fail = [&](const char* msg) {
     if (error) *error = msg;
     return false;
@@ -778,6 +783,26 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
 
 #if defined(__APPLE__)
   if (!initAngleForWindow(error)) return false;
+  // FP-15: initGpu makes the context current on the thread that will own it.
+  eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+#endif
+
+  typography_ = ImpellerTypographyContextNew();
+  if (!typography_) return fail("ImpellerTypographyContextNew returned null");
+  // FP-12: RECORD's (main) context; other threads (measure on JS) get their own.
+  rni::typography::Bind(typography_);
+  return true;
+}
+
+bool GlfwSurface::initGpu(bool rasterThread, std::string* error) {
+  auto fail = [&](const char* msg) {
+    if (error) *error = msg;
+    return false;
+  };
+#if defined(__APPLE__)
+  if (!eglMakeCurrent(display_, eglSurface_, eglSurface_, eglContext_)) {
+    return fail("eglMakeCurrent (window) failed");
+  }
 #else
   glfwMakeContextCurrent(window_);
 #if defined(_WIN32)
@@ -794,16 +819,13 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   // HeadlessSurface, which must build its own texture+FBO because it has no
   // window to draw into. True on darwin too: ANGLE's window surface presents
   // through framebuffer 0 just as a GLX/EGL window surface does.
-  ImpellerISize size = {width_, height_};
+  gpuWidth_ = width_;
+  gpuHeight_ = height_;
+  ImpellerISize size = {gpuWidth_, gpuHeight_};
   surface_ = ImpellerSurfaceCreateWrappedFBONew(
       context_, 0u, kImpellerPixelFormatRGBA8888, &size);
   if (!surface_) return fail("ImpellerSurfaceCreateWrappedFBONew returned null");
-
-  typography_ = ImpellerTypographyContextNew();
-  if (!typography_) return fail("ImpellerTypographyContextNew returned null");
-  // FP-12: the paint thread's context; other threads (measure on JS) get their own.
-  rni::typography::Bind(typography_);
-  installRecordHooks();  // FP-14
+  installRecordHooks(rasterThread);  // FP-14
 
   std::printf("rn-impeller: GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
   // ⛔ REPORT WHAT GL GRANTED, NOT WHAT WE ASKED FOR. GLFW_SAMPLES is a HINT:
@@ -871,19 +893,53 @@ bool GlfwSurface::consumeDirty() {
 
   // ANGLE's window surface tracks the CALayer, which AppKit has already
   // resized by the time this callback runs, so there is nothing to rebuild on
-  // the EGL side. The viewport is ours and must follow. contentsScale was
-  // already re-asserted at the TOP of this function (before the framebuffer
-  // query) so the drawable is 2x again; do NOT re-assert here.
-  glViewport(0, 0, width_, height_);
+  // the EGL side. contentsScale was already re-asserted at the TOP of this
+  // function (before the framebuffer query) so the drawable is 2x again; do
+  // NOT re-assert here.
+  // FP-15: the viewport + wrap follow on the GL thread, when the first frame
+  // recorded at the new size is drawn (ensureGpuSize).
+  return true;
+}
 
+bool GlfwSurface::ensureGpuSize(int w, int h) {
+  if (!context_ || w <= 0 || h <= 0) return false;
+  if (surface_ && w == gpuWidth_ && h == gpuHeight_) return true;
+  glViewport(0, 0, w, h);
   if (surface_) {
     ImpellerSurfaceRelease(surface_);
     surface_ = nullptr;
   }
-  ImpellerISize size = {width_, height_};
+  ImpellerISize size = {w, h};
   surface_ = ImpellerSurfaceCreateWrappedFBONew(
       context_, 0u, kImpellerPixelFormatRGBA8888, &size);
+  gpuWidth_ = w;
+  gpuHeight_ = h;
   return surface_ != nullptr;
+}
+
+void GlfwSurface::releaseGpu() {
+  // FP-15 read-back (ci-raster-thread): Impeller's GLES context is released on
+  // the thread that holds the GL context, while it is still current.
+#if defined(_WIN32)
+  const bool glCurrent = glfwGetCurrentContext() != nullptr;
+#else
+  const bool glCurrent = eglGetCurrentContext() != EGL_NO_CONTEXT;
+#endif
+  std::printf("rn-impeller: gpu_release gl_current=%d tid=%lld\n", glCurrent ? 1 : 0,
+              rni::CurrentThreadTag());
+  std::fflush(stdout);
+  rni::recordgl::SetContextHooks({});
+  if (surface_) ImpellerSurfaceRelease(surface_);
+  surface_ = nullptr;
+  if (context_) ImpellerContextRelease(context_);
+  context_ = nullptr;
+#if defined(__APPLE__)
+  if (display_ != EGL_NO_DISPLAY) {
+    eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+  }
+#else
+  if (window_) glfwMakeContextCurrent(nullptr);
+#endif
 }
 
 void GlfwSurface::setRefreshHandler(std::function<void()> handler) {
@@ -1272,22 +1328,25 @@ void GlfwSurface::requestSize(int pointW, int pointH) {
 }
 
 bool GlfwSurface::drawDisplayList(ImpellerDisplayList dl) {
-  if (!ImpellerSurfaceDrawDisplayList(surface_, dl)) return false;
+  if (!surface_ || !ImpellerSurfaceDrawDisplayList(surface_, dl)) return false;
   glFinish();
   return true;
 }
 
 bool GlfwSurface::readPixels(std::vector<Px>* out) {
-  std::vector<Px> raw((size_t)width_ * height_);
+  // FP-15: the GL thread's size (the frame just drawn), not main's width_.
+  const int w = gpuWidth_, h = gpuHeight_;
+  if (!context_ || w <= 0 || h <= 0) return false;
+  std::vector<Px> raw((size_t)w * h);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
   if (glGetError() != GL_NO_ERROR) return false;
   out->resize(raw.size());
   // Same Y-flip as HeadlessSurface::readPixels — glReadPixels' origin is
   // bottom-left, Impeller draws top-left.
-  for (int y = 0; y < height_; ++y) {
-    for (int x = 0; x < width_; ++x) {
-      (*out)[(size_t)y * width_ + x] = raw[(size_t)(height_ - 1 - y) * width_ + x];
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      (*out)[(size_t)y * w + x] = raw[(size_t)(h - 1 - y) * w + x];
     }
   }
   return true;
@@ -1349,8 +1408,21 @@ void GlfwSurface::present() {
 namespace rni {
 
 // FP-14: RNI_ASSERT_NO_GL_IN_RECORD releases the window's context around RECORD.
-void GlfwSurface::installRecordHooks() {
+// FP-15: with a raster thread, main never holds it: nothing to release, and the
+// assert still checks that no context is current on main.
+void GlfwSurface::installRecordHooks(bool rasterThread) {
   rni::recordgl::ContextHooks h;
+  if (rasterThread) {
+    h.release = [] { return true; };
+    h.acquire = [] { return true; };
+#if defined(_WIN32)
+    h.isCurrent = [] { return glfwGetCurrentContext() != nullptr; };
+#else
+    h.isCurrent = [] { return eglGetCurrentContext() != EGL_NO_CONTEXT; };
+#endif
+    rni::recordgl::SetContextHooks(std::move(h));
+    return;
+  }
 #if defined(__APPLE__)
   h.release = [this] {
     return eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) == EGL_TRUE;

@@ -1,0 +1,212 @@
+// FP-15: see WindowRasterizer.h (model: shell/common/rasterizer.cc + shell.cc).
+#include "host/WindowRasterizer.h"
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
+
+#include "base/Trace.h"
+#include "host/FrameScheduler.h"
+#include "host/FrameTimings.h"
+#include "host/GlfwSurface.h"
+
+namespace rni {
+namespace {
+
+int64_t NowUs() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+long long ThreadTag() { return CurrentThreadTag(); }
+
+int EnvInt(const char* name, int lo, int hi) {
+  const char* v = std::getenv(name);
+  if (!v) return 0;
+  const int n = std::atoi(v);
+  return n < lo ? lo : (n > hi ? hi : n);
+}
+
+}  // namespace
+
+WindowRasterizer::WindowRasterizer(GlfwSurface& surface, FrameTimings& timings,
+                                   bool threaded)
+    : surface_(surface),
+      timings_(timings),
+      pipeline_(PipelineDepthFor(/*platformIsRaster=*/!threaded)),
+      raster_(threaded) {
+  everyFrameDelayMs_ = EnvInt("RNI_TEST_RASTER_DELAY_MS", 0, 1000);
+  const char* log = std::getenv("RNI_TEST_RASTER_LOG");
+  log_ = log && std::strcmp(log, "1") == 0;
+}
+
+WindowRasterizer::~WindowRasterizer() { Shutdown(); }
+
+bool WindowRasterizer::Start(std::string* error) {
+  bool ok = false;
+  const long long mainTid = ThreadTag();
+  long long rasterTid = 0;
+  raster_.PostSync([&] {
+    ok = surface_.initGpu(raster_.threaded(), error);
+    rasterTid = ThreadTag();
+  });
+  started_ = ok;
+  std::printf("rn-impeller: raster_thread threaded=%d depth=%u main_tid=%lld "
+              "raster_tid=%lld test_delay_ms=%d\n",
+              raster_.threaded() ? 1 : 0, pipeline_.stats().depth, mainTid,
+              rasterTid, everyFrameDelayMs_);
+  std::fflush(stdout);
+  return ok;
+}
+
+bool WindowRasterizer::WaitForSlot(int waitMs) {
+  if (!raster_.threaded() || pipeline_.FreeSlots() > 0) return true;
+  slotWaits_.fetch_add(1, std::memory_order_relaxed);
+  TRACE_EVENT0("frame", "AwaitPipelineSlot");
+  std::unique_lock<std::mutex> lock(mu_);
+  return cv_.wait_for(lock, std::chrono::milliseconds(waitMs),
+                      [&] { return pipeline_.FreeSlots() > 0; });
+}
+
+FramePipeline::ProducerContinuation WindowRasterizer::AcquireSlot(int waitMs) {
+  auto slot = pipeline_.Produce();
+  if (slot || !raster_.threaded() || waitMs <= 0) return slot;
+  // Back-pressure (see WaitForSlot); a slot frees when the raster thread
+  // finishes an item.
+  const auto until =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(waitMs);
+  std::unique_lock<std::mutex> lock(mu_);
+  while (!(slot = pipeline_.Produce())) {
+    if (cv_.wait_until(lock, until) == std::cv_status::timeout) {
+      slot = pipeline_.Produce();
+      break;
+    }
+  }
+  return slot;
+}
+
+uint64_t WindowRasterizer::Submit(FramePipeline::ProducerContinuation slot,
+                                  std::unique_ptr<FrameItem> item, bool readback) {
+  if (!slot || !item) return 0;
+  if (readback) {
+    std::lock_guard<std::mutex> lock(mu_);
+    readbackFrame_ = (int64_t)item->frameNumber;
+    grabOk_ = false;
+  }
+  (void)slot.Complete(std::move(item));
+  const uint64_t ticket = ++submitted_;
+  raster_.Post([this] { DrawOnRaster(); });  // Shell::OnAnimatorDraw
+  return ticket;
+}
+
+void WindowRasterizer::DrawOnRaster() {
+  (void)pipeline_.Consume(
+      [this](std::unique_ptr<FrameItem> item) { RasterAndPresent(std::move(item)); });
+  {
+    std::lock_guard<std::mutex> lock(mu_);  // pairs with AcquireSlot's wait
+  }
+  cv_.notify_all();
+}
+
+void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
+  int delay = everyFrameDelayMs_;
+  bool readback = false;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (delayFrame_ >= 0 && (int64_t)item->frameNumber == delayFrame_) delay = delayMs_;
+    readback = readbackFrame_ >= 0 && (int64_t)item->frameNumber == readbackFrame_;
+  }
+  if (delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+  // DrawToSurfaces acquires the frame at the layer tree's size.
+  surface_.ensureGpuSize(item->width, item->height);
+  const bool drawn = RasterFrame(*item, [&](ImpellerDisplayList dl) {
+    return surface_.drawDisplayList(dl);
+  });
+  if (!drawn) drawFailed_.fetch_add(1, std::memory_order_relaxed);
+  const int n = presents_.load(std::memory_order_relaxed) + 1;
+  if (readback) {
+    std::vector<Px> px;
+    const bool ok = surface_.readPixels(&px);
+    std::lock_guard<std::mutex> lock(mu_);
+    grabPx_ = std::move(px);
+    grabOk_ = ok;
+    grabW_ = surface_.gpuWidth();
+    grabH_ = surface_.gpuHeight();
+  }
+  if (hooks_.beforePresent) hooks_.beforePresent(n);
+  {
+    TRACE_EVENT0("raster", "Present");
+    if (scheduler_) scheduler_->WillPresent();
+    surface_.present();
+    if (scheduler_) scheduler_->DidPresent(n, item->vsyncUs);
+  }
+  TRACE_COUNTER("presents", n);
+  // Counted at the present: refresh_paints and presents= come from here.
+  presents_.store(n, std::memory_order_release);
+  if (log_) {
+    std::printf("rn-impeller: raster_present n=%d frame=%llu t_us=%lld tid=%lld\n", n,
+                (unsigned long long)item->frameNumber, (long long)NowUs(), ThreadTag());
+    std::fflush(stdout);
+  }
+  if (hooks_.afterPresent) hooks_.afterPresent(n);
+  if (item->timings) {
+    item->timings->RecordPresent();
+    timings_.Commit(std::move(item->timings));
+  }
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (readback) readbackFrame_ = -1;
+  }
+  cv_.notify_all();
+}
+
+bool WindowRasterizer::WaitPresented(uint64_t ticket, int timeoutMs) {
+  std::unique_lock<std::mutex> lock(mu_);
+  return cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                      [&] { return (uint64_t)presents() >= ticket; });
+}
+
+bool WindowRasterizer::TakeGrab(std::vector<Px>* px, int* w, int* h) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (!grabOk_) return false;
+  *px = std::move(grabPx_);
+  *w = grabW_;
+  *h = grabH_;
+  grabOk_ = false;
+  return true;
+}
+
+void WindowRasterizer::DelayFrame(uint64_t frameNumber, int ms) {
+  std::lock_guard<std::mutex> lock(mu_);
+  delayFrame_ = (int64_t)frameNumber;
+  delayMs_ = ms;
+}
+
+void WindowRasterizer::Shutdown() {
+  if (shutdown_) return;
+  shutdown_ = true;
+  // OnPlatformViewDestroyed: the raster thread finishes what is queued and
+  // tears the surface down itself, then the platform thread continues.
+  raster_.Post([this] {
+    while (pipeline_.Consume([this](std::unique_ptr<FrameItem> item) {
+      RasterAndPresent(std::move(item));
+    }) == PipelineConsumeResult::kMoreAvailable) {
+    }
+    if (started_) surface_.releaseGpu();
+  });
+  raster_.Join();
+}
+
+void WindowRasterizer::PrintSummary() const {
+  std::printf("rn-impeller: raster_thread_summary threaded=%d presents=%d "
+              "draw_failed=%llu slot_waits=%llu\n",
+              raster_.threaded() ? 1 : 0, presents(),
+              (unsigned long long)drawFailed_.load(),
+              (unsigned long long)slotWaits_.load());
+  PrintPipelineSummary(pipeline_);
+}
+
+}  // namespace rni

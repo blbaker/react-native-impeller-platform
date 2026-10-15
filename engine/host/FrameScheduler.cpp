@@ -40,10 +40,11 @@ FrameScheduler::FrameScheduler(Options options, WaitFn wait, WakeFn wake,
       phaseUs_(NowUs()) {
   // kAuto probes with swap interval 1: a platform that honours it blocks in
   // the swap and keeps that source; one that does not gets the software clock.
-  const int interval = source_ == Source::kFree || source_ == Source::kSoftware ? 0 : 1;
-  if (swapInterval_ && source_ != Source::kPlatform) swapInterval_(interval);
+  const Source src = options.source;
+  const int interval = src == Source::kFree || src == Source::kSoftware ? 0 : 1;
+  if (swapInterval_ && src != Source::kPlatform) swapInterval_(interval);
   std::printf("rn-impeller: vsync requested=%s swap_interval=%d period_us=%lld\n",
-              SourceName(source_), interval, (long long)(period_ * 1e6));
+              SourceName(src), interval, (long long)(period_ * 1e6));
   std::fflush(stdout);
 }
 
@@ -95,10 +96,10 @@ void FrameScheduler::AwaitVsync() {
     maxFramesPerTick_ = std::max(maxFramesPerTick_, ++framesThisTick_);
     return;
   }
-  if (source_ == Source::kSoftware) {
+  if (source() == Source::kSoftware) {
     TRACE_EVENT0("frame", "AwaitVsync");
     const int64_t interval = (int64_t)(period_ * 1e6);
-    const int64_t target = SnapToNextTick(NowUs(), phaseUs_, interval);
+    const int64_t target = SnapToNextTick(NowUs(), phaseUs_.load(), interval);
     for (;;) {
       const int64_t rem = target - NowUs();
       if (rem <= 0) break;
@@ -124,19 +125,20 @@ uint64_t FrameScheduler::BeginFrame() {
 
 void FrameScheduler::WillPresent() { presentStartUs_ = NowUs(); }
 
-void FrameScheduler::DidPresent(int presentNumber) {
+void FrameScheduler::DidPresent(int presentNumber, int64_t vsyncUs) {
   const int64_t now = NowUs();
   const int64_t swapUs = now - presentStartUs_;
+  const int64_t tick = vsyncUs > 0 ? vsyncUs : tickUs_.load();
   if (options_.log) {
     std::printf("rn-impeller: vsync_present n=%d t_us=%lld swap_us=%lld "
                 "interval_us=%lld since_vsync_us=%lld source=%s\n",
                 presentNumber, (long long)now, (long long)swapUs,
                 (long long)(lastPresentUs_ ? now - lastPresentUs_ : 0),
-                (long long)(now - tickUs_), SourceName(source_));
+                (long long)(now - tick), SourceName(source()));
     std::fflush(stdout);
   }
   lastPresentUs_ = now;
-  if (source_ != Source::kAuto) return;
+  if (source() != Source::kAuto) return;
   probeSwapUs_.push_back(swapUs);
   if ((int)probeSwapUs_.size() >= kProbePresents) Decide();
 }
@@ -155,14 +157,14 @@ void FrameScheduler::Decide() {
   }
   phaseUs_ = NowUs();
   std::printf("rn-impeller: vsync source=%s decided_after=%d swap_median_us=%lld\n",
-              SourceName(source_), (int)probeSwapUs_.size(), (long long)swapMedianUs_);
+              SourceName(source()), (int)probeSwapUs_.size(), (long long)swapMedianUs_);
   std::fflush(stdout);
 }
 
 void FrameScheduler::PrintSummary() const {
   std::printf("rn-impeller: frame_scheduler source=%s requests=%llu coalesced=%llu "
               "frames=%llu ticks=%llu max_frames_per_tick=%d swap_median_us=%lld\n",
-              SourceName(source_), (unsigned long long)requests_.load(),
+              SourceName(source()), (unsigned long long)requests_.load(),
               (unsigned long long)coalesced_.load(), (unsigned long long)frames_,
               (unsigned long long)ticks_, maxFramesPerTick_, (long long)swapMedianUs_);
 }

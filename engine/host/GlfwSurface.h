@@ -41,8 +41,26 @@ class GlfwSurface {
   ~GlfwSurface();
 
   // Returns false and fills `error` rather than aborting, matching
-  // HeadlessSurface's contract.
+  // HeadlessSurface's contract. init() = initWindow() + initGpu(false) on the
+  // calling thread.
   bool init(int width, int height, std::string* error);
+  // FP-15: the window half, on the main thread (every glfw* window call stays
+  // there; darwin also builds the ANGLE EGL objects here and leaves them not
+  // current). Creates and binds the main thread's typography context.
+  bool initWindow(int width, int height, std::string* error);
+  // FP-15: the GL half. The CALLING thread owns the GL context from here on:
+  // it makes it current, creates the Impeller context (the interop GLES reactor
+  // only reacts on its creating thread: reactor_worker_gles.cc) and wraps fbo 0.
+  // rasterThread: RECORD on main has no context to release (record hooks).
+  bool initGpu(bool rasterThread, std::string* error);
+  // GL thread. Rebuild the fbo-0 wrap + viewport when a frame was recorded for
+  // another pixel size (Rasterizer: the surface frame takes the tree's size).
+  bool ensureGpuSize(int w, int h);
+  // GL thread. Release the wrap and the Impeller context, then make no context
+  // current, so the window (and its GL context) can die on main.
+  void releaseGpu();
+  int gpuWidth() const { return gpuWidth_; }
+  int gpuHeight() const { return gpuHeight_; }
 
   // --title: the string handed to glfwCreateWindow (window title bar, macOS
   // Window menu). Call BEFORE init(); an empty string keeps the default.
@@ -481,7 +499,9 @@ class GlfwSurface {
 
  private:
   std::string title_ = "React Native (Impeller)";
-  void installRecordHooks();  // FP-14
+  void installRecordHooks(bool rasterThread);  // FP-14
+  int gpuWidth_{0};   // FP-15: the size the fbo-0 wrap was built for (GL thread)
+  int gpuHeight_{0};
 
 #if defined(__APPLE__)
   // Builds the ANGLE display/context and the window surface bound to the

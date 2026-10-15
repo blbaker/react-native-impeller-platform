@@ -1,4 +1,5 @@
-// FP-13: one frame split into RECORD and RASTER (still on one thread).
+// FP-13: one frame split into RECORD and RASTER (FP-15: windowed RASTER runs
+// on host/WindowRasterizer's raster thread; headless keeps one thread).
 //
 // Model: Flutter hands an immutable flutter::LayerTree (flow/layers/layer_tree.h)
 // plus its FrameTimingsRecorder from the UI thread to the Rasterizer through
@@ -44,6 +45,7 @@ struct FrameItem {
   uint64_t frameNumber = 0;  // == timings->frameNumber()
   std::unique_ptr<FrameTimingsRecorder> timings;
   std::unique_ptr<RasterJobs> jobs;  // FP-14: null without a GL context
+  int64_t vsyncUs = 0;  // FP-15: the scheduler tick this frame began on (0 = none)
 };
 
 using FramePipeline = Pipeline<FrameItem>;
