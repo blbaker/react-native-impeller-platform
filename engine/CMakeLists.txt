@@ -275,6 +275,8 @@ add_executable(rn-impeller
   # FP-21: native Metal window backend (CAMetalLayer + ImpellerContextCreateMetalNew).
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/MetalSurface.mm>
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceMetal.cpp>
+  # FP-27: CVDisplayLink vsync source (FlutterDisplayLink.mm).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/DisplayLinkDarwin.cpp>
   # FP-23: headless darwin on Metal (offscreen MTLTexture, SDK patch 0005).
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm>
   runtime/JsThread.cpp

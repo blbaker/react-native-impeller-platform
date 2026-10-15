@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <memory>
 #include <thread>
 
 #include "base/Trace.h"
@@ -146,7 +148,21 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   {
     TRACE_EVENT0("raster", "Present");
     if (scheduler_) scheduler_->WillPresent();
-    surface_.present();
+    if (scheduler_ && scheduler_->source() == FrameScheduler::Source::kDisplayLink) {
+      // FP-27: log the frame when it is displayed (presentedTime), not here.
+      auto handle = scheduler_->displayHandle();
+      const int64_t tick = item->vsyncUs, target = item->targetUs;
+      auto encode = std::make_shared<std::atomic<int64_t>>(0);
+      surface_.presentReportingDisplay([handle, n, tick, target, encode](int64_t presentedUs) {
+        std::lock_guard<std::mutex> lock(handle->mu);
+        if (handle->scheduler) {
+          handle->scheduler->DidDisplay(n, presentedUs, encode->load(), tick, target);
+        }
+      });
+      encode->store(NowUs());
+    } else {
+      surface_.present();
+    }
     if (scheduler_) scheduler_->DidPresent(n, item->vsyncUs);
   }
   TRACE_COUNTER("presents", n);

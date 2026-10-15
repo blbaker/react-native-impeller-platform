@@ -18,8 +18,37 @@ PRESENT = re.compile(r'^rn-impeller: vsync_present n=(\d+) t_us=(\d+) swap_us=(\
 REQUEST = re.compile(r'^rn-impeller: vsync_request reason=(\w+) t_us=(\d+)')
 PERIOD = re.compile(r'^rn-impeller: vsync requested=\w+ swap_interval=\d+ period_us=(\d+)')
 SUMMARY = re.compile(r'^rn-impeller: frame_scheduler source=(\w+) .*max_frames_per_tick=(\d+)')
+# FP-27 (darwin Metal, source=displaylink): one line per present, from the drawable's presented
+# handler. vsync_present there carries t_us = presented_us (displayed time); presented_us=0 = the
+# drawable was never displayed (no vsync_present line for it).
+DISPLAYED = re.compile(r'^rn-impeller: vsync_displayed n=(\d+) presented_us=(\d+) encode_us=(\d+) '
+                       r'tick_us=(\d+) target_us=(\d+)')
 WARMUP = 5      # presents skipped after the source decision
 INTERVALS = 120
+# FP-27, displaylink: a frame paced on the link is displayed at its target vblank plus the
+# compositor's fixed latency (1-2 periods on a macOS window, measured). Rendered ahead of the
+# display (paced only by CAMetalLayer's drawable back-pressure) it queues: 5 periods measured.
+MAX_DISPLAY_LATENCY_PERIODS = 3
+
+
+def parse_displayed(path):
+    # [(n, presented_us, encode_us, tick_us, target_us)] in present order
+    rows = []
+    for line in open(path, errors='replace'):
+        m = DISPLAYED.match(line)
+        if m:
+            rows.append(tuple(int(g) for g in m.groups()))
+    return sorted(rows)
+
+
+def encode_presents(path, presents):
+    # C/D judge the scheduler: when a frame was PRESENTED (encoded), not when the compositor showed
+    # it (displaylink's t_us is displayed time, ~2 periods later on a macOS window). Same shape as
+    # parse()'s presents; dropped (never displayed) frames count too.
+    rows = parse_displayed(path)
+    if not rows:
+        return presents
+    return [(n, enc, 'displaylink', tick) for n, _, enc, tick, _ in rows]
 
 
 def parse(path):
@@ -48,6 +77,7 @@ def parse(path):
 def check_idle(work, fails):
     # C: a static scene presents nothing once settled (2 s window).
     presents, _, _, _ = parse(f'{work}/idle.log')
+    presents = encode_presents(f'{work}/idle.log', presents)
     if not presents:
         fails.append('C idle: no presents at all (nothing painted)')
     else:
@@ -61,6 +91,7 @@ def check_idle(work, fails):
 def check_mutation(work, fails):
     # D: a mutation ~1 s in presents within 2 periods, once.
     presents, requests, period_d, _ = parse(f'{work}/mutate.log')
+    presents = encode_presents(f'{work}/mutate.log', presents)
     period_d = period_d or 16666
     if not presents:
         fails.append('D mutation: no presents at all')
@@ -98,6 +129,7 @@ def main():
     print(f'  arms: {" ".join(sorted(arms))}')
     fails = []
     means, sds, ctrl_sds, ctrl_means, period = [], [], [], [], None
+    link_lat = []  # FP-27: per-run median displayed - target vblank (displaylink only)
     short_total, ctrl_short_total = 0, 0
     for i in (1, 2, 3) if arms & {'A', 'B', 'tick'} else ():
         wakes = ([int(x) for x in open(f'{work}/control-{i}.txt').read().split()]
@@ -127,8 +159,26 @@ def main():
                   if None not in ticks else None)
         ctrl = (f' control: mean={ctrl_means[-1]:.0f}us sd={ctrl_sds[-1]:.0f}us short={ctrl_doubles}'
                 if control else '')
+        link = ''
+        if paced[0][2] == 'displaylink':
+            # FP-27: the link's own terms. One frame per link vsync = no two displayed frames
+            # target the same vblank (exact: one callback, one target); paced on the link = shown
+            # a fixed few periods after that vblank, not queued behind the drawables.
+            shown = {p[0] for p in window}
+            rows = [r for r in parse_displayed(f'{work}/spin-{i}.log') if r[0] in shown]
+            targets = [r[4] for r in rows]
+            shared_target = sum(1 for a, b in zip(targets, targets[1:]) if a == b)
+            lat = statistics.median([r[1] - r[4] for r in rows]) if rows else None
+            link = f' shared_target={shared_target} display_latency={lat}us'
+            if lat is None:
+                fails.append(f'A pacing: spin-{i} is displaylink but printed no vsync_displayed lines')
+            else:
+                link_lat.append(lat)
+            if shared_target > 0:
+                fails.append(f'B double frames: spin-{i} has {shared_target} displayed frames targeting '
+                             f'the same display-link vblank as the frame before')
         print(f'  spin-{i}: source={paced[0][2]} mean={mean:.0f}us sd={sd:.0f}us '
-              f'short={doubles} shared_tick={shared} max_frames_per_tick={summary[1]}{ctrl}')
+              f'short={doubles} shared_tick={shared} max_frames_per_tick={summary[1]}{ctrl}{link}')
         short_total += doubles
         # B: one frame per vsync, exact per run from the present stamps and the scheduler.
         if shared is None:
@@ -156,6 +206,14 @@ def main():
         print(f'  A: median mean={mean:.0f}us sd={sd:.0f}us period={period}us '
               f'control_sd={floor:.0f}us sd_limit={limit:.0f}us control_drift={drift:.0f}us '
               f'mean_tol={mean_tol:.0f}us')
+        if len(link_lat) == 3:
+            lat = statistics.median(link_lat)
+            print(f'  A: displaylink median display latency {lat:.0f}us = {lat / period:.2f} periods '
+                  f'after the target vblank (allowed {MAX_DISPLAY_LATENCY_PERIODS})')
+            if lat > MAX_DISPLAY_LATENCY_PERIODS * period:
+                fails.append(f'A pacing: frames displayed {lat / period:.1f} periods after their '
+                             f'display-link target vblank (allowed {MAX_DISPLAY_LATENCY_PERIODS}): '
+                             f'rendered ahead of the display, not paced on the link')
         if abs(mean - period) > mean_tol or sd >= limit:
             fails.append(f'A pacing: median present interval {mean:.0f}us sd {sd:.0f}us vs the '
                          f'{period}us period (mean within 5% + control drift {drift:.0f}us = '

@@ -26,6 +26,7 @@
 // and a single frame that tried to answer both would answer neither when it
 // went wrong. The banner never draws in windowed mode; it is a test artifact,
 // not UI.
+#include <atomic>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -72,6 +73,9 @@
 #include "host/FrameTimings.h"
 #include "host/FrameItem.h"
 #include "host/FrameScheduler.h"
+#if defined(__APPLE__)
+#include "host/DisplayLinkDarwin.h"
+#endif
 #include "host/AnimRowProbe.h"
 #include "host/UniformProbe.h"
 #include "host/PoisonProbe.h"
@@ -768,8 +772,45 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // wake, so a sleeping loop only notices it at the end of its budget.
   // FP-15: the swap interval belongs to the GL context, so it is set on the
   // raster thread (inline when Decide() already runs there, at a present).
+  // FP-27: darwin Metal paces on CVDisplayLink (FlutterVSyncWaiter.mm), at the
+  // window display's own period. `auto` picks it; ANGLE keeps FP-11's probe.
+  double vsyncHz = 60.0;
+  rni::FrameScheduler::Source vsyncSource = gVsyncSource;
+#if defined(__APPLE__)
+  std::unique_ptr<rni::DisplayLinkDarwin> displayLink;
+  std::atomic<rni::FrameScheduler*> linkScheduler{nullptr};  // set once the scheduler exists
+  if (surface.metal() && (vsyncSource == rni::FrameScheduler::Source::kAuto ||
+                          vsyncSource == rni::FrameScheduler::Source::kDisplayLink)) {
+    const uint32_t displayId = surface.displayId();
+    displayLink = std::make_unique<rni::DisplayLinkDarwin>(
+        displayId, [&linkScheduler](int64_t nowUs, int64_t targetUs, int64_t periodUs) {
+          rni::FrameScheduler* s = linkScheduler.load(std::memory_order_acquire);
+          if (s) s->OnDisplayLink(nowUs, targetUs, periodUs);
+        });
+    const int64_t periodUs = displayLink->nominalPeriodUs();
+    printf("rn-impeller: display_link ok=%d display_id=%u period_us=%lld\n",
+           displayLink->ok() ? 1 : 0, displayId, (long long)periodUs);
+    if (displayLink->ok()) {
+      vsyncSource = rni::FrameScheduler::Source::kDisplayLink;
+      if (periodUs > 0) vsyncHz = 1e6 / (double)periodUs;
+    } else if (vsyncSource == rni::FrameScheduler::Source::kDisplayLink) {
+      vsyncSource = rni::FrameScheduler::Source::kSoftware;  // vsync_waiter_fallback
+    }
+  }
+#endif
+  if (vsyncSource == rni::FrameScheduler::Source::kDisplayLink) {
+#if !defined(__APPLE__)
+    fprintf(stderr, "rn-impeller: FATAL: --vsync displaylink is darwin-only\n");
+    return 2;
+#else
+    if (!surface.metal()) {
+      fprintf(stderr, "rn-impeller: FATAL: --vsync displaylink needs --backend metal\n");
+      return 2;
+    }
+#endif
+  }
   rni::FrameScheduler scheduler(
-      rni::FrameScheduler::Options{gVsyncSource, 60.0, gVsyncLog},
+      rni::FrameScheduler::Options{vsyncSource, vsyncHz, gVsyncLog},
       [&surface](double s) { surface.waitEvents(s); },
       (idleSkip && idleMutant == 3)
           ? rni::FrameScheduler::WakeFn()
@@ -778,6 +819,14 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         rasterizer.thread().PostSync([&] { surface.setSwapInterval(interval); });
       });
   rasterizer.SetScheduler(&scheduler);
+#if defined(__APPLE__)
+  linkScheduler.store(&scheduler, std::memory_order_release);
+  // Stop the link before the scheduler it feeds is destroyed.
+  struct LinkStop {
+    std::unique_ptr<rni::DisplayLinkDarwin>* link;
+    ~LinkStop() { link->reset(); }
+  } linkStop{&displayLink};
+#endif
 
   // FP-15: what the raster thread does around each present besides drawing.
   rni::WindowRasterizer::Hooks rasterHooks;
@@ -856,6 +905,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                                      surface.height(), std::move(frame), nullptr,
                                      rasterizer.partialRepaint());
     recorded->vsyncUs = scheduler.lastTickUs();
+    recorded->targetUs = scheduler.lastTargetUs();
     const int painted = recorded->painted;
     const uint64_t number = recorded->frameNumber;
     if (stallItemDelayMs > 0) rasterizer.DelayFrame(number, stallItemDelayMs);
@@ -2162,7 +2212,7 @@ int main(int argc, char** argv) {
       const std::string v = next("--vsync");
       gVsyncSet = true;
       if (!rni::FrameScheduler::ParseSource(v.c_str(), &gVsyncSource)) {
-        fprintf(stderr, "rn-impeller: FATAL: --vsync wants auto|swap|software|off|platform (got '%s')\n", v.c_str());
+        fprintf(stderr, "rn-impeller: FATAL: --vsync wants auto|swap|software|off|platform|displaylink (got '%s')\n", v.c_str());
         return 2;
       }
     } else if (a == "--vsync-log") gVsyncLog = true;

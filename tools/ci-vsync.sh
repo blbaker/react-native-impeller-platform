@@ -81,10 +81,16 @@ echo "== render =="
 # run on a loaded Mac spent ~2 s of its 3.5 s starting up (78 frames, FP-26).
 run VsyncSpin spin-0 1.5
 if [ "$CONTROL" = 1 ]; then
-  WORK_US="$(grep -v 'source=auto$' "$WORK/spin-0.log" | sed -n 's/^rn-impeller: vsync_present .* since_vsync_us=\([0-9]*\) source=[a-z]*$/\1/p' \
+  # FP-27: darwin Metal logs presents at their displayed time (source=displaylink), so
+  # since_vsync_us there includes the compositor's latency; the frame's wall cost is
+  # its tick-to-encode time from the vsync_displayed line instead.
+  WORK_US="$( { grep -v 'source=auto$' "$WORK/spin-0.log" | grep -v 'source=displaylink$' \
+      | sed -n 's/^rn-impeller: vsync_present .* since_vsync_us=\([0-9]*\) source=[a-z]*$/\1/p' || true
+    sed -n 's/^rn-impeller: vsync_displayed n=[0-9]* presented_us=[1-9][0-9]* encode_us=\([0-9]*\) tick_us=\([0-9]*\) .*/\1 \2/p' "$WORK/spin-0.log" \
+      | awk '{ print $1 - $2 }'; } \
     | sort -n | awk '{ v[NR] = $1 } END { if (NR < 10) exit; w = v[int((NR + 1) / 2)]; if (w < 1000) w = 1000; if (w > 12000) w = 12000; print w }')"
   [ -n "$WORK_US" ] || fail "calibration run printed fewer than 10 paced vsync_present lines"
-  echo "control work per tick: ${WORK_US}us (spin-0 median vsync-to-present)"
+  echo "control work per tick: ${WORK_US}us (spin-0 median vsync-to-present, or tick-to-encode on displaylink)"
   echo "$WORK_US" > "$WORK/control-work.txt"
   for i in 1 2 3; do
     python3 tools/vsync_control.py 4.5 "$WORK/control-$i.txt" "$WORK_US" &

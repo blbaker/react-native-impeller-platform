@@ -21,18 +21,24 @@
 //   kPlatform      no swap-interval call and no clock: whatever the context's
 //                  default swap does (the pre-FP-11 loop). Default for bounded
 //                  `--frames N` test runs, whose ms deadlines assume it.
+//   kDisplayLink   FP-27, darwin Metal: CVDisplayLink callbacks (OnDisplayLink)
+//                  pace the loop the way FlutterVSyncWaiter.mm does, and the
+//                  presents are logged at the drawable's presentedTime
+//                  (DidDisplay), not when the encode returned.
 #pragma once
 
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <vector>
 
 namespace rni {
 
 class FrameScheduler {
  public:
-  enum class Source { kAuto, kSwapInterval, kSoftware, kFree, kPlatform };
+  enum class Source { kAuto, kSwapInterval, kSoftware, kFree, kPlatform, kDisplayLink };
   struct Options {
     Source source = Source::kAuto;
     double hz = 60.0;
@@ -47,6 +53,8 @@ class FrameScheduler {
 
   FrameScheduler(Options options, WaitFn wait, WakeFn wake,
                  SwapIntervalFn swapInterval);
+
+  ~FrameScheduler();
 
   static bool ParseSource(const char* text, Source* out);
   static const char* SourceName(Source s);
@@ -69,6 +77,26 @@ class FrameScheduler {
   void WillPresent();
   void DidPresent(int presentNumber, int64_t vsyncUs = 0);
 
+  // FP-27, any thread (CoreVideo's). One CVDisplayLink callback: targetUs is
+  // the vblank the next frame is displayed at (steady clock us).
+  void OnDisplayLink(int64_t nowUs, int64_t targetUs, int64_t periodUs);
+  // FP-27, any thread (Metal's presented handler). presentedUs = the
+  // drawable's presentedTime (0 = never displayed); encodeUs = when present
+  // returned; vsyncUs/targetUs = the tick the frame began on and its vblank.
+  // Prints vsync_present with t_us = presentedUs (source=displaylink).
+  void DidDisplay(int presentNumber, int64_t presentedUs, int64_t encodeUs, int64_t vsyncUs,
+                  int64_t targetUs);
+  // FP-27: Metal's presented handlers can run after the scheduler is gone
+  // (they fire once the frame is displayed); they call DidDisplay through this
+  // handle, which the destructor clears under its lock.
+  struct DisplayHandle {
+    std::mutex mu;
+    FrameScheduler* scheduler = nullptr;
+  };
+  std::shared_ptr<DisplayHandle> displayHandle() const { return displayHandle_; }
+  // FP-27: the vblank the last AwaitVsync tick targets (0 = none).
+  int64_t lastTargetUs() const { return targetUs_.load(std::memory_order_acquire); }
+
   Source source() const { return source_.load(std::memory_order_acquire); }
   // FP-15: when the last AwaitVsync returned (steady clock us); FrameItem::vsyncUs.
   int64_t lastTickUs() const { return tickUs_.load(std::memory_order_acquire); }
@@ -80,6 +108,10 @@ class FrameScheduler {
 
  private:
   void Decide();
+  // FP-27: FlutterVSyncWaiter waitForVSync + onDisplayLink. False when the link
+  // has not fired yet or stalled (the caller falls back to the software grid).
+  bool AwaitDisplayLink();
+  void AwaitSoftwareTick();
 
   Options options_;
   WaitFn wait_;
@@ -104,6 +136,18 @@ class FrameScheduler {
   int64_t lastPresentUs_ = 0;
   std::vector<int64_t> probeSwapUs_;
   int64_t swapMedianUs_ = -1;
+
+  // FP-27: written by OnDisplayLink (CoreVideo thread), read on main.
+  std::atomic<uint64_t> linkSeq_{0};
+  std::atomic<int64_t> linkTargetUs_{0};
+  std::atomic<int64_t> linkPeriodUs_{0};
+  std::atomic<bool> linkWaiting_{false};
+  std::atomic<int64_t> targetUs_{0};
+  uint64_t linkTicks_ = 0, linkFallbacks_ = 0;  // main thread
+  // DidDisplay (Metal's handler thread; one at a time, in present order).
+  std::shared_ptr<DisplayHandle> displayHandle_;
+  int64_t lastDisplayedUs_ = 0;
+  std::atomic<int> displayed_{0}, dropped_{0};
 };
 
 }  // namespace rni

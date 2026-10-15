@@ -47,6 +47,7 @@ struct FrameItem {
   std::unique_ptr<FrameTimingsRecorder> timings;
   std::unique_ptr<RasterJobs> jobs;  // FP-14: null without a GL context
   int64_t vsyncUs = 0;  // FP-15: the scheduler tick this frame began on (0 = none)
+  int64_t targetUs = 0;  // FP-27: the vblank that tick targets (displaylink)
   // FP-18: damage against the previous walk. When damage.partial, displayList
   // is the walk clipped to the damage rect (device coordinates), and fullList
   // is the unclipped walk, kept so RASTER can repaint in full when its back

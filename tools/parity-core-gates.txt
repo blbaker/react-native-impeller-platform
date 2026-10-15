@@ -32,3 +32,4 @@ tools/ci-partial-repaint.sh    # FP-18 partial repaint: <= 5% per spinner frame,
 tools/ci-backend-agnostic.sh  # FP-20 no GL above the backend, pixels == pre-pass, metal/vulkan policy: 0 GL names, no supersample
 tools/ci-metal.sh             # FP-21 Metal: refused off darwin, gles default (darwin arms run via parity-mac.sh)
 tools/ci-metal-headless.sh    # FP-23 headless Metal: refused off darwin, headless gles default (darwin arms via parity-mac.sh)
+tools/ci-metal-pacing.sh  # FP-27: linux ~3 s (displaylink refusal); darwin ~1 min via parity-mac

@@ -7,6 +7,8 @@
 #import <objc/runtime.h>
 
 #include <atomic>
+
+#include "host/DisplayLinkDarwin.h"
 #include <cstdio>
 
 #define GLFW_EXPOSE_NATIVE_COCOA
@@ -224,9 +226,17 @@ bool MetalSurface::ReadPixels(std::vector<Px>* out, int* w, int* h) {
   }
 }
 
-void MetalSurface::Present() {
+void MetalSurface::Present(std::function<void(int64_t presentedUs)> onDisplayed) {
   @autoreleasepool {
     if (!impl_->surface) return;
+    if (onDisplayed) {
+      // FP-27: displayed time, read back from the drawable (Flutter's
+      // FlutterMetalLayer drawables carry presentedTime the same way).
+      [impl_->drawable addPresentedHandler:^(id<MTLDrawable> d) {
+        const CFTimeInterval t = d.presentedTime;
+        onDisplayed(t > 0 ? DisplayLinkDarwin::HostSecondsToSteadyUs(t) : 0);
+      }];
+    }
     const bool tx = impl_->liveResize.load(std::memory_order_acquire);
     if (tx != impl_->layerTransaction) {
       impl_->layer.presentsWithTransaction = tx;
@@ -258,6 +268,12 @@ void MetalSurface::Release() {
   @autoreleasepool {
     impl_->DropDrawable();
   }
+}
+
+uint32_t MetalSurface::DisplayId() const {
+  NSScreen* screen = impl_->window ? [impl_->window screen] : nil;
+  NSNumber* n = screen ? [screen deviceDescription][@"NSScreenNumber"] : nil;
+  return n ? (uint32_t)[n unsignedIntValue] : 0;
 }
 
 int MetalSurface::presents() const { return impl_->presents.load(); }

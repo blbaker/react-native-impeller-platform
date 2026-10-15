@@ -1450,6 +1450,25 @@ void GlfwSurface::setSwapInterval(int interval) {
 #endif
 }
 
+bool GlfwSurface::presentReportingDisplay(std::function<void(int64_t)> onDisplayed) {
+#if defined(__APPLE__)
+  if (metal_) {
+    metal_->Present(std::move(onDisplayed));
+    return true;
+  }
+#endif
+  (void)onDisplayed;
+  present();
+  return false;
+}
+
+uint32_t GlfwSurface::displayId() const {
+#if defined(__APPLE__)
+  if (metal_) return metal_->DisplayId();
+#endif
+  return 0;
+}
+
 void GlfwSurface::present() {
 #if defined(__APPLE__)
   if (metal_) return metal_->Present();

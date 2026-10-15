@@ -500,6 +500,11 @@ class GlfwSurface {
   void postEmptyEvent();
   bool shouldClose() const;
   void present();  // glfwSwapBuffers
+  // FP-27: present(), plus onDisplayed(presentedUs) from the drawable's
+  // presentedTime. False (and no callback) when the backend cannot report it.
+  bool presentReportingDisplay(std::function<void(int64_t presentedUs)> onDisplayed);
+  // FP-27, main thread: the window's CGDirectDisplayID on Metal (else 0).
+  uint32_t displayId() const;
   // FP-11: swap interval on the window context (glfwSwapInterval; eglSwapInterval
   // on darwin). Main thread, context current.
   void setSwapInterval(int interval);

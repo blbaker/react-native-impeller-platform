@@ -49,7 +49,12 @@ class MetalSurface {
   bool ReadPixels(std::vector<Px>* out, int* w, int* h);
   // Raster thread. Presents and drops the drawable. During a live resize the
   // layer presents with the CA transaction (FlutterMetalLayer / SurfaceMTL).
-  void Present();
+  // FP-27: onDisplayed(presentedUs) runs on Metal's thread once the drawable
+  // is on screen (MTLDrawable addPresentedHandler, presentedTime -> steady
+  // clock us; 0 = the drawable was never displayed).
+  void Present(std::function<void(int64_t presentedUs)> onDisplayed = nullptr);
+  // Main thread. The CGDirectDisplayID of the window's screen (0 = unknown).
+  uint32_t DisplayId() const;
   // Raster thread. CAMetalLayer.displaySyncEnabled (the swap interval).
   void SetDisplaySync(bool on);
   void Release();
