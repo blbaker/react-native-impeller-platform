@@ -648,6 +648,13 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
     self->refreshHandler_();
   });
 
+  // FP-31: minimize/restore drives the GPU-availability switch (the desktop
+  // counterpart of iOS didEnterBackground, FlutterEngine.mm).
+  glfwSetWindowIconifyCallback(window_, [](GLFWwindow* w, int iconified) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (self && self->iconifyHandler_) self->iconifyHandler_(iconified == GLFW_TRUE);
+  });
+
   // ⛔ THE REGISTRATION THAT WAS ABSENT. Without this line the windowed app
   // mounts, lays out, paints, hit-tests correctly if asked — and no click ever
   // asks. glfwSetMouseButtonCallback was measured at ZERO occurrences in this

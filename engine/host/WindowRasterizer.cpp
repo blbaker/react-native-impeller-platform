@@ -9,6 +9,7 @@
 #include <memory>
 #include <thread>
 
+#include "base/GpuAvailability.h"
 #include "base/Trace.h"
 #include "host/FrameScheduler.h"
 #include "host/FrameTimings.h"
@@ -44,6 +45,8 @@ WindowRasterizer::WindowRasterizer(GlfwSurface& surface, FrameTimings& timings,
   everyFrameDelayMs_ = EnvInt("RNI_TEST_RASTER_DELAY_MS", 0, 1000);
   const char* log = std::getenv("RNI_TEST_RASTER_LOG");
   log_ = log && std::strcmp(log, "1") == 0;
+  const char* probe = std::getenv("RNI_TEST_GPU_AVAIL_PROBE");
+  availProbe_ = probe && std::strcmp(probe, "1") == 0;
 }
 
 WindowRasterizer::~WindowRasterizer() { Shutdown(); }
@@ -127,8 +130,10 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   if (resizeSync_) resizeSync_->MaybeHang(item->width, item->height);  // FP-30 test hook
   // FP-30 (rasterizer.cc DoDraw -> Shell::ShouldDiscardLayerTree): a frame
   // recorded for another size than the surface's current one never presents.
-  if (resizeSync_ && resizeSync_->ShouldDiscard(item->width, item->height, item->frameNumber)) {
-    if (item->jobs) item->jobs->AfterRaster();  // unrun jobs mark their entries failed
+  // Retires an item that never reaches the screen: unrun jobs mark their
+  // entries failed (dependents redo them), timings are discarded.
+  auto retireDropped = [&] {
+    if (item->jobs) item->jobs->AfterRaster();
     if (item->timings) timings_.Discard(std::move(item->timings));
     {
       std::lock_guard<std::mutex> lock(mu_);
@@ -136,12 +141,25 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
       retired_.fetch_add(1, std::memory_order_acq_rel);
     }
     cv_.notify_all();
+  };
+  if (resizeSync_ && resizeSync_->ShouldDiscard(item->width, item->height, item->frameNumber)) {
+    retireDropped();
+    return;
+  }
+  // FP-31 (rasterizer.cc DrawToSurfaces + SyncSwitch): everything below is GPU
+  // work. While the GPU is unavailable (window iconified, app in background)
+  // the frame is dropped like kGpuUnavailable: no draw, no upload, no present.
+  gpu::Section gpuSection;
+  if (!gpuSection.available()) {
+    gpu::Note(gpu::Counter::kSkippedFrame);
+    retireDropped();
     return;
   }
   // DrawToSurfaces acquires the frame at the layer tree's size.
   surface_.ensureGpuSize(item->width, item->height);
   FrameItem& frame = *item;
   const bool drawn = RasterFrame(frame, [&](ImpellerDisplayList dl) {
+    gpu::Note(gpu::Counter::kDraw);
     // FP-18: through the root buffer (keeps the previous frame), else direct.
     if (partialEnabled_.load(std::memory_order_relaxed)) {
       return partial_.Draw(surface_.context(), frame);
@@ -152,6 +170,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   const int n = presents_.load(std::memory_order_relaxed) + 1;
   if (readback) {
     std::vector<Px> px;
+    gpu::Note(gpu::Counter::kSnapshot);
     const bool ok = surface_.readPixels(&px);
     std::lock_guard<std::mutex> lock(mu_);
     grabPx_ = std::move(px);
@@ -159,7 +178,19 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
     grabW_ = surface_.gpuWidth();
     grabH_ = surface_.gpuHeight();
   }
+  if (availProbe_) {  // FP-31 test hook: the centre pixel of every frame about to be shown
+    std::vector<Px> px;
+    gpu::Note(gpu::Counter::kSnapshot);
+    if (surface_.readPixels(&px) && !px.empty()) {
+      const Px& c = px[(size_t)(surface_.gpuHeight() / 2) * surface_.gpuWidth() + surface_.gpuWidth() / 2];
+      std::printf("rn-impeller: gpu_probe present=%d frame=%llu r=%d g=%d b=%d t_us=%lld\n", n,
+                  (unsigned long long)item->frameNumber, (int)c.r, (int)c.g, (int)c.b,
+                  (long long)NowUs());
+      std::fflush(stdout);
+    }
+  }
   if (hooks_.beforePresent) hooks_.beforePresent(n);
+  gpu::Note(gpu::Counter::kPresent);
   {
     TRACE_EVENT0("raster", "Present");
     if (scheduler_) scheduler_->WillPresent();
@@ -183,6 +214,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   TRACE_COUNTER("presents", n);
   // Counted at the present: refresh_paints and presents= come from here.
   presents_.store(n, std::memory_order_release);
+  gpu::NotePresent(n, !item->damage.partial);
   if (resizeSync_) resizeSync_->DidPresent(item->width, item->height);  // performCommit
   if (log_) {
     std::printf("rn-impeller: raster_present n=%d frame=%llu t_us=%lld tid=%lld\n", n,

@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/GpuAvailability.h"
 #include "base/Trace.h"
 #include "fabric/ImageStore.h"
 
@@ -180,6 +181,16 @@ void Loop(ContextHooks hooks) {
       continue;
     }
 #if RNI_IO_GL
+    // FP-31 (ShellIOManager + is_gpu_disabled_sync_switch_): no GPU upload while
+    // the GPU is unavailable. The load completes without a texture and the
+    // raster side uploads it on the first frame after the restore (Take() == 0).
+    gpu::Section gpuSection;
+    if (!gpuSection.available()) {
+      gpu::Note(gpu::Counter::kSkippedUpload);
+      t.done();
+      continue;
+    }
+    gpu::Note(gpu::Counter::kUpload);
     if (Upload(t)) {
       gUploads.fetch_add(1);
     } else {

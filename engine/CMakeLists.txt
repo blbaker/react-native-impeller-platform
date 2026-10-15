@@ -261,6 +261,7 @@ add_executable(rn-impeller
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
   base/TestSync.cpp
+  base/GpuAvailability.cpp
   base/GlLimits.cpp
   base/ContextFlags.cpp
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/OsAppearanceDarwin.mm>

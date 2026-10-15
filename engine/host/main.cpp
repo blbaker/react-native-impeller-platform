@@ -80,6 +80,7 @@
 #include "host/AnimRowProbe.h"
 #include "host/UniformProbe.h"
 #include "host/PoisonProbe.h"
+#include "base/GpuAvailability.h"
 #include "host/ResizeProbe.h"
 #include "host/ResizeSync.h"
 #include "scenegraph/GpuBackend.h"
@@ -496,6 +497,10 @@ static int gMainStallAfterFrames = 0;
 // FP-30 test hook: --resize-sequence F:WxH,... (ResizeProbe.h).
 static std::vector<rni::resizeprobe::SizeStep> gResizeSequence;
 static int gMainStallMs = 0;
+// FP-31 test hook: --gpu-availability-sequence "MS:off,MS:on,..." flips the GPU
+// switch through the same lifecycle handler the window iconify callback uses.
+struct GpuAvailStep { int ms; bool available; };
+static std::vector<GpuAvailStep> gGpuAvailSequence;
 [[maybe_unused]] static long long SteadyNowUs() {  // same clock as the raster_present t_us lines
   return (long long)std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -828,6 +833,16 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         rasterizer.thread().PostSync([&] { surface.setSwapInterval(interval); });
       });
   rasterizer.SetScheduler(&scheduler);
+  // FP-31 (FlutterEngine.mm setIsGpuDisabled): window iconify/restore, and the
+  // RN AppState it maps to, flip the one switch. JS keeps running; it is told
+  // the new AppState. A restore asks for the repaint.
+  rni::gpu::SetRestoreListener([&scheduler]() { scheduler.RequestFrame("gpu_available"); });
+  auto setLifecycle = [&](bool background, const char* reason) {
+    rni::gpu::Set(!background, reason);
+    host.deviceEvents()->emit("appStateDidChange",
+                              folly::dynamic::object("app_state", background ? "background" : "active"));
+  };
+  surface.setIconifyHandler([&](bool iconified) { setLifecycle(iconified, "iconify"); });
 #if defined(__APPLE__)
   linkScheduler.store(&scheduler, std::memory_order_release);
   // Stop the link before the scheduler it feeds is destroyed.
@@ -912,15 +927,26 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // posts Rasterizer::Draw to the raster thread). A full pipeline waits for
     // the raster thread to free a slot (the one-thread loop was paced by its
     // own present), then drops the frame.
+    // FP-31 (SyncSwitch): no RECORD either while the GPU is unavailable; the
+    // scene keeps its last painted state, so the first frame after the restore
+    // covers everything JS changed meanwhile.
+    if (!rni::gpu::Available()) {
+      rni::gpu::Note(rni::gpu::Counter::kSkippedFrame);
+      frameTimings.Discard(std::move(frame));
+      return -1;
+    }
     auto slot = rasterizer.AcquireSlot(rni::testsync::ScaledMs(1000));
     if (!slot) {
       frameTimings.Discard(std::move(frame));
       scheduler.RequestFrame("pipeline_full");
       return -1;
     }
+    rni::gpu::Note(rni::gpu::Counter::kRecord);
+    // The first frame after a restore is a full repaint (no damage clip).
+    const bool allowPartial = rasterizer.partialRepaint() && !rni::gpu::ConsumeRestore();
     auto recorded = rni::RecordFrame(sceneGraph, pointScale, surface.width(),
                                      surface.height(), std::move(frame), nullptr,
-                                     rasterizer.partialRepaint());
+                                     allowPartial);
     recorded->vsyncUs = scheduler.lastTickUs();
     recorded->targetUs = scheduler.lastTargetUs();
     const int painted = recorded->painted;
@@ -944,6 +970,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // the modal-loop path actually ran, instead of inferring it from a pixel
   // comparison that a lucky post-drag repaint would also satisfy.
   int refreshPaints = 0;
+  size_t gGpuAvailNext = 0;  // FP-31: next step of gGpuAvailSequence
 
   // ⛔ SCALE AND SIZE ARE DECIDED ONCE AT WINDOW CREATION UNLESS THIS RUNS.
   // Everything above the loop ran exactly once. RN's own platforms do not
@@ -1443,7 +1470,17 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // frame (the old paint-every-frame loop, now paced by vsync); with it only
     // the first frame and a pending test hand ask here. Everything else
     // (damage, NativeAnimated start, a live clock, resize) requests itself.
-    if (!idleSkip || frameIndex == 0 || handsPending()) scheduler.RequestFrame("loop");
+    if ((!idleSkip || frameIndex == 0 || handsPending()) && rni::gpu::Available()) {
+      scheduler.RequestFrame("loop");
+    }
+    // FP-31 test hook: the lifecycle flips scheduled by --gpu-availability-sequence.
+    while (gGpuAvailNext < gGpuAvailSequence.size() &&
+           std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - start).count() >=
+               gGpuAvailSequence[gGpuAvailNext].ms) {
+      const auto& st = gGpuAvailSequence[gGpuAvailNext++];
+      setLifecycle(!st.available, "test_hook");
+    }
     if (scheduler.FramePending()) scheduler.AwaitVsync();
     loopFrame->RecordVsync();
     surface.pollEvents();
@@ -2015,6 +2052,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::uniformprobe::PrintSummary();  // FP-15 test hook
   rni::poisonprobe::PrintSummary();  // FP-17 test hook
   resizeSync.PrintSummary();  // FP-30
+  rni::gpu::PrintSummary();  // FP-31
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
@@ -2361,6 +2399,24 @@ int main(int argc, char** argv) {
     }
     // Resize test hook: "--resize-after-frames N:WxH" calls glfwSetWindowSize
     // after frame N. See tools/ci-resize.sh on why a hook rather than a drag.
+    else if (a == "--gpu-availability-sequence") {  // FP-31
+      std::string spec = next("--gpu-availability-sequence");
+      size_t pos = 0;
+      while (pos < spec.size()) {
+        size_t comma = spec.find(',', pos);
+        if (comma == std::string::npos) comma = spec.size();
+        const std::string item = spec.substr(pos, comma - pos);
+        const size_t colon = item.find(':');
+        const std::string state = colon == std::string::npos ? "" : item.substr(colon + 1);
+        if (colon == std::string::npos || (state != "on" && state != "off")) {
+          fprintf(stderr, "rn-impeller: --gpu-availability-sequence wants MS:on|off,... (got %s)\n",
+                  spec.c_str());
+          return 2;
+        }
+        gGpuAvailSequence.push_back({atoi(item.substr(0, colon).c_str()), state == "on"});
+        pos = comma + 1;
+      }
+    }
     else if (a == "--resize-sequence") {  // FP-30, see ResizeProbe.h
       std::string err;
       if (!rni::resizeprobe::ParseSequence(next("--resize-sequence"), &gResizeSequence, &err)) {

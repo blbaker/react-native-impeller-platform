@@ -3,6 +3,7 @@
 
 #include <algorithm>
 
+#include "base/GpuAvailability.h"
 #include "base/Trace.h"
 
 namespace rni {
@@ -46,6 +47,7 @@ void RasterJobs::Run() {
   }
   TRACE_EVENT1("raster", "RasterJobs", "jobs", (uint64_t)jobs_.size());
   for (Job& j : jobs_) {
+    if (j.kind == Kind::kUpload) gpu::Note(gpu::Counter::kUpload);
     const bool ok = j.run && j.run();
     j.flag->store(ok ? kJobDone : kJobFailed);
     (j.kind == Kind::kOffscreen ? gOffscreens : gUploads).fetch_add(1, std::memory_order_relaxed);

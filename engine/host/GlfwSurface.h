@@ -123,6 +123,9 @@ class GlfwSurface {
   // which it is, because consumeDirty() returns false when the geometry is
   // unchanged and a repaint of identical content is a no-op to the user.
   void setRefreshHandler(std::function<void()> handler);
+  // FP-31: the window was iconified (true) or restored (false). Main thread,
+  // from pollEvents. GLFW has no occlusion signal; iconify is the one it gives.
+  void setIconifyHandler(std::function<void(bool)> handler) { iconifyHandler_ = std::move(handler); }
 
   // ⛔ NOTHING IN THE WINDOWED PATH COULD DELIVER A PRESS BEFORE THIS.
   // The input tier (SceneGraph::hitTest -> retained EventEmitter ->
@@ -589,6 +592,7 @@ class GlfwSurface {
   // the refresh callback from the thread that is inside glfwPollEvents, which
   // is the same thread that installed it.
   std::function<void()> refreshHandler_;
+  std::function<void(bool)> iconifyHandler_;  // FP-31
   // Invoked from the GLFW mouse-button callback with LAYOUT POINTS already
   // resolved. Same threading argument as refreshHandler_: installed once
   // before the loop, called only from the thread inside glfwPollEvents.

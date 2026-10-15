@@ -123,6 +123,7 @@ class WindowRasterizer {
   std::atomic<uint64_t> slotWaits_{0};
   int everyFrameDelayMs_ = 0;  // RNI_TEST_RASTER_DELAY_MS
   bool log_ = false;           // RNI_TEST_RASTER_LOG=1
+  bool availProbe_ = false;    // FP-31: RNI_TEST_GPU_AVAIL_PROBE=1
 };
 
 }  // namespace rni
