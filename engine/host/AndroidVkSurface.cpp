@@ -48,6 +48,19 @@ void* ImpellerVkProcAddress(void* vk_instance, const char* name,
       g_get_instance_proc_addr(vk_instance, name));
 }
 
+// FP-25 RNI_FORCE_VULKAN_INIT_FAIL: a driver whose vkCreateInstance fails.
+// ⛔ Not a resolver that returns null: Impeller calls resolved entry points
+// without a null check and SIGSEGVs (seen on the S21).
+int32_t FailCreateInstance(const void*, const void*, void*) {
+  return -3;  // VK_ERROR_INITIALIZATION_FAILED
+}
+void* FailingVkProcAddress(void* vk_instance, const char* name, void* user) {
+  if (std::strcmp(name, "vkCreateInstance") == 0) {
+    return reinterpret_cast<void*>(FailCreateInstance);
+  }
+  return ImpellerVkProcAddress(vk_instance, name, user);
+}
+
 }  // namespace
 
 AndroidVkSurface::~AndroidVkSurface() {
@@ -62,9 +75,17 @@ AndroidVkSurface::~AndroidVkSurface() {
   }
 }
 
+void* AndroidVkSurface::InstanceProc(void* vk_instance, const char* name) {
+  return ImpellerVkProcAddress(vk_instance, name, nullptr);
+}
+
 bool AndroidVkSurface::EnsureContext() {
   if (context_ != nullptr) return true;
+  if (!LoadLoader()) return false;
+  return CreateImpellerContext();
+}
 
+bool AndroidVkSurface::LoadLoader() {
   // ⛔ dlopen, NOT a link-time dependency. Linking libvulkan.so would make the
   // ENTIRE library fail to load on a device without it -- including the parts
   // that have nothing to do with rendering -- instead of failing here where a
@@ -84,10 +105,14 @@ bool AndroidVkSurface::EnsureContext() {
     LOGE("vkGetInstanceProcAddr missing from libvulkan.so");
     return false;
   }
+  return true;
+}
 
+bool AndroidVkSurface::CreateImpellerContext() {
   ImpellerContextVulkanSettings settings = {};
   settings.user_data = nullptr;
-  settings.proc_address_callback = ImpellerVkProcAddress;
+  settings.proc_address_callback =
+      force_init_failure_ ? FailingVkProcAddress : ImpellerVkProcAddress;
   settings.enable_vulkan_validation = false;
 
   rni::contextflags::ApplyBeforeCreate();  // FP-22

@@ -79,8 +79,20 @@ class AndroidVkSurface {
 
   static constexpr int kMaxRecreateAttempts = 3;
 
+  // FP-25 backend selection (AndroidSurface) runs these before Init:
+  // dlopen libvulkan.so (false = no Vulkan loader), resolve a global or
+  // instance-level entry point, then create the Impeller context alone.
+  bool LoadLoader();
+  static void* InstanceProc(void* vk_instance, const char* name);
+  bool CreateContext() { return EnsureContext(); }
+  // RNI_FORCE_VULKAN_INIT_FAIL: Impeller's vkCreateInstance returns
+  // VK_ERROR_INITIALIZATION_FAILED, so ImpellerContextCreateVulkanNew really
+  // fails.
+  void set_force_init_failure(bool v) { force_init_failure_ = v; }
+
  private:
   bool EnsureContext();
+  bool CreateImpellerContext();
   bool CreateSwapchain();
   void ReleaseSwapchain();
   void SyncSize();
@@ -96,6 +108,7 @@ class AndroidVkSurface {
   int swapchain_width_{0};   // last size pushed with SetSize, 0 = never
   int swapchain_height_{0};
   Stats stats_;
+  bool force_init_failure_{false};
 };
 
 }  // namespace rni

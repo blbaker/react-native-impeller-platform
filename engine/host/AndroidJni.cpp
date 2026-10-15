@@ -19,7 +19,7 @@
 
 #include <memory>
 
-#include "host/AndroidVkSurface.h"
+#include "host/AndroidSurface.h"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "rn-impeller", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "rn-impeller", __VA_ARGS__)
@@ -28,8 +28,10 @@ namespace {
 
 // One renderer per view instance; the handle is an opaque jlong held by the
 // Java side, so multiple ImpellerSurfaceViews can coexist.
+// FP-25: Vulkan, or GLES when the device is on Flutter's deny lists or
+// Vulkan init fails (host/AndroidSurface.h logs android_backend=...).
 struct Renderer {
-  rni::AndroidVkSurface surface;
+  rni::AndroidSurface surface;
 };
 
 Renderer* AsRenderer(jlong handle) {
@@ -79,7 +81,8 @@ Java_com_reactnativeimpeller_ImpellerRenderer_nativeAttachSurface(
   ANativeWindow_release(window);
 
   if (!ok) {
-    LOGE("failed to attach Vulkan surface");
+    LOGE("failed to attach the surface (android_backend=%s reason=%s)",
+         r->surface.backend_name(), r->surface.reason().c_str());
     return JNI_FALSE;
   }
   return JNI_TRUE;

@@ -30,6 +30,9 @@ endif()
 
 add_library(reactnativeimpeller SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/../host/AndroidVkSurface.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../host/AndroidGlSurface.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../host/AndroidSurface.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../host/AndroidDriverInfo.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../host/AndroidJni.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../base/ContextFlags.cpp
 )
@@ -47,6 +50,7 @@ target_link_libraries(reactnativeimpeller PRIVATE
   android    # ANativeWindow_fromSurface / _acquire / _release
   log        # __android_log_print
   dl         # dlopen/dlsym for libvulkan.so
+  EGL        # FP-25 GLES fallback (GL entry points come from eglGetProcAddress)
 )
 
 # The prebuilt libimpeller.so has no SONAME matching its install path; without

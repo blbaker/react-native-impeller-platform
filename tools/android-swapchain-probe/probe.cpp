@@ -1,13 +1,17 @@
 // FP-24 swapchain probe: a NativeActivity that draws through the real
-// rni::AndroidVkSurface and rotates itself on KEYCODE_SPACE, so
-// tools/ci-android-swapchain.sh can resize one live ANativeWindow 20 times.
+// rni::AndroidSurface (FP-25: Vulkan or the GLES fallback) and rotates itself
+// on KEYCODE_SPACE, so tools/ci-android-swapchain.sh can resize one live
+// ANativeWindow 20 times. FP-25: string intent extras named RNI_FORCE_* are
+// copied into the environment before the surface is created
+// (`am start ... --es RNI_FORCE_BAD_DRIVER 1`), so tools/ci-android-backend.sh
+// drives the test hooks without touching any OS setting.
 //
 // Each frame: a per-cycle background colour (a frozen frame shows the previous
 // cycle's colour) and a white kSquare x kSquare px square at the drawable's
 // centre (a stale-sized swapchain is scaled by the compositor, so the square
 // stops being square on screen). Logs, tag rn-impeller:
 //   probe_cycle n=N orientation=portrait|landscape
-//   probe_ready cycle=N win=WxH drawable=WxH presents=P resizes=R recreates=C failures=F
+//   probe_ready cycle=N win=WxH drawable=WxH presents=P resizes=R recreates=C failures=F backend=B
 //   probe_stuck cycle=N win=WxH drawable=WxH ...   (60 presents without a match)
 
 #include <android/log.h>
@@ -15,7 +19,9 @@
 #include <android_native_app_glue.h>
 #include <jni.h>
 
-#include "host/AndroidVkSurface.h"
+#include <cstdlib>
+
+#include "host/AndroidSurface.h"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "rn-impeller", __VA_ARGS__)
 
@@ -35,7 +41,7 @@ constexpr int kLandscape = 0;
 constexpr int kPortrait = 1;
 
 struct Probe {
-  rni::AndroidVkSurface surface;
+  rni::AndroidSurface surface;
   int cycle = 0;
   int stable_presents = 0;  // presents since cycle / window / drawable changed
   int last_win_w = 0, last_win_h = 0, last_dw = 0, last_dh = 0;
@@ -53,11 +59,48 @@ void SetOrientation(android_app* app, int orientation) {
   app->activity->vm->DetachCurrentThread();
 }
 
-void DrawFrame(Probe& p) {
-  if (!p.surface.valid()) return;
+void ImportHooks(android_app* app) {
+  JNIEnv* env = nullptr;
+  app->activity->vm->AttachCurrentThread(&env, nullptr);
+  jobject act = app->activity->clazz;
+  jclass cls = env->GetObjectClass(act);
+  jobject intent = env->CallObjectMethod(
+      act, env->GetMethodID(cls, "getIntent", "()Landroid/content/Intent;"));
+  if (intent != nullptr) {
+    jmethodID get = env->GetMethodID(env->GetObjectClass(intent), "getStringExtra",
+                                     "(Ljava/lang/String;)Ljava/lang/String;");
+    for (const char* name : {"RNI_FORCE_BAD_DRIVER", "RNI_FORCE_VULKAN_INIT_FAIL"}) {
+      auto v = static_cast<jstring>(
+          env->CallObjectMethod(intent, get, env->NewStringUTF(name)));
+      if (v == nullptr) continue;
+      const char* chars = env->GetStringUTFChars(v, nullptr);
+      setenv(name, chars, 1);
+      LOGI("probe_hook %s=%s", name, chars);
+      env->ReleaseStringUTFChars(v, chars);
+    }
+  }
+  app->activity->vm->DetachCurrentThread();
+}
+
+// Vulkan: the size read back from the acquired drawable; GLES: the EGL
+// surface size the wrapped FBO was created at (AcquireNext queries it).
+void DrawableSize(Probe& p, int* w, int* h) {
+  if (auto* vk = p.surface.vk()) {
+    *w = vk->stats().drawable_width;
+    *h = vk->stats().drawable_height;
+  } else if (auto* gl = p.surface.gl()) {
+    *w = gl->width();
+    *h = gl->height();
+  }
+}
+
+void DrawFrame(android_app* app, Probe& p) {
+  if (!p.surface.valid() || app->window == nullptr) return;
   ImpellerSurface target = p.surface.AcquireNext();
   if (target == nullptr) return;
-  const auto& st = p.surface.stats();
+  rni::AndroidVkSurface::Stats st;
+  if (auto* vk = p.surface.vk()) st = vk->stats();
+  DrawableSize(p, &st.drawable_width, &st.drawable_height);
   const float w = static_cast<float>(st.drawable_width);
   const float h = static_cast<float>(st.drawable_height);
 
@@ -83,7 +126,8 @@ void DrawFrame(Probe& p) {
   ImpellerDisplayListBuilderRelease(builder);
   p.total_presents++;
 
-  const int ww = p.surface.width(), wh = p.surface.height();
+  const int ww = ANativeWindow_getWidth(app->window);
+  const int wh = ANativeWindow_getHeight(app->window);
   if (ww != p.last_win_w || wh != p.last_win_h ||
       st.drawable_width != p.last_dw || st.drawable_height != p.last_dh) {
     p.last_win_w = ww; p.last_win_h = wh;
@@ -100,9 +144,9 @@ void DrawFrame(Probe& p) {
   if (verdict == nullptr) return;
   p.reported = true;
   LOGI("%s cycle=%d win=%dx%d drawable=%dx%d presents=%d resizes=%d "
-       "recreates=%d failures=%d", verdict, p.cycle, ww, wh, st.drawable_width,
-       st.drawable_height, p.total_presents, st.resizes, st.recreates,
-       st.acquire_failures);
+       "recreates=%d failures=%d backend=%s", verdict, p.cycle, ww, wh,
+       st.drawable_width, st.drawable_height, p.total_presents, st.resizes,
+       st.recreates, st.acquire_failures, p.surface.backend_name());
 }
 
 void OnCmd(android_app* app, int32_t cmd) {
@@ -144,6 +188,7 @@ void android_main(android_app* app) {
   app->userData = &probe;
   app->onAppCmd = OnCmd;
   app->onInputEvent = OnInput;
+  ImportHooks(app);
   ANativeActivity_setWindowFlags(
       app->activity,
       AWINDOW_FLAG_KEEP_SCREEN_ON | AWINDOW_FLAG_FULLSCREEN |
@@ -159,7 +204,7 @@ void android_main(android_app* app) {
       if (source != nullptr) source->process(app, source);
       if (app->destroyRequested) break;
     }
-    DrawFrame(probe);
+    DrawFrame(app, probe);
   }
   probe.surface.DetachWindow();
 }
