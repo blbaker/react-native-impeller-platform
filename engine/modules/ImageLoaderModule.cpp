@@ -53,7 +53,7 @@ jsi::Value ImageLoaderModule::load(jsi::Runtime& rt, std::string uri,
         image::LoadAsync(uri, headers, [jsInvoker, holder, shape](const image::LoadResult& r) {
           auto p = std::move(*holder);
           if (!p) return;
-          const int w = r.image ? r.image->width : 0, h = r.image ? r.image->height : 0;
+          const int w = r.image ? r.image->srcWidth : 0, h = r.image ? r.image->srcHeight : 0;
           const std::string error = r.error;
           jsInvoker->invokeAsync([p = std::move(p), w, h, error, shape,
                                   ok = (bool)r.image](jsi::Runtime& rt2) {
@@ -110,7 +110,7 @@ jsi::Value ImageLoaderModule::queryCache(jsi::Runtime& rt, jsi::Array uris) {
     jsi::Value v = uris.getValueAtIndex(rt, i);
     if (!v.isString()) continue;
     const std::string uri = v.getString(rt).utf8(rt);
-    if (image::Peek(uri)) out.setProperty(rt, uri.c_str(), "memory");
+    if (image::IsCached(uri)) out.setProperty(rt, uri.c_str(), "memory");
   }
   return react::createPromiseAsJSIValue(
       rt, [out = std::make_shared<jsi::Object>(std::move(out))](

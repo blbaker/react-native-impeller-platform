@@ -71,6 +71,7 @@
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
 #include "base/GlValidation.h"
+#include "fabric/ImageStore.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
@@ -1750,6 +1751,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
+  rni::image::PrintStats();  // FP-16
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
   // a completely different failure from touch_downs=3 touch_hits=0 (clicks
@@ -2681,6 +2683,10 @@ int main(int argc, char** argv) {
     // React renders, Fabric commits, the delegate applies mutations — all on
     // the JS thread. Idle means that whole chain has drained.
     host.waitForJsIdle(10000);
+    // FP-16: <Image> decodes run on the IO pool, off the JS thread, so an idle
+    // JS thread does not mean the pixels exist. Drain them, then the JS their
+    // load events scheduled (which may mount more images).
+    for (int i = 0; i < 4 && rni::image::WaitIdle(15000); ++i) host.waitForJsIdle(10000);
 
     // ⛔ AN IDLE JS THREAD DOES NOT MEAN THE NETWORK FINISHED.
     // A request runs on a native worker; while it is on the wire there is no
@@ -2705,6 +2711,7 @@ int main(int argc, char** argv) {
       printf("rn-impeller: net_requests_completed=%d net_in_flight=%d\n",
              net->completed.load(), net->inFlight.load());
       host.waitForJsIdle(10000);
+      for (int i = 0; i < 4 && rni::image::WaitIdle(15000); ++i) host.waitForJsIdle(10000);
     }
 
     // Counted AFTER the network settle: nodes mounted by a response handler
@@ -3129,6 +3136,7 @@ int main(int argc, char** argv) {
     FinishFrameTimings(headlessTimings);
     FinishTrace();
     rni::glvalidation::Finish();
+    rni::image::PrintStats();  // FP-16
   }
 
   std::vector<rni::Px> px;
