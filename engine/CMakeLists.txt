@@ -279,6 +279,7 @@ add_executable(rn-impeller
   modules/ExpoConstants.cpp
   modules/ExpoFetch.cpp
   fabric/FabricHost.cpp
+  fabric/ComponentRegistry.cpp
   scenegraph/SceneGraph.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
@@ -459,6 +460,7 @@ if(RNI_WITH_RNSVG)
   target_compile_definitions(rn-impeller PRIVATE RNI_WITH_RNSVG=1)
   target_link_libraries(rn-impeller PRIVATE rnsvg_common)
 endif()
+include(${CMAKE_SOURCE_DIR}/cmake/Fuzz.cmake)
 
 # ⛔ SHARED-vs-STATIC IS A PACKAGING DIFFERENCE, AND IT LEAKS INTO OUR LINK LINE.
 # `hermesvm` is a SHARED library on Linux — libhermesvm.so has already absorbed

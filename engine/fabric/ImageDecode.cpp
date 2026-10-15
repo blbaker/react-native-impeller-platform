@@ -64,6 +64,15 @@ void Report(const std::shared_ptr<const Decoded>& d, int bw, int bh, const std::
 
 bool IsPng(const uint8_t* d, size_t n) { return n >= 8 && d[0] == 137 && d[1] == 'P' && d[2] == 'N'; }
 
+// FP-52 decompression-bomb guard (fuzz seed image-decode/timeout-bmp-bomb: 252
+// bytes of BMP header claiming 9109520x12, which stb "decoded" from zeros into a
+// 437 MB bitmap). Source pixels per encoded byte: deflate tops out at 1032:1, so an
+// 8-bit PNG stays under ~260 px/B and only a huge flat 1-bit PNG passes 4096;
+// JPEG/GIF/BMP photos sit far below 1024. Full (non-streamed) decodes are also
+// capped at 64 M px (256 MB RGBA), above a 48 MP photo.
+constexpr double kPngPixelsPerByte = 4096.0, kOtherPixelsPerByte = 1024.0;
+constexpr double kMaxFullDecodePixels = double(1 << 26);
+
 }  // namespace
 
 std::shared_ptr<const Decoded> DecodeBytes(const uint8_t* data, size_t n, int boxW, int boxH,
@@ -72,6 +81,10 @@ std::shared_ptr<const Decoded> DecodeBytes(const uint8_t* data, size_t n, int bo
   if (data == nullptr || n == 0 || n > (size_t)INT32_MAX) return nullptr;
   int sw = 0, sh = 0, comp = 0;
   if (!stbi_info_from_memory(data, (int)n, &sw, &sh, &comp) || sw <= 0 || sh <= 0) return nullptr;
+  const double srcPixels = (double)sw * (double)sh;
+  if (srcPixels > (IsPng(data, n) ? kPngPixelsPerByte : kOtherPixelsPerByte) * (double)n) {
+    return nullptr;
+  }
   const PixelSize out = DecodeSize(sw, sh, boxW, boxH, maxTexture);
   auto d = std::make_shared<Decoded>();
   d->srcWidth = sw;
@@ -88,6 +101,7 @@ std::shared_ptr<const Decoded> DecodeBytes(const uint8_t* data, size_t n, int bo
       return d;
     }
   }
+  if (srcPixels > kMaxFullDecodePixels) return nullptr;
   int w = 0, h = 0;
   stbi_uc* px = stbi_load_from_memory(data, (int)n, &w, &h, &comp, 4);
   if (px == nullptr || w != sw || h != sh) {
