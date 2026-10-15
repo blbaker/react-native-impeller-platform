@@ -29,6 +29,7 @@
 #include <atomic>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -79,6 +80,8 @@
 #include "host/AnimRowProbe.h"
 #include "host/UniformProbe.h"
 #include "host/PoisonProbe.h"
+#include "host/ResizeProbe.h"
+#include "host/ResizeSync.h"
 #include "scenegraph/GpuBackend.h"
 #include "host/BackendSelect.h"
 #include "scenegraph/IoUploader.h"
@@ -490,6 +493,8 @@ static rni::GpuBackend gGpuBackend = rni::GpuBackend::kGles;
 static rni::GpuBackend gGpuPolicy = rni::GpuBackend::kGles;
 static bool gBackendGiven = false;  // FP-21
 static int gMainStallAfterFrames = 0;
+// FP-30 test hook: --resize-sequence F:WxH,... (ResizeProbe.h).
+static std::vector<rni::resizeprobe::SizeStep> gResizeSequence;
 static int gMainStallMs = 0;
 [[maybe_unused]] static long long SteadyNowUs() {  // same clock as the raster_present t_us lines
   return (long long)std::chrono::duration_cast<std::chrono::microseconds>(
@@ -619,8 +624,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // FP-15: the raster thread takes the GL context here (model:
   // shell/common/rasterizer.cc + shell.cc). Main keeps the window, events,
   // input, mount, NativeAnimated, the FrameScheduler and RECORD.
+  // FP-30: declared before the rasterizer, which reports into it until it joins.
+  rni::ResizeSync resizeSync;
   rni::WindowRasterizer rasterizer(surface, frameTimings, gRasterThread);
   rasterizer.SetPartialRepaint(gPartialRepaint);
+  rasterizer.SetResizeSync(&resizeSync);
+  resizeSync.SetExpected(surface.width(), surface.height());
   if (!rasterizer.Start(&error)) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
@@ -850,6 +859,14 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         rni::poisonprobe::OnPresent(px, surface.gpuWidth(), surface.gpuHeight(), n);
       }
     }
+    if (rni::resizeprobe::Enabled()) {  // FP-30 reference-square probe
+      std::vector<rni::Px> px;
+      int ew = 0, eh = 0;
+      resizeSync.LastChecked(&ew, &eh);  // the size this frame was admitted against
+      if (surface.readPixels(&px)) {
+        rni::resizeprobe::OnPresent(px, surface.gpuWidth(), surface.gpuHeight(), n, ew, eh);
+      }
+    }
   };
   rasterHooks.afterPresent = [&](int n) {
     rni::glvalidation::OnFrame();  // FP-05 test hook
@@ -946,6 +963,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     if (!surface.consumeDirty()) return false;
     const int newPx = surface.width();
     const int newPy = surface.height();
+    // FP-30: from here the raster thread discards frames of any other size.
+    resizeSync.SetExpected(newPx, newPy);
     // ⛔ HONOUR THE OVERRIDE THE SAME WAY THE STARTUP PATH DOES.
     // pointScaleGiven, not `pointScale != 1.0f`: the default IS 1.0, so an
     // explicit `--scale 1` has to stay distinguishable from no flag at all
@@ -1028,14 +1047,34 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // the breakpoint cross visible mid-drag; running the JS scheduler from
   // inside AppKit's modal loop would re-enter the runtime from a nested event
   // loop for a benefit the drag does not need.
-  surface.setRefreshHandler([&]() {
+  // FP-30 (macOS ResizeSynchronizer beginResize): after a resize, main does
+  // not return to the OS until a frame at the new size presented (1 s cap),
+  // so the window never composites a stale-size frame. Main records that
+  // frame itself (it is Flutter's UI thread too), pumping its task queues.
+  int resizeSyncs = 0;
+  auto refreshPaint = [&]() -> bool {
     // A refresh paint is its own frame: it begins here, not at a loop vsync.
     auto frame = std::make_unique<rni::FrameTimingsRecorder>();
     frame->RecordVsync();
     rasterizer.WaitForSlot(rni::testsync::ScaledMs(1000));  // FP-15 back-pressure
     frame->RecordBuildStart();
-    applyResizeIfDirty();
-    (void)paintFrame(std::move(frame), false);
+    return paintFrame(std::move(frame), false) >= 0;
+  };
+  auto syncResize = [&]() {
+    const int w = surface.width(), h = surface.height();
+    ++resizeSyncs;
+    resizeSync.BeginResize(w, h, refreshPaint, [&] {
+      clipboard->drainMain();
+      fabric.drainMain();
+    });
+    if (rni::resizeprobe::Enabled()) rni::resizeprobe::Capture(resizeSyncs, w, h);
+  };
+  surface.setRefreshHandler([&]() {
+    if (applyResizeIfDirty()) {
+      syncResize();  // painted the new-size frame
+      return;
+    }
+    (void)refreshPaint();
   });
 
   // ⛔ THE WINDOWED PATH'S ONLY ROUTE INTO dispatchTouch.
@@ -1413,7 +1452,10 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // in the normal (non-drag) case; the window-refresh callback installed
     // above is the path that runs when this loop is blocked inside
     // pollEvents(). Both go through applyResizeIfDirty, deliberately.
-    if (applyResizeIfDirty()) scheduler.RequestFrame("resize");
+    if (applyResizeIfDirty()) {
+      syncResize();
+      scheduler.RequestFrame("resize");
+    }
 
     // item 5. Drain the ClipboardBridge's queued main-thread tasks every
     // iteration, same discipline as applyResizeIfDirty: a getString()/
@@ -1434,6 +1476,22 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
              resizeToH);
       fflush(stdout);
       surface.requestSize(resizeToW, resizeToH);
+    }
+    for (const auto& step : gResizeSequence) {  // FP-30: several, fast
+      if (step.frame != frameIndex) continue;
+      printf("rn-impeller: resize_requested %dx%d points frame=%d\n", step.w, step.h, frameIndex);
+      fflush(stdout);
+      // X11 resizes the drawable before GLFW reports it (no _NET_WM_SYNC_REQUEST),
+      // so a frame presented in that gap lands clipped. An app-driven resize knows
+      // its size first (AppKit's setFrameSize order): announce it, let the frames
+      // already admitted retire, then resize.
+      const float pxPerPt = surface.pointWidth() > 0
+                                ? (float)surface.width() / (float)surface.pointWidth()
+                                : 1.0f;
+      resizeSync.SetExpected((int)std::lround(step.w * pxPerPt),
+                             (int)std::lround(step.h * pxPerPt));
+      rasterizer.WaitPresented(lastSubmitted, rni::testsync::ScaledMs(1000));
+      surface.requestSize(step.w, step.h);
     }
 
     // Sampled a few frames AFTER the request, not on the same frame: the
@@ -1956,6 +2014,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rasterizer.PrintSummary();  // FP-13 pipeline + FP-15 raster thread
   rni::uniformprobe::PrintSummary();  // FP-15 test hook
   rni::poisonprobe::PrintSummary();  // FP-17 test hook
+  resizeSync.PrintSummary();  // FP-30
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
@@ -2302,6 +2361,13 @@ int main(int argc, char** argv) {
     }
     // Resize test hook: "--resize-after-frames N:WxH" calls glfwSetWindowSize
     // after frame N. See tools/ci-resize.sh on why a hook rather than a drag.
+    else if (a == "--resize-sequence") {  // FP-30, see ResizeProbe.h
+      std::string err;
+      if (!rni::resizeprobe::ParseSequence(next("--resize-sequence"), &gResizeSequence, &err)) {
+        fprintf(stderr, "rn-impeller: %s\n", err.c_str());
+        return 2;
+      }
+    }
     else if (a == "--resize-after-frames") {
       std::string spec = next("--resize-after-frames");
       auto colon = spec.find(':');

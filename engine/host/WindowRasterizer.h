@@ -30,6 +30,7 @@ namespace rni {
 class FrameScheduler;
 class FrameTimings;
 class GlfwSurface;
+class ResizeSync;
 
 class WindowRasterizer {
  public:
@@ -46,6 +47,8 @@ class WindowRasterizer {
   // The raster thread takes the GL context (GlfwSurface::initGpu).
   bool Start(std::string* error);
   void SetScheduler(FrameScheduler* scheduler) { scheduler_ = scheduler; }
+  // FP-30: stale-size discard + present reports (Rasterizer::Delegate).
+  void SetResizeSync(ResizeSync* sync) { resizeSync_ = sync; }
   void SetHooks(Hooks hooks) { hooks_ = std::move(hooks); }
   // FP-18: --partial-repaint. Before Start; partialRepaint() is the verdict
   // (requested and supported), which RECORD reads to allow a clipped list.
@@ -79,6 +82,8 @@ class WindowRasterizer {
   void DelayFrame(uint64_t frameNumber, int ms);
 
   int presents() const { return presents_.load(std::memory_order_acquire); }
+  // FP-30: items finished, presented or discarded (tickets retire in order).
+  uint64_t retired() const { return retired_.load(std::memory_order_acquire); }
   // Drains queued items (they present), releases the GPU objects ON the raster
   // thread, then joins it. Main; idempotent.
   void Shutdown();
@@ -92,6 +97,7 @@ class WindowRasterizer {
   GlfwSurface& surface_;
   FrameTimings& timings_;
   FrameScheduler* scheduler_ = nullptr;
+  ResizeSync* resizeSync_ = nullptr;
   Hooks hooks_;
   PartialRepaint partial_;  // raster thread only
   bool partialRequested_ = true;
@@ -112,6 +118,7 @@ class WindowRasterizer {
   int delayMs_ = 0;
 
   std::atomic<int> presents_{0};
+  std::atomic<uint64_t> retired_{0};
   std::atomic<uint64_t> drawFailed_{0};
   std::atomic<uint64_t> slotWaits_{0};
   int everyFrameDelayMs_ = 0;  // RNI_TEST_RASTER_DELAY_MS

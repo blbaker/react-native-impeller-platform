@@ -13,6 +13,7 @@
 #include "host/FrameScheduler.h"
 #include "host/FrameTimings.h"
 #include "host/GlfwSurface.h"
+#include "host/ResizeSync.h"
 
 namespace rni {
 namespace {
@@ -123,6 +124,20 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
     readback = readbackFrame_ >= 0 && (int64_t)item->frameNumber == readbackFrame_;
   }
   if (delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+  if (resizeSync_) resizeSync_->MaybeHang(item->width, item->height);  // FP-30 test hook
+  // FP-30 (rasterizer.cc DoDraw -> Shell::ShouldDiscardLayerTree): a frame
+  // recorded for another size than the surface's current one never presents.
+  if (resizeSync_ && resizeSync_->ShouldDiscard(item->width, item->height, item->frameNumber)) {
+    if (item->jobs) item->jobs->AfterRaster();  // unrun jobs mark their entries failed
+    if (item->timings) timings_.Discard(std::move(item->timings));
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      if (readback) readbackFrame_ = -1;
+      retired_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    cv_.notify_all();
+    return;
+  }
   // DrawToSurfaces acquires the frame at the layer tree's size.
   surface_.ensureGpuSize(item->width, item->height);
   FrameItem& frame = *item;
@@ -168,6 +183,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   TRACE_COUNTER("presents", n);
   // Counted at the present: refresh_paints and presents= come from here.
   presents_.store(n, std::memory_order_release);
+  if (resizeSync_) resizeSync_->DidPresent(item->width, item->height);  // performCommit
   if (log_) {
     std::printf("rn-impeller: raster_present n=%d frame=%llu t_us=%lld tid=%lld\n", n,
                 (unsigned long long)item->frameNumber, (long long)NowUs(), ThreadTag());
@@ -181,6 +197,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (readback) readbackFrame_ = -1;
+    retired_.fetch_add(1, std::memory_order_acq_rel);
   }
   cv_.notify_all();
 }
@@ -188,7 +205,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
 bool WindowRasterizer::WaitPresented(uint64_t ticket, int timeoutMs) {
   std::unique_lock<std::mutex> lock(mu_);
   return cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-                      [&] { return (uint64_t)presents() >= ticket; });
+                      [&] { return retired() >= ticket; });
 }
 
 bool WindowRasterizer::TakeGrab(std::vector<Px>* px, int* w, int* h) {
@@ -210,6 +227,7 @@ void WindowRasterizer::DelayFrame(uint64_t frameNumber, int ms) {
 void WindowRasterizer::Shutdown() {
   if (shutdown_) return;
   shutdown_ = true;
+  if (resizeSync_) resizeSync_->Shutdown();  // FP-30: frees a test-hung raster thread
   // OnPlatformViewDestroyed: the raster thread finishes what is queued and
   // tears the surface down itself, then the platform thread continues.
   raster_.Post([this] {

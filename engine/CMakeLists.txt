@@ -254,6 +254,8 @@ add_executable(rn-impeller
   host/IoContextEgl.cpp
   host/PoisonProbe.cpp
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeSync.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeProbe.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
   base/SanitizerHooks.cpp
