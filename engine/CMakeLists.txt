@@ -282,6 +282,7 @@ add_executable(rn-impeller
   fabric/FabricHost.cpp
   fabric/ComponentRegistry.cpp
   fabric/LayoutAnimations.cpp
+  fabric/ExpoBlurShadowNode.cpp
   scenegraph/SceneGraph.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
@@ -299,6 +300,7 @@ add_executable(rn-impeller
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
   scenegraph/ContentFilters.cpp
+  scenegraph/BackdropBlur.cpp
   scenegraph/BlendGroup.cpp
   scenegraph/EllipsizeText.cpp
   scenegraph/BorderCurve.cpp

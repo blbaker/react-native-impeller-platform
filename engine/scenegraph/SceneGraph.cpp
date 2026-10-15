@@ -32,6 +32,8 @@
 #include "scenegraph/Outline.h"
 #include "scenegraph/ScrollIndicators.h"
 #include "scenegraph/ActivityIndicator.h"
+#include "scenegraph/BackdropBlur.h"
+#include "fabric/ExpoBlurShadowNode.h"  // FP-41
 #include <react/renderer/components/image/ImageProps.h>  // A19
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
@@ -806,6 +808,15 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.spAnimating = ap->animating;
       node.spHidesWhenStopped = ap->hidesWhenStopped;
       if (ap->color) colorToFloats(ap->color, node.spColor);
+    }
+  }
+
+  // FP-41: expo-blur <BlurView>'s native ExpoBlurView.
+  if (node.componentName == react::ExpoBlurViewComponentName) {
+    node.isBlurView = true;
+    if (const auto* bp = dynamic_cast<const react::ExpoBlurViewProps*>(view.props.get())) {
+      node.blurTint = bp->tint;
+      node.blurIntensity = static_cast<float>(bp->intensity);
     }
   }
 
@@ -2566,6 +2577,24 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     rni::PaintActivityIndicator(builder, x, y, w, h, impellerColor(node.spColor, OwnAlpha(node)),
                                 node.spAnimating ? rni::SpinnerStep(ms) : 0);
     if (node.spAnimating) spinnerAnimating_.store(true, std::memory_order_relaxed);
+  }
+
+  // FP-41: expo-blur <BlurView>. Clip to the (rounded) box first, as Flutter's
+  // ClipRect bounds a BackdropFilter, so the blur never reads or writes outside it.
+  if (node.isBlurView && w > 0.0f && h > 0.0f) {
+    ImpellerDisplayListBuilderSave(builder);
+    ImpellerPath sqClip = continuous ? rni::MakeContinuousRRectPath(x, y, w, h, radii) : nullptr;
+    if (sqClip != nullptr) {
+      ImpellerDisplayListBuilderClipPath(builder, sqClip, kImpellerClipOperationIntersect);
+      ImpellerPathRelease(sqClip);
+    } else if (rounded) {
+      ImpellerDisplayListBuilderClipRoundedRect(builder, &rect, &radii,
+                                                kImpellerClipOperationIntersect);
+    } else {
+      ImpellerDisplayListBuilderClipRect(builder, &rect, kImpellerClipOperationIntersect);
+    }
+    rni::PaintBackdropBlur(builder, rect, node.blurTint, node.blurIntensity);
+    ImpellerDisplayListBuilderRestore(builder);
   }
 
   // <Image>. A19: the decoded source, clipped to the (rounded) box.
