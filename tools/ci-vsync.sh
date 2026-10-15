@@ -23,6 +23,11 @@
 #      lands within 2 periods of the damage request, at most 2 presents serve it,
 #      and nothing presented while idle before it
 # Node-free: committed bundle + RNI_BIN. tools/vsync_check.py does the maths.
+# VSYNC_ARMS (FP-26, opt-in): space-separated subset of "A B C D tick"; default
+# "A B C D" (every arm). `tick` is B's exact per-run half alone (shared_tick=0,
+# max_frames_per_tick=1), without B's load-relative short-interval count. Without
+# A or B the control tickers are skipped (spin-0 still runs as the warm-up).
+# tools/ci-vsync-sched.sh runs "tick C D" (darwin on ANGLE-Metal, see there).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -40,6 +45,13 @@ else
   BIN="$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller"
 fi
 [ -x "$BIN" ] || fail "no engine binary at $BIN (set RNI_BIN)"
+VSYNC_ARMS="${VSYNC_ARMS:-A B C D}"
+export VSYNC_ARMS
+CONTROL=0
+for a in $VSYNC_ARMS; do
+  case "$a" in A|B) CONTROL=1 ;; C|D|tick) ;; *) fail "unknown VSYNC_ARMS entry '$a' (want A B C D tick)" ;; esac
+done
+echo "arms: $VSYNC_ARMS"
 echo "engine: $BIN ($(shasum -a 256 "$BIN" | cut -c1-12)) host=$(rni_host)"
 
 WORK="$(mktemp -d)"
@@ -65,18 +77,25 @@ echo "== render =="
 # sanitized binary on a busy box is judged against noise of the same size as
 # its frames, not against a 1 ms stand-in. (build_p50 + raster_p50 read ~1 ms
 # even under ASan: llvmpipe's GL work runs after the CPU-side encode.)
+# spin-0 is also every mode's cold-start warm-up: without it the first scored
+# run on a loaded Mac spent ~2 s of its 3.5 s starting up (78 frames, FP-26).
 run VsyncSpin spin-0 1.5
-WORK_US="$(grep -v 'source=auto$' "$WORK/spin-0.log" | sed -n 's/^rn-impeller: vsync_present .* since_vsync_us=\([0-9]*\) source=[a-z]*$/\1/p' \
-  | sort -n | awk '{ v[NR] = $1 } END { if (NR < 10) exit; w = v[int((NR + 1) / 2)]; if (w < 1000) w = 1000; if (w > 12000) w = 12000; print w }')"
-[ -n "$WORK_US" ] || fail "calibration run printed fewer than 10 paced vsync_present lines"
-echo "control work per tick: ${WORK_US}us (spin-0 median vsync-to-present)"
-echo "$WORK_US" > "$WORK/control-work.txt"
-for i in 1 2 3; do
-  python3 tools/vsync_control.py 4.5 "$WORK/control-$i.txt" "$WORK_US" &
-  CTRL=$!
-  run VsyncSpin "spin-$i" 3.5
-  wait "$CTRL" || fail "control ticker $i failed"
-done
+if [ "$CONTROL" = 1 ]; then
+  WORK_US="$(grep -v 'source=auto$' "$WORK/spin-0.log" | sed -n 's/^rn-impeller: vsync_present .* since_vsync_us=\([0-9]*\) source=[a-z]*$/\1/p' \
+    | sort -n | awk '{ v[NR] = $1 } END { if (NR < 10) exit; w = v[int((NR + 1) / 2)]; if (w < 1000) w = 1000; if (w > 12000) w = 12000; print w }')"
+  [ -n "$WORK_US" ] || fail "calibration run printed fewer than 10 paced vsync_present lines"
+  echo "control work per tick: ${WORK_US}us (spin-0 median vsync-to-present)"
+  echo "$WORK_US" > "$WORK/control-work.txt"
+  for i in 1 2 3; do
+    python3 tools/vsync_control.py 4.5 "$WORK/control-$i.txt" "$WORK_US" &
+    CTRL=$!
+    run VsyncSpin "spin-$i" 3.5
+    wait "$CTRL" || fail "control ticker $i failed"
+  done
+else
+  # scheduler arms only: the spin runs still feed `tick` (every run's read-back)
+  for i in 1 2 3; do run VsyncSpin "spin-$i" 3.5; done
+fi
 run VsyncIdle idle 3.2
 run VsyncMutate mutate 2.5
 
