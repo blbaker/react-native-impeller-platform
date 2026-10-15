@@ -352,7 +352,7 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
   //
   // The cast: eglplatform.h makes EGLNativeDisplayType a plain `int` on Apple,
   // so reinterpret_cast is the one spelling valid for both integer and pointer
-  // sources. See the long note in HeadlessSurface.cpp.
+  // sources. See the long note in HeadlessSurfaceGl.cpp.
   struct Attempt { const char* name; EGLint type; };
   const Attempt attempts[] = {
       {"METAL", EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE},

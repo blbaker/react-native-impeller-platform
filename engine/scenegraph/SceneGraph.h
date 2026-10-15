@@ -30,6 +30,7 @@
 #include "scenegraph/DamageTracker.h"
 #include "scenegraph/ImageEvents.h"
 #include "scenegraph/ImagePaint.h"
+#include "scenegraph/GpuBackend.h"
 #include "scenegraph/RasterJobs.h"
 #include "scenegraph/Shadows.h"
 #include "scenegraph/TextInputStyle.h"
@@ -478,12 +479,19 @@ class SceneGraph {
   // ImpellerTextureCreateWithOpenGLTextureHandleNew. Without it, supersample_
   // is inert (the in-place path runs) rather than crashing: a null context is
   // exactly the "not wired" state, distinct from N=0 "disabled".
-  // FP-14: also creates the GL name pool RECORD wraps textures from and fills
-  // it, so call it with the context current (the raster side).
+  // FP-14/FP-20: also builds the RenderBackend for the context (GL: the name
+  // pool RECORD wraps textures from, filled here), so call it with the context
+  // current (the raster side). Set the backend first.
   void setRenderContext(ImpellerContext context);
-  // FP-14: the GPU jobs one RECORD may queue; null when there is no GL context
-  // (Android Vulkan, an unresolved Windows table): paint() then never takes
-  // the offscreen/world paths and uploads images in place.
+  // FP-20: what `context` is (`--backend`) and whose rules the painter follows
+  // (differs only under RNI_TEST_BACKEND_POLICY). Before setRenderContext.
+  void setGpuBackend(GpuBackend context, GpuBackend policy) {
+    gpuContext_ = context;
+    gpuPolicy_ = policy;
+  }
+  // `gpu_backend context= policy= uploader= supersample=` (after setRenderContext).
+  void printGpuBackend() const;
+  // FP-14: the GPU jobs one RECORD may queue; null without a render context.
   std::unique_ptr<RasterJobs> makeRasterJobs();
 
   // N. 0 disables (the exact current in-place path, zero behavioural change).
@@ -939,7 +947,10 @@ class SceneGraph {
                   RasterJobs* jobs);
   // FP-14: the current paint()'s job list (null outside paint / without GL).
   RasterJobs* jobs_{nullptr};
-  std::shared_ptr<GlNamePool> namePool_;
+  // FP-20: uploader + supersample backend for renderContext_ (GpuBackend.h).
+  GpuBackend gpuContext_{GpuBackend::kGles};
+  GpuBackend gpuPolicy_{GpuBackend::kGles};
+  RenderBackend gpu_;
   void collectModalsLocked(facebook::react::Tag tag,
                            std::vector<facebook::react::Tag>* out) const;
   void paintModalsLocked(ImpellerDisplayListBuilder builder);
@@ -992,24 +1003,15 @@ class SceneGraph {
   // <world> ENG-09. The store paintWorldNode reads by node name; wired by
   // setWorldRasterStore(), null until a host calls it.
   std::shared_ptr<WorldRasterStore> worldRasterStore_;
-  // Per-node-tag GL texture cache for <world>, keyed by react::Tag (each
+  // Per-node-tag texture cache for <world>, keyed by react::Tag (each
   // <world> instance owns exactly one texture -- unlike svgCache_, there is no
   // content-sharing across different <world> nodes with the same name, since
-  // each may be at a different size/frame). Re-uploaded (glTexSubImage2D) when
-  // the store's version for that node's name advances past what was last
-  // uploaded; fully reallocated (glTexImage2D) on the first frame or a
-  // width/height change.
+  // each may be at a different size/frame). Re-uploaded through the backend's
+  // TextureUploader when the store's version for that node's name advances
+  // past what was last uploaded (in place on GL; a fresh texture otherwise).
   struct WorldTextureEntry {
-    ImpellerTexture texture{nullptr};
-    // GL texture handle -- stored as uint32_t (GLuint's real underlying type
-    // on every platform this engine targets) so this header does not need to
-    // pull in a GL headers just to declare the cache; GLES3/gl3.h is only
-    // ever included from the .cpp (via SceneGraphGl.h), and never on Android.
-    uint32_t glTex{0};
-    int texW{0};
-    int texH{0};
+    TextureSlot slot;  // FP-20: filled by the backend's TextureUploader
     uint64_t uploadedVersion{0};
-    JobFlag job;  // FP-14: the last upload queued for it
   };
   std::unordered_map<facebook::react::Tag, WorldTextureEntry> worldTextureCache_;
   // <world> ENG-10. Sprite-atlas GPU textures keyed by textureId (NOT by node

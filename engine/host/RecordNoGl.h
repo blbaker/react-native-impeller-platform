@@ -51,7 +51,6 @@ class RasterScope {
   uint64_t start_ = 0;
 };
 
-void NoteStarved(uint64_t starved);
 void PrintSummary();
 
 }  // namespace rni::recordgl

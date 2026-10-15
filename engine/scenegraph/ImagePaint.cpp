@@ -11,24 +11,16 @@
 
 namespace rni {
 
-namespace {
-
-void ReleaseDecoded(void* userData) {
-  delete static_cast<std::shared_ptr<const image::Decoded>*>(userData);
-}
-
-}  // namespace
-
 ImageTextures::~ImageTextures() {
   for (auto& [d, e] : entries_) {
-    if (e.texture) ImpellerTextureRelease(e.texture);
+    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture);
   }
 }
 
-ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
+ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
                                    const std::string& uri, float boxW, float boxH,
                                    ImageTextureInfo* info) {
-  if (!context) return nullptr;
+  if (!uploader) return nullptr;
   // FP-16: the cached decode for this box's size bucket (or the best other
   // size of the URI). A load in flight paints nothing yet; its completion
   // wakes the frame loop. Only a local source nobody requested (defaultSource)
@@ -38,8 +30,8 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
   if (!f.image) return nullptr;
   auto it = entries_.find(f.image.get());
   // FP-14: an upload whose frame was dropped never ran; upload again.
-  if (it != entries_.end() && JobFailed(it->second.job)) {
-    if (it->second.texture) ImpellerTextureRelease(it->second.texture);
+  if (it != entries_.end() && JobFailed(it->second.slot.job)) {
+    if (it->second.slot.texture) ImpellerTextureRelease(it->second.slot.texture);
     entries_.erase(it);
     it = entries_.end();
   }
@@ -47,26 +39,17 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
     const auto& d = f.image;
     Entry e;
     e.decoded = d;
-    // FP-17: the IO thread already uploaded it; wrapping a name makes no GL call.
-    const char* where = jobs ? "raster" : "record";
+    const char* where = uploader->deferred() ? "raster" : "record";
+    // FP-17: the IO thread already uploaded it; wrapping its storage makes no GPU call.
     if (const uint32_t ioName = io::Take(d.get()); ioName != 0) {
       where = nullptr;  // IoUploader logged it
-      ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {d->width, d->height}, 1};
-      e.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(context, &desc, ioName);
-      if (e.texture == nullptr) return nullptr;
-    } else if (jobs) {
-      uint32_t name = 0;
-      e.texture = jobs->WrapNewName(d->width, d->height, &name);
-      if (e.texture == nullptr) return nullptr;  // pool empty: next frame
-      e.job = jobs->AddUpload(e.texture, name, d->width, d->height, d->rgba.data(), d,
-                              /*allocate=*/true, /*clampEdges=*/false, /*image=*/true);
-    } else {
-      ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {d->width, d->height}, 1};
-      // The mapping keeps the decoded pixels alive until Impeller has uploaded them.
-      ImpellerMapping mapping = {d->rgba.data(), (uint64_t)d->rgba.size(), &ReleaseDecoded};
-      TRACE_EVENT0("image", "ImageUpload");
-      e.texture = ImpellerTextureCreateWithContentsNew(
-          context, &desc, &mapping, new std::shared_ptr<const image::Decoded>(d));
+      e.slot.texture = uploader->AdoptIo(ioName, d->width, d->height);
+      if (e.slot.texture == nullptr) return nullptr;
+      e.slot.w = d->width;
+      e.slot.h = d->height;
+    } else if (!uploader->Upload(e.slot, jobs, d->width, d->height, d->rgba.data(), d,
+                                 UploadFlags{/*clampEdges=*/false, /*image=*/true})) {
+      return nullptr;  // no storage ready (GL name pool empty): next frame
     }
     static const bool log = std::getenv("RNI_IMAGE_LOG") != nullptr;
     if (log && where) {
@@ -80,7 +63,7 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
   info->texHeight = d.height;
   info->srcWidth = d.srcWidth;
   info->srcHeight = d.srcHeight;
-  return it->second.texture;
+  return it->second.slot.texture;
 }
 
 void PaintImage(ImpellerDisplayListBuilder builder, ImpellerTexture texture,

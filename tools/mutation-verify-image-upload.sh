@@ -14,7 +14,7 @@ cd "$ROOT"
 unset RNI_BIN
 
 IP="engine/scenegraph/ImagePaint.cpp"
-IO="engine/scenegraph/IoUploader.cpp"
+IO="engine/scenegraph/IoUploaderGl.cpp"
 BACKUP="$(mktemp -d)"
 cp "$IP" "$BACKUP/ImagePaint.cpp"
 cp "$IO" "$BACKUP/IoUploader.cpp"

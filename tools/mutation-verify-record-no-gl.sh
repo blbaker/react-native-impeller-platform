@@ -4,9 +4,8 @@
 #
 #   M1  the whole-tree supersample offscreen renders inside RECORD again (its
 #       raster job is run on the spot) -> R: GL calls inside RECORD at ss 4
-#   M2  an <Image> texture is created inside RECORD again
-#       (ImpellerTextureCreateWithContentsNew, whose GLES reactor uploads on
-#       the calling thread) -> R: GL calls inside RECORD at ss 0
+#   M2  an <Image> texture is filled inside RECORD again (its upload job is
+#       run on the spot; FP-20 retarget) -> R: GL calls inside RECORD at ss 0
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -44,11 +43,11 @@ expect_killed() {  # name log ERE
 
 echo "== M1: the root supersample offscreen renders inside RECORD =="
 mutate "$SG" '
-  jobs_->AddOffscreen(dl, pxW, pxH, hops, name, texture);
+  gpu_.supersample->Render(jobs_, dl, pxW, pxH, hops, handle, texture);
 ' '
   {  // MUTANT M1: run the root offscreen job on the spot, inside RECORD
-    RasterJobs now(renderContext_, namePool_);
-    now.AddOffscreen(dl, pxW, pxH, hops, name, texture);
+    RasterJobs now;
+    gpu_.supersample->Render(&now, dl, pxW, pxH, hops, handle, texture);
     now.Run();
   }
 '
@@ -57,8 +56,12 @@ expect_killed M1 "$BACKUP/m1.log" 'RECORD_NO_GL FAIL R [a-z-]+-ss4: [1-9][0-9]* 
 restore
 
 echo "== M2: an image texture is created inside RECORD =="
-mutate "$IP" '    if (d && context && jobs) {' \
-'    if (d && context && jobs && false) {  // MUTANT M2: upload in RECORD'
+mutate "$IP" '      return nullptr;  // no storage ready (GL name pool empty): next frame
+    }
+' '      return nullptr;  // no storage ready (GL name pool empty): next frame
+    }
+    if (jobs) jobs->Run();  // MUTANT M2: the upload runs inside RECORD
+'
 build "$BACKUP/m2-build.log"; gate "$BACKUP/m2.log" || true
 expect_killed M2 "$BACKUP/m2.log" 'RECORD_NO_GL FAIL R (grid|images)-ss0: [1-9][0-9]* GL calls inside RECORD'
 restore

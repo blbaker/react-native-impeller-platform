@@ -5,19 +5,19 @@
 # and proves the gate goes red on ARM PIXEL (the arm aimed at it), not on a
 # side effect.
 #
-# M-world-reuse   paintWorldNode: re-upload into the ADOPTED name, release the
-#                 old wrapper afterwards (Impeller deletes the name), re-adopt
-#                 the dead name. The exact pre-fix code. Terrain presents black.
-# M-sprite-reuse  the same order in paintWorldSprites' atlas cache. The
-#                 fixture re-registers 'bubble' 8x8 -> 16x16, so every bubble
-#                 presents black after the swap.
+# M-reuse  FP-20 retarget: the world and sprite caches share the GL name
+#          uploader (scenegraph/TextureUploaderGl.cpp), so one mutant puts back
+#          the pre-fix order there: on a resize, release the old wrapper
+#          (Impeller now deletes the name) and re-adopt the SAME name instead
+#          of a fresh one. Terrain and the re-registered 'bubble' sprite
+#          (8x8 -> 16x16) present black after the swap.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-SRC_SCENE="engine/scenegraph/SceneGraph.cpp"
+SRC_SCENE="engine/scenegraph/TextureUploaderGl.cpp"
 
 BAK="$(mktemp -d)"
-cp "$SRC_SCENE" "$BAK/SceneGraph.cpp"
-restore() { cp "$BAK/SceneGraph.cpp" "$SRC_SCENE"; }
+cp "$SRC_SCENE" "$BAK/TextureUploaderGl.cpp"
+restore() { cp "$BAK/TextureUploaderGl.cpp" "$SRC_SCENE"; }
 trap 'restore; rm -rf "$BAK"' EXIT
 
 fail() { echo "MUTATION_VERIFY_FAIL: $*" >&2; exit 1; }
@@ -58,51 +58,27 @@ expect_kill() {
   restore
 }
 
-echo "== M-world-reuse =="
-mutate "bool SceneGraph::paintWorldNode(" \
-"    if (cacheEntry.texture) {
-      ImpellerTextureRelease(cacheEntry.texture);
-      cacheEntry.texture = nullptr;
-      cacheEntry.glTex = 0;  // Impeller deletes it; it is no longer ours
-    }
-    if (cacheEntry.glTex == 0) {" \
-"    // MUTANT RESIZE M-world-reuse: pre-fix order, release AFTER the upload
-    if (cacheEntry.glTex == 0) {"
-mutate "bool SceneGraph::paintWorldNode(" \
-"    cacheEntry.uploadedVersion = entry->version;
-    ImpellerTextureDescriptor desc" \
-"    cacheEntry.uploadedVersion = entry->version;
-    if (cacheEntry.texture) {
-      ImpellerTextureRelease(cacheEntry.texture);
-      cacheEntry.texture = nullptr;
-    }
-    ImpellerTextureDescriptor desc"
-expect_kill M-world-reuse
-
-echo "== M-sprite-reuse =="
-mutate "bool SceneGraph::paintWorldSprites(" \
-"        if (e.texture) {
-          ImpellerTextureRelease(e.texture);
-          e.texture = nullptr;
-          e.glTex = 0;
-        }
-        if (e.glTex == 0) {" \
-"        // MUTANT RESIZE M-sprite-reuse: pre-fix order, release AFTER the upload
-        if (e.glTex == 0) {"
-mutate "bool SceneGraph::paintWorldSprites(" \
-"        e.uploadedVersion = src->version;
-        ImpellerTextureDescriptor desc" \
-"        e.uploadedVersion = src->version;
-        if (e.texture) {
-          ImpellerTextureRelease(e.texture);
-          e.texture = nullptr;
-        }
-        ImpellerTextureDescriptor desc"
-expect_kill M-sprite-reuse
+echo "== M-reuse =="
+mutate "  bool Upload(TextureSlot& slot, RasterJobs* jobs," \
+"      slot.texture = nullptr;
+      slot.handle = 0;
+      uint32_t name = 0;
+      slot.texture = WrapNewGlName(ctx_, *pool_, w, h, &name);" \
+"      slot.texture = nullptr;
+      // MUTANT RESIZE M-reuse: re-adopt the released (dead) name on a resize
+      uint32_t name = (uint32_t)slot.handle;
+      slot.handle = 0;
+      if (name != 0) {
+        ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {w, h}, 1};
+        slot.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(ctx_, &desc, name);
+      } else {
+        slot.texture = WrapNewGlName(ctx_, *pool_, w, h, &name);
+      }"
+expect_kill M-reuse
 
 echo "== restore + rebuild the real engine =="
 restore
 build_or_fail restored
 bash tools/ci-world-resize.sh > "$BAK/restored.log" 2>&1 || { tail -20 "$BAK/restored.log" >&2; fail "gate is RED on the restored (fixed) engine"; }
 echo "   restored engine: $(tail -1 "$BAK/restored.log")"
-echo "MUTATION_VERIFY_WORLD_RESIZE_PASS (2/2 killed by ARM PIXEL)"
+echo "MUTATION_VERIFY_WORLD_RESIZE_PASS (1/1 killed by ARM PIXEL)"

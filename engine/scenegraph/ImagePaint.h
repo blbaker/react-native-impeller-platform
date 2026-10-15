@@ -4,6 +4,7 @@
 // (rni::image cache) and kept for the scene's lifetime.
 
 #include "impeller.h"
+#include "scenegraph/GpuBackend.h"
 #include "scenegraph/RasterJobs.h"
 
 #include <memory>
@@ -30,19 +31,18 @@ class ImageTextures {
   ImageTextures& operator=(const ImageTextures&) = delete;
   ~ImageTextures();
 
-  // Null when the source is not decoded (yet) or no context is wired.
+  // Null when the source is not decoded (yet) or no backend is wired.
   // boxW/boxH: the painted box in device pixels (picks the decode size).
-  // FP-14: with `jobs` (a GL context) a miss wraps a pool name and queues the
-  // upload for the raster side; RECORD makes no GL call. Without, Impeller
-  // uploads in place.
-  ImpellerTexture Get(ImpellerContext context, RasterJobs* jobs, const std::string& uri,
+  // FP-20: a miss goes through the backend's uploader (GL: a pool name filled
+  // on the raster side, FP-14, so RECORD makes no GL call; Metal/Vulkan:
+  // Impeller uploads in place). `jobs` is this frame's raster queue.
+  ImpellerTexture Get(TextureUploader* uploader, RasterJobs* jobs, const std::string& uri,
                       float boxW, float boxH, ImageTextureInfo* info);
 
  private:
   struct Entry {
-    ImpellerTexture texture{nullptr};
+    TextureSlot slot;
     std::shared_ptr<const image::Decoded> decoded;
-    JobFlag job;
   };
   std::unordered_map<const image::Decoded*, Entry> entries_;
 };

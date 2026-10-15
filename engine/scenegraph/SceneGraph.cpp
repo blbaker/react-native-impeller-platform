@@ -45,23 +45,15 @@
 #include "text/TextTransform.h"
 #include "text/TypographyContexts.h"
 
-// ENG item 2 — supersample offscreen render. Direct GL entry points link on
-// Linux (EGL GLESv2) and macOS (ANGLE dylibs). On Windows they are resolved at
-// first use from ANGLE's libGLESv2.dll (SceneGraphGl.h), and every offscreen
-// hook also checks scenegraph_gl::Ready(), so an unresolved table paints in
-// place. Android is Vulkan: no GL, the offscreen stays compiled out there.
-#if !defined(__ANDROID__)
-#define RNI_SUPERSAMPLE_GL 1
-#include "scenegraph/SceneGraphGl.h"
+// FP-20: no GL here. Textures and the supersample offscreen go through the
+// RenderBackend (scenegraph/GpuBackend.h); the GL pieces live in
+// TextureUploaderGl.cpp / SupersampleBackendGl.cpp.
+// <world> ENG-09/10 GPU textures have never run on Windows; they stay compiled
+// out there until gated on that backend.
+#if !defined(_WIN32)
+#define RNI_WORLD_GPU 1
 #else
-#define RNI_SUPERSAMPLE_GL 0
-#endif
-// <world> ENG-09/10 GPU textures share those entry points but have never run on
-// Windows; they stay compiled out there until gated on that backend.
-#if RNI_SUPERSAMPLE_GL && !defined(_WIN32)
-#define RNI_WORLD_GL 1
-#else
-#define RNI_WORLD_GL 0
+#define RNI_WORLD_GPU 0
 #endif
 
 #include <algorithm>
@@ -401,13 +393,13 @@ SceneGraph::~SceneGraph() {
     if (entry.texture) ImpellerTextureRelease(entry.texture);
   }
   // <world> ENG-09. Same ownership rule as svgCache_ above -- release the
-  // adopted texture, never glDeleteTextures the GL handle it wraps.
+  // texture, never the backend storage it wraps.
   for (auto& [tag, entry] : worldTextureCache_) {
-    if (entry.texture) ImpellerTextureRelease(entry.texture);
+    if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
   }
   // ENG-10 sprite atlas -- same ownership rule.
   for (auto& [id, entry] : spriteTextureCache_) {
-    if (entry.texture) ImpellerTextureRelease(entry.texture);
+    if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
   }
   // ENG item 2b — the double-buffered whole-tree offscreen, if a root
   // supersample ran on the final frame and nothing consumed the successor.
@@ -416,18 +408,21 @@ SceneGraph::~SceneGraph() {
 
 void SceneGraph::setRenderContext(ImpellerContext context) {
   renderContext_ = context;
-#if RNI_SUPERSAMPLE_GL
-  // FP-14: names RECORD wraps; generated here, where the context is current.
-  if (context != nullptr && rni::scenegraph_gl::Ready()) {
-    if (!namePool_) namePool_ = std::make_shared<GlNamePool>();
-    namePool_->Refill();
-  }
-#endif
+  // FP-20: GL generates the names RECORD wraps here, where the context is current.
+  gpu_ = MakeRenderBackend(gpuContext_, gpuPolicy_, context);
+}
+
+void SceneGraph::printGpuBackend() const {
+  std::printf("rn-impeller: gpu_backend context=%s policy=%s uploader=%s supersample=%s\n",
+              GpuBackendName(gpu_.context), GpuBackendName(gpu_.policy),
+              gpu_.uploader ? gpu_.uploader->name() : "none",
+              gpu_.supersample ? gpu_.supersample->name() : "none");
+  std::fflush(stdout);
 }
 
 std::unique_ptr<RasterJobs> SceneGraph::makeRasterJobs() {
-  if (renderContext_ == nullptr || !namePool_) return nullptr;
-  return std::make_unique<RasterJobs>(renderContext_, namePool_);
+  if (renderContext_ == nullptr) return nullptr;
+  return std::make_unique<RasterJobs>(gpu_.afterRaster);
 }
 
 void SceneGraph::updateFromShadowView(SceneNode& node,
@@ -2069,15 +2064,15 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // FP-18: the paths that return before the transform below are not boxed.
   const bool damageEarlyOut = node.backfaceHidden || node.isWorldRaster || node.isSvgRoot;
   if (damageEarlyOut) recordDamage(builder, node, x, y, w, h, /*unbounded=*/true);
-#if RNI_SUPERSAMPLE_GL
   // ENG item 2 — SUPERSAMPLE HOOK. An <Svg> root subtree, when supersampling is
-  // enabled AND a render context is wired, is rendered into an N x offscreen and
+  // enabled AND the backend has a supersample offscreen (GL only, FP-20: Metal
+  // and Vulkan get MSAA from the surface), is rendered into an N x offscreen and
   // composited back with a linear downsample instead of painted in place. N=1
   // is a legitimate value (offscreen round-trip, no AA) — it is the mutant
   // control the gate proves does NOT anti-alias. A failure inside the helper
   // returns false and we fall through to the in-place walk below, so a broken
   // offscreen degrades to a correct-but-aliased icon, never a blank one.
-  if (node.isSvgRoot && supersample_ >= 1 && jobs_ != nullptr) {
+  if (node.isSvgRoot && supersample_ >= 1 && gpu_.supersample != nullptr) {
     if (paintSvgRootSupersampled(builder, node, x, y, w, h)) {
       // ⛔ COUNT THE SUBTREE CACHE-INDEPENDENTLY. The offscreen render (which is
       // the only thing that walks the children, and only on a cache MISS) does
@@ -2090,18 +2085,16 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       return;
     }
   }
-#endif
-#if RNI_WORLD_GL
+#if RNI_WORLD_GPU
   // <world> ENG-09. Same shape as the SVG supersample hook just above: a
   // dedicated node kind short-circuits the ordinary paint (background/
-  // border/text/children) walk. Gated on renderContext_ for the SAME reason
-  // the SVG hook is -- glTexImage2D/ImpellerTextureCreateWithOpenGLTextureHandleNew
-  // need the surface's GL sharegroup, so a host that never wired a render
-  // context (or a <world> whose store has nothing published yet) falls
+  // border/text/children) walk. Gated on the backend's uploader (FP-20), which
+  // exists once a host wired a render context; a host that never did (or a
+  // <world> whose store has nothing published yet) falls
   // through to the plain in-place walk below, which paints this leaf's
   // background/border and nothing else -- never a crash, never a blank
   // surprise beyond "no image".
-  if (node.isWorldRaster && jobs_ != nullptr) {
+  if (node.isWorldRaster && gpu_.uploader != nullptr) {
     if (paintWorldNode(builder, node, x, y, w, h)) {
       // ENG-10: the drawSprites list composites OVER the world buffer, on the
       // GPU, inside this same single <world> node (no per-sprite nodes).
@@ -2384,11 +2377,11 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                       node.outlineStyle, impellerColor(node.outlineColor, OwnAlpha(node)));
   }
 
-#if RNI_WORLD_GL
+#if RNI_WORLD_GPU
   // ENG-10: a <world> with a sprite list but NO setPixels buffer still
   // composites its sprites, over its own background painted just above. (With
   // a buffer, the early return in the <world> hook already drew them.)
-  if (node.isWorldRaster && jobs_ != nullptr) {
+  if (node.isWorldRaster && gpu_.uploader != nullptr) {
     paintWorldSprites(builder, node, x, y, w, h);
   }
 #endif
@@ -2639,12 +2632,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     const SceneNode::ImageSrc& src = PickImageSource(node.imgSources, w, h);
     rni::ImageTextureInfo ti;
     const float boxW = w * pointScale_, boxH = h * pointScale_;  // FP-16: decode size
-    ImpellerTexture tex = imageTextures_.Get(renderContext_, jobs_, src.uri, boxW, boxH, &ti);
+    ImpellerTexture tex = imageTextures_.Get(gpu_.uploader.get(), jobs_, src.uri, boxW, boxH, &ti);
     // Natural size: the source's declared size if JS sent one, else pixels / scale.
     float scale = src.scale > 0.0f ? src.scale : 1.0f;
     if (src.width > 0.0f) scale = (float)ti.srcWidth / src.width;
     if (tex == nullptr && !node.imgDefaultUri.empty()) {
-      tex = imageTextures_.Get(renderContext_, jobs_, node.imgDefaultUri, boxW, boxH, &ti);
+      tex = imageTextures_.Get(gpu_.uploader.get(), jobs_, node.imgDefaultUri, boxW, boxH, &ti);
       scale = 1.0f;
     }
     if (tex != nullptr) {
@@ -3058,10 +3051,9 @@ std::string SceneGraph::svgSubtreeCacheKey(const SceneNode& node, int pxW,
   return key;
 }
 
-#if RNI_SUPERSAMPLE_GL
 // ENG item 2 / FP-14 — record the <Svg> subtree mapped onto a pxW x pxH
-// offscreen. RasterJobs renders it (depth+stencil FBO) and halves it on the
-// raster side; this half only walks the tree.
+// offscreen. The supersample backend renders it (GL: depth+stencil FBO) and
+// halves it on the raster side; this half only walks the tree.
 ImpellerDisplayList SceneGraph::recordSvgSubtree(const SceneNode& node, float x,
                                                  float y, float w, float h,
                                                  int pxW, int pxH) {
@@ -3140,47 +3132,24 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
   // THIS IS THE SECOND LINE OF DEFENSE. setPixels() rejects a mismatched
   // buffer at the JS call site (see WorldRasterModule.h's header comment); a
   // buffer that somehow reached the store undersized would otherwise read out
-  // of bounds in glTexImage2D/glTexSubImage2D below.
+  // of bounds in the upload below.
   if (entry->pixels.size() < (size_t)srcW * (size_t)srcH * 4) return false;
 
   WorldTextureEntry& cacheEntry = worldTextureCache_[node.tag];
-  // FP-14: an upload whose frame was dropped never ran; start over.
-  if (JobFailed(cacheEntry.job)) cacheEntry.glTex = 0;
-  const bool sizeChanged =
-      cacheEntry.glTex == 0 || cacheEntry.texW != srcW || cacheEntry.texH != srcH;
-
-  // FP-14: RECORD wraps a raster-generated name and queues the upload; the
-  // raster side runs glTexImage2D / glTexSubImage2D before it draws the list.
-  // The job keeps `entry` (immutable after publish) alive until then.
-  if (sizeChanged) {
-    // ⛔ A RESIZE NEEDS A FRESH GL NAME. ImpellerTextureCreateWithOpenGLTextureHandleNew
-    // TAKES OWNERSHIP of the handle: Impeller deletes it when the last
-    // reference drops. Reusing the adopted name after releasing its wrapper
-    // sampled a deleted texture: pure black terrain on Mesa (measured by
-    // tools/ci-world-resize.sh, 160x120 -> 320x240 mid-session).
-    if (cacheEntry.texture) {
-      ImpellerTextureRelease(cacheEntry.texture);  // GL-free: marks the handle
-      cacheEntry.texture = nullptr;
+  // FP-20: the backend's uploader fills the slot (GL: FP-14's raster-side copy
+  // into a pre-generated name, in place when the size is unchanged; Metal /
+  // Vulkan: Impeller uploads). Only when the store's version advanced, or the
+  // slot is stale (first frame, resize, an upload whose frame was dropped).
+  // `entry` (immutable after publish) owns the bytes until the GPU has them.
+  if (SlotStale(cacheEntry.slot, srcW, srcH) || entry->version != cacheEntry.uploadedVersion) {
+    if (!gpu_.uploader->Upload(cacheEntry.slot, jobs_, srcW, srcH, entry->pixels.data(), entry,
+                               UploadFlags{/*clampEdges=*/false, /*image=*/false})) {
+      return false;
     }
-    uint32_t name = 0;
-    cacheEntry.texture = jobs_->WrapNewName(srcW, srcH, &name);
-    cacheEntry.glTex = name;
-    if (cacheEntry.texture == nullptr) return false;
-    cacheEntry.texW = srcW;
-    cacheEntry.texH = srcH;
-    cacheEntry.uploadedVersion = entry->version;
-    cacheEntry.job = jobs_->AddUpload(cacheEntry.texture, name, srcW, srcH,
-                                      entry->pixels.data(), entry, /*allocate=*/true,
-                                      /*clampEdges=*/false, /*image=*/false);
-  } else if (entry->version != cacheEntry.uploadedVersion) {
-    // Same dimensions, new pixels: glTexSubImage2D, no reallocation.
-    cacheEntry.job = jobs_->AddUpload(cacheEntry.texture, cacheEntry.glTex, srcW, srcH,
-                                      entry->pixels.data(), entry, /*allocate=*/false,
-                                      /*clampEdges=*/false, /*image=*/false);
     cacheEntry.uploadedVersion = entry->version;
   }
 
-  if (cacheEntry.texture == nullptr) return false;
+  if (cacheEntry.slot.texture == nullptr) return false;
 
   // ⛔ NO Y-FLIP HERE — AND THAT IS THE FIX, NOT AN OVERSIGHT.
   //
@@ -3206,12 +3175,12 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
   ImpellerRect dstRect = {0, 0, w, h};
   ImpellerDisplayListBuilderSave(builder);
   ImpellerDisplayListBuilderTranslate(builder, x, y);
-  ImpellerDisplayListBuilderDrawTextureRect(builder, cacheEntry.texture,
+  ImpellerDisplayListBuilderDrawTextureRect(builder, cacheEntry.slot.texture,
                                             &srcRect, &dstRect,
                                             worldSampling(node),  // ENG-21
                                             nullptr);
   ImpellerDisplayListBuilderRestore(builder);
-  // ⛔ DO NOT RELEASE cacheEntry.texture HERE. It is cached across frames in
+  // ⛔ DO NOT RELEASE cacheEntry.slot.texture HERE. It is cached across frames in
   // worldTextureCache_ (unlike the per-icon svgCache_'s LRU eviction, this
   // cache is unbounded -- one <world> app mounts a small, fixed number of
   // these nodes, not an unbounded scrolling list) and the deferred host draw
@@ -3258,30 +3227,14 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
     if (src && srcW > 0 && srcH > 0 &&
         src->pixels.size() >= (size_t)srcW * (size_t)srcH * 4) {
       WorldTextureEntry& e = spriteTextureCache_[textureId];
-      if (JobFailed(e.job)) e.glTex = 0;  // FP-14: its upload never ran
-      const bool sizeChanged = e.glTex == 0 || e.texW != srcW || e.texH != srcH;
-      if (sizeChanged) {
-        // ⛔ Same ownership rule as paintWorldNode: a fresh name per size.
-        if (e.texture) {
-          ImpellerTextureRelease(e.texture);
-          e.texture = nullptr;
-        }
-        uint32_t name = 0;
-        e.texture = jobs_->WrapNewName(srcW, srcH, &name);
-        e.glTex = name;
-        if (e.texture) {
-          e.texW = srcW;
-          e.texH = srcH;
+      // FP-20: same uploader rule as paintWorldNode; sprites clamp their edges.
+      if (SlotStale(e.slot, srcW, srcH) || src->version != e.uploadedVersion) {
+        if (gpu_.uploader->Upload(e.slot, jobs_, srcW, srcH, src->pixels.data(), src,
+                                  UploadFlags{/*clampEdges=*/true, /*image=*/false})) {
           e.uploadedVersion = src->version;
-          e.job = jobs_->AddUpload(e.texture, name, srcW, srcH, src->pixels.data(), src,
-                                   /*allocate=*/true, /*clampEdges=*/true, /*image=*/false);
         }
-      } else if (src->version != e.uploadedVersion) {
-        e.job = jobs_->AddUpload(e.texture, e.glTex, srcW, srcH, src->pixels.data(), src,
-                                 /*allocate=*/false, /*clampEdges=*/true, /*image=*/false);
-        e.uploadedVersion = src->version;
       }
-      if (e.texture) out = &e;
+      if (e.slot.texture && !SlotStale(e.slot, srcW, srcH)) out = &e;
     }
     resolved.emplace(textureId, out);
     return out;
@@ -3300,7 +3253,7 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
     if (s.w <= 0.0f || s.h <= 0.0f || s.alpha <= 0.0f) continue;
     const WorldTextureEntry* tex = resolve(s.textureId);
     if (tex == nullptr) continue;
-    ImpellerRect srcRect = {0, 0, (float)tex->texW, (float)tex->texH};
+    ImpellerRect srcRect = {0, 0, (float)tex->slot.w, (float)tex->slot.h};
     ImpellerRect dstRect = {s.x, s.y, s.w, s.h};
     // Per-sprite globalAlpha: the paint's colour alpha modulates the
     // (premultiplied) texture. Opaque sprites pass no paint at all.
@@ -3310,7 +3263,7 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
       ImpellerColor c = {1.0f, 1.0f, 1.0f, s.alpha, kImpellerColorSpaceSRGB};
       ImpellerPaintSetColor(alphaPaint, &c);
     }
-    ImpellerDisplayListBuilderDrawTextureRect(builder, tex->texture, &srcRect,
+    ImpellerDisplayListBuilderDrawTextureRect(builder, tex->slot.texture, &srcRect,
                                               &dstRect, sampling, alphaPaint);
     if (alphaPaint) ImpellerPaintRelease(alphaPaint);
     ++spritesDrawn_;
@@ -3416,15 +3369,15 @@ bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
     const auto hops = RasterJobs::HalveChain(pxW, pxH, nativeW, nativeH);
     texW = hops.empty() ? pxW : hops.back().first;
     texH = hops.empty() ? pxH : hops.back().second;
-    uint32_t name = 0;
-    texture = jobs_->WrapNewName(texW, texH, &name);
-    if (texture == nullptr) return false;  // pool empty: paint in place
+    uint64_t handle = 0;
+    texture = gpu_.supersample->Target(jobs_, texW, texH, &handle);
+    if (texture == nullptr) return false;  // no storage ready: paint in place
     ImpellerDisplayList dl = recordSvgSubtree(node, x, y, w, h, pxW, pxH);
     if (dl == nullptr) {
       ImpellerTextureRelease(texture);
       return false;
     }
-    job = jobs_->AddOffscreen(dl, pxW, pxH, hops, name, texture);
+    job = gpu_.supersample->Render(jobs_, dl, pxW, pxH, hops, handle, texture);
 
     // Insert into the cache and evict LRU past the bound.
     svgCache_[key] = SvgCacheEntry{texture, texW, texH, job};
@@ -3507,9 +3460,9 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   const auto hops = RasterJobs::HalveChain(pxW, pxH, nativeW, nativeH);
   const int texW = hops.empty() ? pxW : hops.back().first;
   const int texH = hops.empty() ? pxH : hops.back().second;
-  uint32_t name = 0;
-  ImpellerTexture texture = jobs_->WrapNewName(texW, texH, &name);
-  if (texture == nullptr) return false;  // pool empty: in-place walk
+  uint64_t handle = 0;
+  ImpellerTexture texture = gpu_.supersample->Target(jobs_, texW, texH, &handle);
+  if (texture == nullptr) return false;  // no storage ready: in-place walk
 
   ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
   // points -> N x device pixels: the same root scale paint() applies, times N.
@@ -3534,7 +3487,7 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
     ImpellerTextureRelease(texture);
     return false;
   }
-  jobs_->AddOffscreen(dl, pxW, pxH, hops, name, texture);
+  gpu_.supersample->Render(jobs_, dl, pxW, pxH, hops, handle, texture);
 
   // ---- Composite in DEVICE PIXELS. ----
   // paint() applies its pointScaleFactor scale around the in-place walk; the
@@ -3564,7 +3517,6 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   treeTexture_ = texture;
   return true;
 }
-#endif  // RNI_SUPERSAMPLE_GL
 
 // Borders are drawn EDGE BY EDGE, as filled trapezoids, not as a stroked rect.
 //
@@ -3792,7 +3744,6 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   }
   svgUseDepth_ = 0;
   spinnerAnimating_.store(false, std::memory_order_relaxed);
-#if RNI_SUPERSAMPLE_GL
   // ENG item 2b — ROOT SUPERSAMPLE HOOK. At N>=2 with a wired context and known
   // surface size, render the WHOLE tree into one N x offscreen and composite it
   // back with a linear downsample — antialiasing primitives Impeller does not
@@ -3806,7 +3757,7 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   pointScale_ = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;  // elevation DPR
   painted_ = 0;  // per frame: the root hook's inner walk counts into it (else N>=2 sums frames)
   spritesDrawn_ = 0;  // same rule: world_sprites_drawn is one frame's count
-  if (supersample_ >= 2 && jobs_ != nullptr &&
+  if (supersample_ >= 2 && gpu_.supersample != nullptr &&
       paintTreeSupersampled(builder, pointScaleFactor)) {
     // FP-18: the inner walk's boxes are in the N x offscreen's space.
     damage_.ForceFull("root_supersample");
@@ -3815,7 +3766,6 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
     collectModalShowsLocked(shows);
     return painted_;
   }
-#endif
   // ⛔ SCALE ONCE, AT THE ROOT — NOT PER NODE.
   // The tree's frames are in points. Applying the device scale as a single
   // root transform means every child, every stroke width and every glyph run

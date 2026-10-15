@@ -60,7 +60,7 @@ class HeadlessSurface {
   uint32_t fbo_{0};
   // Packed depth+stencil. Impeller's non-convex fills are stencil-then-cover;
   // without this attachment they paint their bounding box. See the comment at
-  // the attachment site in HeadlessSurface.cpp.
+  // the attachment site in HeadlessSurfaceGl.cpp.
   uint32_t depthStencil_{0};
   ImpellerContext context_{nullptr};
   ImpellerSurface surface_{nullptr};

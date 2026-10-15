@@ -93,10 +93,7 @@ bool RasterFrame(FrameItem& item,
     TRACE_EVENT0("raster", "Draw");
     ok = draw(item.displayList);
   }
-  if (item.jobs) {
-    item.jobs->pool().Refill();  // names for the next RECORD
-    recordgl::NoteStarved(item.jobs->pool().starved());
-  }
+  if (item.jobs) item.jobs->AfterRaster();  // FP-20: GL tops up names for the next RECORD
   if (item.timings) item.timings->RecordRasterEnd();
   return ok;
 }

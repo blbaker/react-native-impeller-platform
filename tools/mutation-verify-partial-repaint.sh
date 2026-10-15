@@ -15,7 +15,7 @@ cd "$ROOT"
 unset RNI_BIN
 
 DT="engine/scenegraph/DamageTracker.cpp"
-PR="engine/host/PartialRepaint.cpp"
+PR="engine/host/PartialRepaintGl.cpp"
 BACKUP="$(mktemp -d)"
 cp "$DT" "$BACKUP/DamageTracker.cpp"
 cp "$PR" "$BACKUP/PartialRepaint.cpp"

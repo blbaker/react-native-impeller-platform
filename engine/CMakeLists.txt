@@ -253,7 +253,7 @@ add_executable(rn-impeller
   host/IoContextEgl.cpp
   host/PoisonProbe.cpp
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
-  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaint.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
@@ -264,7 +264,7 @@ add_executable(rn-impeller
   # The offscreen surface, one implementation per platform. Selected here rather
   # than with #ifdefs inside one file: the two share no context-acquisition code
   # at all (Mesa surfaceless EGL vs ANGLE-over-D3D11 loaded by LoadLibrary).
-  $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurface.cpp>
+  $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceGl.cpp>
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/host/WinGLSurface.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurface.cpp>
   # The one Objective-C TU: NSWindow -> layer-backed NSView, which is what
@@ -303,8 +303,11 @@ add_executable(rn-impeller
   scenegraph/Modal.cpp
   scenegraph/ImagePaint.cpp
   scenegraph/RasterJobs.cpp
+  scenegraph/GpuBackend.cpp
+  scenegraph/TextureUploaderGl.cpp
+  scenegraph/SupersampleBackendGl.cpp
   scenegraph/DamageTracker.cpp
-  scenegraph/IoUploader.cpp
+  scenegraph/IoUploaderGl.cpp
   scenegraph/ImageEvents.cpp
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
@@ -346,7 +349,7 @@ if(WIN32 OR APPLE)
   # ⛔ macOS NEEDS THESE FOR THE SAME REASON WINDOWS DOES, AND IT IS EASY TO
   # ASSUME OTHERWISE. Apple ships OpenGL headers, so <OpenGL/gl.h> exists and a
   # reader concludes "macOS has GL, it's fine". It has DESKTOP GL 2.1 and no
-  # EGL whatsoever — HeadlessSurface.cpp includes <EGL/egl.h> and the darwin
+  # EGL whatsoever — HeadlessSurfaceGl.cpp includes <EGL/egl.h> and the darwin
   # build died on exactly that after compiling 337 of 355 objects.
   #
   # They are headers ONLY. Nothing links against EGL/GLESv2 on either platform —

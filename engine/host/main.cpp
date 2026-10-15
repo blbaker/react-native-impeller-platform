@@ -75,6 +75,7 @@
 #include "host/AnimRowProbe.h"
 #include "host/UniformProbe.h"
 #include "host/PoisonProbe.h"
+#include "scenegraph/GpuBackend.h"
 #include "scenegraph/IoUploader.h"
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
@@ -160,6 +161,8 @@ void Usage() {
           "                     wheel-away/scroll-up. Synthetic -- it does NOT\n"
           "                     prove glfwSetScrollCallback is registered.)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
+          "                   [--backend gles|metal|vulkan]  GPU backend (FP-20);\n"
+          "                     only gles is available yet\n"
           "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
           "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
           "                   [--sdf-aa on|off]  analytic SDF AA for circles, ovals,\n"
@@ -476,6 +479,10 @@ static bool gRasterThread = true;
 // FP-18: --partial-repaint on|off (windowed: clip RECORD to the damage when it
 // passes Flutter's 0.7 rule and keep the previous frame outside it).
 static bool gPartialRepaint = true;
+// FP-20: --backend gles|metal|vulkan (only gles runs yet) and the test hook
+// RNI_TEST_BACKEND_POLICY=metal|vulkan (headless GL context, other backend's rules).
+static rni::GpuBackend gGpuBackend = rni::GpuBackend::kGles;
+static rni::GpuBackend gGpuPolicy = rni::GpuBackend::kGles;
 static int gMainStallAfterFrames = 0;
 static int gMainStallMs = 0;
 [[maybe_unused]] static long long SteadyNowUs() {  // same clock as the raster_present t_us lines
@@ -643,7 +650,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // ImpellerContext — same GL sharegroup the offscreen FBO needs) and N. On
   // Android the offscreen path is compiled out, so these are inert there.
   // FP-14 fills the GL name pool here: a GL call, so on the raster thread.
+  sceneGraph.setGpuBackend(gGpuBackend, gGpuPolicy);  // FP-20
   rasterizer.thread().PostSync([&] { sceneGraph.setRenderContext(surface.context()); });
+  sceneGraph.printGpuBackend();
   sceneGraph.setSupersample(supersampleRnsvg);
   // ENG item 2b — the root supersample offscreen is sized N x this. Device
   // pixels (surface.width()/height()), re-set on resize below.
@@ -1899,6 +1908,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::glvalidation::Finish();
   rni::image::PrintStats();  // FP-16
   rni::io::PrintStats();  // FP-17
+  rni::PrintGpuTextureTotals();  // FP-20
   rni::typography::PrintSummary();  // FP-12
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
@@ -2152,7 +2162,18 @@ int main(int argc, char** argv) {
         return 2;
       }
     } else if (a == "--vsync-log") gVsyncLog = true;
-    else if (a == "--io-upload") {  // FP-17
+    else if (a == "--backend") {  // FP-20
+      const std::string v = next("--backend");
+      if (!rni::ParseGpuBackend(v.c_str(), &gGpuBackend)) {
+        fprintf(stderr, "rn-impeller: FATAL: --backend wants gles|metal|vulkan (got '%s')\n", v.c_str());
+        return 2;
+      }
+      if (gGpuBackend != rni::GpuBackend::kGles) {
+        fprintf(stderr, "rn-impeller: FATAL: --backend %s is not available yet (only gles)\n", v.c_str());
+        return 2;
+      }
+      gGpuPolicy = gGpuBackend;
+    } else if (a == "--io-upload") {  // FP-17
       const std::string v = next("--io-upload");
       if (v != "on" && v != "off") {
         fprintf(stderr, "rn-impeller: FATAL: --io-upload wants on|off (got '%s')\n", v.c_str());
@@ -2713,6 +2734,21 @@ int main(int argc, char** argv) {
     Usage();
     return 2;
   }
+  // FP-20 test hook: paint with another backend's rules (Impeller-owned
+  // uploads, no supersample offscreen) on the GL context. Headless only: there
+  // RECORD runs on the context's thread, so Impeller's GL upload is legal.
+  if (const char* pol = std::getenv("RNI_TEST_BACKEND_POLICY"); pol != nullptr && *pol) {
+    if (!rni::ParseGpuBackend(pol, &gGpuPolicy)) {
+      fprintf(stderr, "rn-impeller: FATAL: RNI_TEST_BACKEND_POLICY wants gles|metal|vulkan (got '%s')\n", pol);
+      return 2;
+    }
+    if (!headless && gGpuPolicy != gGpuBackend) {
+      fprintf(stderr, "rn-impeller: FATAL: RNI_TEST_BACKEND_POLICY is headless-only\n");
+      return 2;
+    }
+    // The IO thread hands off GL names; other backends upload on their own.
+    if (gGpuPolicy != rni::GpuBackend::kGles) rni::io::SetEnabled(false);
+  }
   // parity item 13. --bundle may be a Metro URL
   // (http://host:8081/index.bundle?platform=impeller&dev=true). The bundle is
   // fetched over the same transport as fetch() (NetworkingModule's
@@ -2850,7 +2886,9 @@ int main(int argc, char** argv) {
   {
     rni::SceneGraph sceneGraph(surface.typography());
     // ENG item 2 — same wiring as the primary headless path above.
+    sceneGraph.setGpuBackend(gGpuBackend, gGpuPolicy);  // FP-20
     sceneGraph.setRenderContext(surface.context());
+    sceneGraph.printGpuBackend();
     sceneGraph.setSupersample(supersampleRnsvg);
     // ENG item 2b — root supersample offscreen size, device pixels.
     sceneGraph.setSurfaceSize(width, height);
@@ -3354,6 +3392,7 @@ int main(int argc, char** argv) {
     rni::glvalidation::Finish();
     rni::image::PrintStats();  // FP-16
     rni::io::PrintStats();  // FP-17
+    rni::PrintGpuTextureTotals();  // FP-20
     rni::typography::PrintSummary();  // FP-12
   }
 
