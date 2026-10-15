@@ -70,7 +70,7 @@ void FrameTimingsRecorder::Record(State next) {
 
 void FrameTimings::Commit(std::unique_ptr<FrameTimingsRecorder> frame) {
   if (!frame) return;
-  Rec r{frame->frameNumber(), {}};
+  Rec r{frame->frameNumber(), {}, frame->imageCacheBytes()};
   for (int i = 0; i < FrameTimingsRecorder::kStampCount; ++i) {
     r.us[i] = frame->stampUs((FrameTimingsRecorder::State)(i + 1));
   }
@@ -98,10 +98,12 @@ std::vector<FrameTimings::Rec> FrameTimings::Snapshot() const {
 void FrameTimings::PrintSummary(FILE* out) const {
   const std::vector<Rec> recs = Snapshot();
   std::vector<int64_t> build, raster, total;
+  int64_t cacheMax = 0;
   for (const Rec& r : recs) {
     build.push_back(r.us[2] - r.us[1]);
     raster.push_back(r.us[4] - r.us[3]);
     total.push_back(r.us[5] - r.us[0]);
+    cacheMax = std::max(cacheMax, r.imageCacheBytes);
   }
   int errors, discarded;
   {
@@ -112,11 +114,13 @@ void FrameTimings::PrintSummary(FILE* out) const {
   fprintf(out,
           "rn-impeller: frame_timings n=%zu build_p50=%lld build_p95=%lld "
           "build_p99=%lld raster_p50=%lld raster_p95=%lld raster_p99=%lld "
-          "total_p95=%lld frame_timing_errors=%d discarded=%d\n",
+          "total_p95=%lld frame_timing_errors=%d discarded=%d "
+          "image_cache_bytes_max=%lld image_cache_bytes_last=%lld\n",
           recs.size(), (long long)Pct(build, 50), (long long)Pct(build, 95),
           (long long)Pct(build, 99), (long long)Pct(raster, 50),
           (long long)Pct(raster, 95), (long long)Pct(raster, 99),
-          (long long)Pct(total, 95), errors, discarded);
+          (long long)Pct(total, 95), errors, discarded, (long long)cacheMax,
+          (long long)(recs.empty() ? 0 : recs.back().imageCacheBytes));
   fflush(out);
 }
 
@@ -132,7 +136,7 @@ bool FrameTimings::WriteJson(const std::string& path) const {
       if (recs[i].us[k] < 0) fprintf(f, ",\"%s\":null", kKeys[k]);
       else fprintf(f, ",\"%s\":%lld", kKeys[k], (long long)recs[i].us[k]);
     }
-    fprintf(f, "}");
+    fprintf(f, ",\"image_cache_bytes\":%lld}", (long long)recs[i].imageCacheBytes);
   }
   fprintf(f, "\n]}\n");
   return fclose(f) == 0;

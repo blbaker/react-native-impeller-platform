@@ -32,6 +32,14 @@ void StoreBytes(const std::string& uri, const std::string& body) {
 }
 }  // namespace
 
+// FP-33: a low-memory purge also drops the kept encoded bodies (a later size re-GETs).
+void ClearFetchedBodies() {
+  std::lock_guard<std::mutex> lock(gMutex);
+  gBytes.clear();
+  gBytesOrder.clear();
+  gBytesTotal = 0;
+}
+
 FetchResult FetchShared(const std::string& uri, const Headers& headers) {
   std::shared_ptr<std::promise<FetchResult>> mine;
   std::shared_future<FetchResult> theirs;

@@ -25,6 +25,7 @@ int EnvInt(const char* name);
 // are kept (32 MB cap) so another size decodes without a second GET.
 FetchResult FetchShared(const std::string& uri, const Headers& headers);
 bool CachedBody(const std::string& uri, std::string* out);
+void ClearFetchedBodies();
 void FetchBracket(std::function<void()>* begin, std::function<void()>* end);
 
 }  // namespace rni::image

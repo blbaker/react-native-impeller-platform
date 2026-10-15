@@ -57,6 +57,8 @@ file(GLOB rr_imagemanager_SRC      ${RR}/imagemanager/*.cpp)
 set(rr_imagemanager_cxx_SRC
   ${CMAKE_SOURCE_DIR}/fabric/platform/impeller/react/renderer/imagemanager/ImageManager.cpp
   ${CMAKE_SOURCE_DIR}/fabric/ImageStore.cpp
+  ${CMAKE_SOURCE_DIR}/fabric/ImageCache.cpp
+  ${CMAKE_SOURCE_DIR}/fabric/ImageBudget.cpp
   # FP-16: IO pool, streaming PNG rows, area downscale
   ${CMAKE_SOURCE_DIR}/fabric/ImageSource.cpp
   ${CMAKE_SOURCE_DIR}/fabric/ImageFetch.cpp

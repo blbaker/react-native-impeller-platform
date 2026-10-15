@@ -20,19 +20,38 @@ void ReleaseDecoded(void* userData) {
 
 ImageTextures::~ImageTextures() {
   for (auto& [d, e] : entries_) {
-    if (e.texture) ImpellerTextureRelease(e.texture);
+    if (e.texture) ImpellerTextureRelease(e.texture), image::AddLiveTextures(-1);
+  }
+}
+
+void ImageTextures::Sweep() {
+  const uint64_t epoch = image::EvictionEpoch();
+  if (epoch == sweptEpoch_) return;
+  sweptEpoch_ = epoch;
+  for (auto it = entries_.begin(); it != entries_.end();) {
+    if (image::IsResident(it->first)) {
+      ++it;
+      continue;
+    }
+    if (it->second.texture) ImpellerTextureRelease(it->second.texture), image::AddLiveTextures(-1);
+    it = entries_.erase(it);
   }
 }
 
 ImpellerTexture ImageTextures::Get(ImpellerContext context, const std::string& uri, float boxW,
                                    float boxH, ImageTextureInfo* info) {
   if (!context) return nullptr;
+  Sweep();
   // FP-16: the cached decode for this box's size bucket (or the best other
   // size of the URI). A load in flight paints nothing yet; its completion
   // wakes the frame loop. Only a local source nobody requested (defaultSource)
   // is decoded here, synchronously, like RN iOS loads its default image.
   image::Lookup f = image::Find(uri, boxW, boxH);
-  if (!f.image && !f.failed && !f.pending) f.image = image::DecodeNow(uri, boxW, boxH);
+  if (!f.image && !f.failed && !f.pending) {
+    // FP-33: a source the budget or a purge dropped is decoded again off-thread; the wake repaints.
+    if (f.evicted) image::Reload(uri, boxW, boxH, reloadWake_);
+    else f.image = image::DecodeNow(uri, boxW, boxH);
+  }
   if (!f.image) return nullptr;
   auto it = entries_.find(f.image.get());
   if (it == entries_.end()) {
@@ -47,6 +66,7 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, const std::string& u
       e.texture = ImpellerTextureCreateWithContentsNew(
           context, &desc, &mapping, new std::shared_ptr<const image::Decoded>(d));
     }
+    if (e.texture) image::AddLiveTextures(1);
     static const bool log = std::getenv("RNI_IMAGE_LOG") != nullptr;
     if (log) std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f\n", d->width,
                          d->height, d->srcWidth, d->srcHeight, boxW, boxH);

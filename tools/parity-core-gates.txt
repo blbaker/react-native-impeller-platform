@@ -25,3 +25,4 @@ tools/ci-gl-validation.sh     # FP-05 zero KHR_debug errors
 tools/ci-native-anim-jsstall.sh  # FP-10 native animation survives JS stalls
 tools/ci-vsync.sh             # FP-11 vsync pacing, one frame per vsync, idle = 0 presents
 tools/ci-typography-threads.sh  # FP-12 measure == paint, one typography context per thread (TSan)
+tools/ci-memory-budget.sh  # FP-33 image cache budget, LRU, low-memory purge (about 5 s)

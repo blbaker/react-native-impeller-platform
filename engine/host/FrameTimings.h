@@ -42,6 +42,10 @@ class FrameTimingsRecorder {
   void RecordRasterEnd() { Record(State::kRasterEnd); }
   void RecordPresent() { Record(State::kPresent); }
 
+  // FP-33: decoded-image cache size at the present, reported per frame.
+  void SetImageCacheBytes(int64_t bytes) { imageCacheBytes_ = bytes; }
+  int64_t imageCacheBytes() const { return imageCacheBytes_; }
+
   uint64_t frameNumber() const { return frameNumber_; }
   State state() const { return state_; }
   int errors() const { return errors_; }
@@ -54,6 +58,7 @@ class FrameTimingsRecorder {
   const uint64_t frameNumber_;
   State state_ = State::kUninitialized;
   int errors_ = 0;
+  int64_t imageCacheBytes_ = 0;
   int64_t stamps_[kStampCount];
 };
 
@@ -75,6 +80,7 @@ class FrameTimings {
   struct Rec {
     uint64_t frame;
     int64_t us[FrameTimingsRecorder::kStampCount];
+    int64_t imageCacheBytes;
   };
   std::vector<Rec> Snapshot() const;
 

@@ -1,5 +1,6 @@
 #include "scenegraph/SceneGraph.h"
 #include "scenegraph/DynamicNumber.h"
+#include "fabric/ImageStore.h"
 
 #include "scenegraph/CaretBlink.h"
 #include "scenegraph/CursorKinds.h"
@@ -828,7 +829,13 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     }
     {
       std::lock_guard<std::mutex> lock(imageDamage_->mutex);
-      if (!imageDamage_->wake) imageDamage_->wake = [this] { bumpVersion(); };
+      if (!imageDamage_->wake) {
+        imageDamage_->wake = [this] { bumpVersion(); };
+        // FP-33: a purge or a reload of an evicted source repaints through the same sink.
+        auto fire = [sink = imageDamage_] { sink->fire(); };
+        imageTextures_.SetReloadWake(fire);
+        rni::image::SetPurgeListener(fire);
+      }
     }
     if (!node.imgEvents) node.imgEvents = std::make_shared<rni::ImageEventBinding>();
     node.imgEvents->update(view, imageDamage_);
@@ -3933,6 +3940,7 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   // Rebuild the gradient registry before walking the tree: a def may be
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
+  imageTextures_.Sweep();  // FP-33
   gradients_.clear();
   svgDefs_.clear();
   for (const auto& [tag, n] : nodes_) {

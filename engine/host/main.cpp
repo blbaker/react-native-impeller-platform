@@ -77,6 +77,7 @@
 #include "base/GlValidation.h"
 #include "base/ContextFlags.h"
 #include "fabric/ImageStore.h"
+#include "host/MemoryPressure.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
@@ -154,6 +155,9 @@ void Usage() {
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
           "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
+          "                   [--image-cache-mb N]  decoded-image LRU budget in MB;\n"
+          "                     default 100 (Flutter ImageCache). Env: RNI_IMAGE_CACHE_MB,\n"
+          "                     RNI_IMAGE_CACHE_FLOOR_MB (low-memory purge floor, default 0) (FP-33)\n"
           "                   [--sdf-aa on|off]  analytic SDF AA for circles, ovals,\n"
           "                     rects, rounded rects (Impeller Flags::use_sdfs, SDK\n"
           "                     patch 0003). Default off (FP-22)\n"
@@ -764,6 +768,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       scheduler.DidPresent(paintsTotal + 1);
     }
     frame->RecordPresent();
+    frame->SetImageCacheBytes(rni::image::CacheBytes());  // FP-33
     frameTimings.Commit(std::move(frame));
     TRACE_COUNTER("presents", paintsTotal + 1);
     // ⛔ COUNTED HERE, AT THE PRESENT, NOT AT THE CALLER.
@@ -775,6 +780,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // the M2 mutant in tools/mutation-verify-resize.sh does.
     ++paintsTotal;
     rni::glvalidation::OnFrame();  // FP-05 test hook
+    rni::image::OnFrame();         // FP-33 test hook (RNI_TEST_LOW_MEMORY_AT_FRAME)
     // ⛔ firstFramePresented: THE APP'S "YOU ARE ON SCREEN NOW" SIGNAL.
     // Emitted once, after the first present returns, so a launch animation
     // can start its clock from the moment pixels reach the window instead of
@@ -1834,6 +1840,10 @@ int main(int argc, char** argv) {
   rni::installFeatureFlags();
   rni::trace::SetThreadName("main");
   rni::sanitize::RunTestHooks();
+  // FP-33: env defaults for hosts without argv (Android); --image-cache-mb below overrides.
+  if (const char* e = std::getenv("RNI_IMAGE_CACHE_MB")) rni::image::SetCacheBudget((int64_t)(atof(e) * 1048576.0));
+  if (const char* e = std::getenv("RNI_IMAGE_CACHE_FLOOR_MB")) rni::image::SetCacheFloor((int64_t)(atof(e) * 1048576.0));
+  rni::memorypressure::Start();
 #if RNI_FUZZ
   // FP-52: fuzz builds only. After the feature flags, which props parsing reads.
   if (rni::fuzz::Requested(argc, argv)) return rni::fuzz::Main(argc, argv);
@@ -2486,6 +2496,14 @@ int main(int argc, char** argv) {
         return 2;
       }
     }
+    else if (a == "--image-cache-mb") {
+      const double mb = atof(next("--image-cache-mb").c_str());
+      if (mb < 0) {
+        fprintf(stderr, "rn-impeller: --image-cache-mb must be >= 0\n");
+        return 2;
+      }
+      rni::image::SetCacheBudget((int64_t)(mb * 1048576.0));
+    }
     else if (a == "--sdf-aa") {
       std::string v = next("--sdf-aa");
       if (v != "on" && v != "off") {
@@ -3064,6 +3082,10 @@ int main(int argc, char** argv) {
         hf->RecordBuildStart();
         host.pumpNativeAnimated();
         host.waitForJsIdle(5000);
+        // FP-33: decodes finish off-thread. Their load events are queued to JS before WaitIdle
+        // returns, so the NEXT frame's waitForJsIdle mounts what they trigger, and every frame
+        // paints the images its predecessor's events mounted (and reloads of purged images).
+        rni::image::WaitIdle(5000);
 
         TRACE_EVENT0("frame", "Frame");
         ImpellerDisplayListBuilder fb = ImpellerDisplayListBuilderNew(nullptr);
@@ -3092,7 +3114,9 @@ int main(int argc, char** argv) {
         }
         ++headlessPresents;
         rni::glvalidation::OnFrame();  // FP-05 test hook
+        hf->SetImageCacheBytes(rni::image::CacheBytes());  // FP-33
         headlessTimings.Commit(std::move(hf));
+        rni::image::OnFrame();  // FP-33 test hook
 
         // Frame-0 capture, taken AFTER the first real paint so it is a
         // rendered frame and not an uninitialised buffer. This plus the final
@@ -3180,6 +3204,7 @@ int main(int argc, char** argv) {
       ImpellerDisplayListRelease(dl);
       finalFrame->RecordRasterEnd();
       finalFrame->RecordPresent();
+      finalFrame->SetImageCacheBytes(rni::image::CacheBytes());  // FP-33
       ++headlessPresents;
       headlessTimings.Commit(std::move(finalFrame));
     } else {

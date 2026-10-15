@@ -246,6 +246,7 @@ add_executable(rn-impeller
   host/FrameTimings.cpp
   host/FrameScheduler.cpp
   host/AnimRowProbe.cpp
+  host/MemoryPressure.cpp
   base/Trace.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
