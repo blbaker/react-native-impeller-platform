@@ -35,7 +35,8 @@ class LoadObserver final : public react::ImageResponseObserver {
     react::ImageSource loaded = source_;
     loaded.scale = 1;
     if (auto d = std::static_pointer_cast<const image::Decoded>(response.getImage())) {
-      loaded.size = {(react::Float)d->width, (react::Float)d->height};
+      // FP-16: the source size, not the (box-sized) decode
+      loaded.size = {(react::Float)d->srcWidth, (react::Float)d->srcHeight};
     }
     emitter_->onLoad(loaded);
     emitter_->onLoadEnd();

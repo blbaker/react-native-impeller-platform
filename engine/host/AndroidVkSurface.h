@@ -58,14 +58,44 @@ class AndroidVkSurface {
   int width() const { return width_; }
   int height() const { return height_; }
 
-  // Acquires the next drawable. Returns nullptr when the swapchain is out of
-  // date (the caller should re-attach); the returned surface is owned by the
-  // caller and must be released after Present.
+  // FP-24: acquires the next drawable, first pushing the live ANativeWindow
+  // size to the swapchain (Impeller recreates it on the next acquire when the
+  // size differs, KHRSwapchainVK::AcquireNextDrawable). If Impeller still
+  // returns no drawable, the VkSurfaceKHR + swapchain are rebuilt on the same
+  // window, at most kMaxRecreateAttempts times (khr_swapchain_vk.cc
+  // kMaxResizeAttempts). Returns nullptr only after that; the surface is owned
+  // by the caller and must be released after Present.
   ImpellerSurface AcquireNext();
   void Present(ImpellerSurface surface);
 
+  struct Stats {
+    int resizes = 0;           // sizes pushed to the swapchain after the first
+    int recreates = 0;         // full VkSurfaceKHR + swapchain rebuilds
+    int acquire_failures = 0;  // AcquireNext calls that returned nullptr
+    int drawable_width = 0;    // read back from the last acquired surface
+    int drawable_height = 0;
+  };
+  const Stats& stats() const { return stats_; }
+
+  static constexpr int kMaxRecreateAttempts = 3;
+
+  // FP-25 backend selection (AndroidSurface) runs these before Init:
+  // dlopen libvulkan.so (false = no Vulkan loader), resolve a global or
+  // instance-level entry point, then create the Impeller context alone.
+  bool LoadLoader();
+  static void* InstanceProc(void* vk_instance, const char* name);
+  bool CreateContext() { return EnsureContext(); }
+  // RNI_FORCE_VULKAN_INIT_FAIL: Impeller's vkCreateInstance returns
+  // VK_ERROR_INITIALIZATION_FAILED, so ImpellerContextCreateVulkanNew really
+  // fails.
+  void set_force_init_failure(bool v) { force_init_failure_ = v; }
+
  private:
   bool EnsureContext();
+  bool CreateImpellerContext();
+  bool CreateSwapchain();
+  void ReleaseSwapchain();
+  void SyncSize();
 
   void* vulkan_lib_{nullptr};        // dlopen handle for libvulkan.so
   void* vk_instance_{nullptr};       // borrowed from Impeller, not owned
@@ -75,6 +105,10 @@ class AndroidVkSurface {
   ImpellerVulkanSwapchain swapchain_{nullptr};
   int width_{0};
   int height_{0};
+  int swapchain_width_{0};   // last size pushed with SetSize, 0 = never
+  int swapchain_height_{0};
+  Stats stats_;
+  bool force_init_failure_{false};
 };
 
 }  // namespace rni

@@ -1,0 +1,186 @@
+diff --git a/engine/src/flutter/impeller/toolkit/interop/context.h b/engine/src/flutter/impeller/toolkit/interop/context.h
+--- a/engine/src/flutter/impeller/toolkit/interop/context.h
++++ b/engine/src/flutter/impeller/toolkit/interop/context.h
+@@ -5,6 +5,7 @@
+ #ifndef FLUTTER_IMPELLER_TOOLKIT_INTEROP_CONTEXT_H_
+ #define FLUTTER_IMPELLER_TOOLKIT_INTEROP_CONTEXT_H_
+ 
++#include "impeller/base/flags.h"
+ #include "impeller/display_list/aiks_context.h"
+ #include "impeller/renderer/context.h"
+ #include "impeller/toolkit/interop/impeller.h"
+@@ -35,6 +36,12 @@
+ 
+   bool IsVulkan() const;
+ 
++  // RNI patch 0003: the impeller::Flags every backend Create() uses for the
++  // contexts made after the call (upstream hard-codes Flags{}).
++  static void SetDefaultFlags(const Flags& flags);
++
++  static Flags GetDefaultFlags();
++
+  protected:
+   explicit Context(std::shared_ptr<impeller::Context> context);
+ 
+diff --git a/engine/src/flutter/impeller/toolkit/interop/context.cc b/engine/src/flutter/impeller/toolkit/interop/context.cc
+--- a/engine/src/flutter/impeller/toolkit/interop/context.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/context.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "impeller/toolkit/interop/context.h"
+ 
++#include <mutex>
++
+ #include "impeller/typographer/backends/skia/typographer_context_skia.h"
+ 
+ namespace impeller::interop {
+@@ -13,6 +15,21 @@
+ 
+ Context::~Context() = default;
+ 
++namespace {
++std::mutex gDefaultFlagsMutex;
++Flags gDefaultFlags;
++}  // namespace
++
++void Context::SetDefaultFlags(const Flags& flags) {
++  std::scoped_lock lock(gDefaultFlagsMutex);
++  gDefaultFlags = flags;
++}
++
++Flags Context::GetDefaultFlags() {
++  std::scoped_lock lock(gDefaultFlagsMutex);
++  return gDefaultFlags;
++}
++
+ bool Context::IsValid() const {
+   return context_.IsValid();
+ }
+diff --git a/engine/src/flutter/impeller/toolkit/interop/backend/gles/context_gles.cc b/engine/src/flutter/impeller/toolkit/interop/backend/gles/context_gles.cc
+--- a/engine/src/flutter/impeller/toolkit/interop/backend/gles/context_gles.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/backend/gles/context_gles.cc
+@@ -28,7 +28,7 @@
+           impeller_framebuffer_blend_shaders_gles_length),
+   };
+   auto impeller_context = impeller::ContextGLES::Create(
+-      Flags{}, std::move(proc_table), shader_mappings, false);
++      Context::GetDefaultFlags(), std::move(proc_table), shader_mappings, false);
+   if (!impeller_context) {
+     VALIDATION_LOG << "Could not create Impeller context.";
+     return {};
+diff --git a/engine/src/flutter/impeller/toolkit/interop/backend/metal/context_mtl.mm b/engine/src/flutter/impeller/toolkit/interop/backend/metal/context_mtl.mm
+--- a/engine/src/flutter/impeller/toolkit/interop/backend/metal/context_mtl.mm
++++ b/engine/src/flutter/impeller/toolkit/interop/backend/metal/context_mtl.mm
+@@ -28,7 +28,8 @@
+ 
+ ScopedObject<Context> ContextMTL::Create() {
+   auto impeller_context =
+-      impeller::ContextMTL::Create(Flags{}, CreateShaderLibraryMappings(),  //
++      impeller::ContextMTL::Create(Context::GetDefaultFlags(),          //
++                                   CreateShaderLibraryMappings(),       //
+                                    std::make_shared<fml::SyncSwitch>(),     //
+                                    "Impeller"                               //
+       );
+diff --git a/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/context_vk.cc b/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/context_vk.cc
+--- a/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/context_vk.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/backend/vulkan/context_vk.cc
+@@ -52,7 +52,7 @@
+   impeller_settings.enable_validation = settings.enable_validation;
+   sContextVKProcAddressCallback = settings.instance_proc_address_callback;
+   impeller_settings.proc_address_callback = ContextVKGetInstanceProcAddress;
+-  impeller_settings.flags = impeller::Flags{};
++  impeller_settings.flags = Context::GetDefaultFlags();
+   auto impeller_context =
+       impeller::ContextVK::Create(std::move(impeller_settings));
+   sContextVKProcAddressCallback = nullptr;
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.h b/engine/src/flutter/impeller/toolkit/interop/impeller.h
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.h
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.h
+@@ -741,6 +741,39 @@
+ IMPELLER_EXPORT IMPELLER_NODISCARD ImpellerContext IMPELLER_NULLABLE
+ ImpellerContextCreateMetalNew(uint32_t version);
+ 
++// react-native-impeller extension (patch 0003): impeller::Flags for new
++// contexts. Not part of upstream Impeller; test with #ifdef.
++#define IMPELLER_RNI_CONTEXT_FLAGS 1
++
++/// Bits of the `flags` argument of `ImpellerContextSetDefaultFlags`.
++typedef enum ImpellerContextFlagBits {
++  /// impeller::Flags::use_sdfs: analytic SDF anti-aliasing for circles,
++  /// ovals, rects, rounded rects and lines (Canvas::Draw*).
++  kImpellerContextFlagUseSDFs = 1u << 0,
++} ImpellerContextFlagBits;
++
++//------------------------------------------------------------------------------
++/// @brief      Set the flags (`ImpellerContextFlagBits`) that every context
++///             created AFTER this call is built with, on any backend.
++///             Contexts that already exist keep their flags. Thread-safe.
++///             Unknown bits are ignored.
++///
++IMPELLER_EXPORT
++void ImpellerContextSetDefaultFlags(uint32_t flags);
++
++//------------------------------------------------------------------------------
++/// @brief      The flags `ImpellerContextSetDefaultFlags` last set (0 if never).
++///
++IMPELLER_EXPORT
++uint32_t ImpellerContextGetDefaultFlags(void);
++
++//------------------------------------------------------------------------------
++/// @brief      The flags the context was actually created with, read back from
++///             the renderer context (`ImpellerContextFlagBits`).
++///
++IMPELLER_EXPORT
++uint32_t ImpellerContextGetFlags(ImpellerContext IMPELLER_NONNULL context);
++
+ //------------------------------------------------------------------------------
+ /// @brief      Create a Vulkan context using the provided Vulkan Settings.
+ ///
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.cc b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+@@ -167,6 +167,28 @@
+ #endif  // IMPELLER_ENABLE_VULKAN
+ }
+ 
++static uint32_t FlagsToBits(const Flags& flags) {
++  return flags.use_sdfs ? kImpellerContextFlagUseSDFs : 0u;
++}
++
++IMPELLER_EXTERN_C
++void ImpellerContextSetDefaultFlags(uint32_t flags) {
++  Flags impeller_flags;
++  impeller_flags.use_sdfs = (flags & kImpellerContextFlagUseSDFs) != 0;
++  Context::SetDefaultFlags(impeller_flags);
++}
++
++IMPELLER_EXTERN_C
++uint32_t ImpellerContextGetDefaultFlags() {
++  return FlagsToBits(Context::GetDefaultFlags());
++}
++
++IMPELLER_EXTERN_C
++uint32_t ImpellerContextGetFlags(ImpellerContext context) {
++  auto impeller_context = GetPeer(context)->GetContext();
++  return impeller_context ? FlagsToBits(impeller_context->GetFlags()) : 0u;
++}
++
+ IMPELLER_EXTERN_C
+ void ImpellerContextRetain(ImpellerContext context) {
+   ObjectBase::SafeRetain(context);
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.hpp b/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
+@@ -61,9 +61,12 @@
+   PROC(ImpellerContextCreateMetalNew)                             \
+   PROC(ImpellerContextCreateOpenGLESNew)                          \
+   PROC(ImpellerContextCreateVulkanNew)                            \
++  PROC(ImpellerContextGetDefaultFlags)                            \
++  PROC(ImpellerContextGetFlags)                                   \
+   PROC(ImpellerContextGetVulkanInfo)                              \
+   PROC(ImpellerContextRelease)                                    \
+   PROC(ImpellerContextRetain)                                     \
++  PROC(ImpellerContextSetDefaultFlags)                            \
+   PROC(ImpellerDisplayListBuilderClipOval)                        \
+   PROC(ImpellerDisplayListBuilderClipPath)                        \
+   PROC(ImpellerDisplayListBuilderClipRect)                        \
