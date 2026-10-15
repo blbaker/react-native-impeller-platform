@@ -1,3 +1,4 @@
+#include "base/Trace.h"
 #include <algorithm>
 #include <cmath>
 #include "fabric/FabricHost.h"
@@ -121,6 +122,7 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
   void schedulerDidFinishTransaction(
       const std::shared_ptr<const react::MountingCoordinator>&) override {
     // Android-only observation hook; we pull in ShouldRender below.
+    TRACE_EVENT0("fabric", "JsCommit");
   }
 
   void schedulerShouldRenderTransactions(
@@ -135,6 +137,7 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
     // pulls exactly once.
     if (auto transaction = mountingCoordinator->pullTransaction()) {
       if (sceneGraph_ != nullptr) {
+        TRACE_EVENT0("fabric", "MountTransaction");
         sceneGraph_->applyMutations(transaction->getMutations(), logMutations_);
       }
     }

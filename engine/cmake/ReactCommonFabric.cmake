@@ -162,7 +162,7 @@ target_include_directories(reactcommon_fabric SYSTEM PUBLIC
 # expecting the top-level imagemanager dir on the path (upstream adds it in the
 # pod/gradle build). PRIVATE so it cannot shadow anything downstream.
 target_include_directories(reactcommon_fabric PRIVATE ${RR}/imagemanager)
-target_include_directories(reactcommon_fabric PRIVATE ${CMAKE_SOURCE_DIR}/fabric ${CMAKE_SOURCE_DIR}/third_party/stb)
+target_include_directories(reactcommon_fabric PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/fabric ${CMAKE_SOURCE_DIR}/third_party/stb)
 
 # renderer/animated/ includes the codegen'd spec as
 # `<FBReactNativeSpec/FBReactNativeSpecJSI.h>` — i.e. via the PARENT directory —

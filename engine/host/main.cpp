@@ -67,6 +67,7 @@
 #include <process.h>
 #endif
 #include "host/FrameTimings.h"
+#include "base/Trace.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
@@ -147,7 +148,10 @@ void Usage() {
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
           "                   [--frame-timings-out <file.json>]  one record per\n"
           "                     presented frame (FP-01)\n"
-          "                   [--title <string>]  (windowed) window title, also\n"
+          "                   [--trace-out <file.json>]  Chrome/Perfetto trace of\n"
+          "                     spans + counters (FP-02)\n"
+          "                   [--trace-bench N]  print the off-mode cost of one span\n"
+          "                     and exit\n"          "                   [--title <string>]  (windowed) window title, also\n"
           "                     the macOS Window menu entry. Default\n"
           "                     \"React Native (Impeller)\".\n"
           "                   [--screenshot-first <file.ppm>]\n"
@@ -435,6 +439,47 @@ static std::string gWindowedTypeSpec;
 // FP-01: --frame-timings-out <file.json>. File scope for the same reason.
 static std::string gFrameTimingsOut;
 
+// FP-02: --trace-out <file.json>. Written once, at the end of the run.
+static std::string gTraceOut;
+
+static void FinishTrace() {
+  const uint64_t events = rni::trace::EventCount();
+  if (gTraceOut.empty()) {
+    printf("rn-impeller: trace enabled=%d events=%llu\n", rni::trace::Enabled() ? 1 : 0,
+           (unsigned long long)events);
+    return;
+  }
+  const bool ok = rni::trace::Stop();
+  printf("rn-impeller: trace enabled=0 events=%llu written=%d out=%s\n",
+         (unsigned long long)events, ok ? 1 : 0, gTraceOut.c_str());
+}
+
+// FP-02: cost of a span while tracing is OFF, measured in-process through the
+// same macro the engine uses, against an empty loop with the same barrier.
+static int RunTraceBench(long iterations) {
+  using Clock = std::chrono::steady_clock;
+  auto timeLoop = [&](bool withSpan) {
+    const auto t0 = Clock::now();
+    for (long i = 0; i < iterations; ++i) {
+      if (withSpan) {
+        TRACE_EVENT0("bench", "span");
+        asm volatile("" ::: "memory");
+      } else {
+        asm volatile("" ::: "memory");
+      }
+    }
+    return std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
+  };
+  timeLoop(true);  // warm up
+  double best = 1e30;
+  for (int rep = 0; rep < 5; ++rep) {
+    const double span = timeLoop(true), base = timeLoop(false);
+    best = std::min(best, std::max(0.0, span - base) / (double)iterations);
+  }
+  printf("rn-impeller: trace_bench enabled=%d ns_per_span=%.3f\n", rni::trace::Enabled() ? 1 : 0, best);
+  return 0;
+}
+
 // Exit report of both loops: the summary line always, the JSON when asked.
 static void FinishFrameTimings(const rni::FrameTimings& timings) {
   timings.PrintSummary(stdout);
@@ -651,12 +696,22 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // With this scope live, that callback is dropped instead of starting a
     // second paint on top of this one.
     rni::GlfwSurface::PaintScope paintScope(&surface);
+    TRACE_EVENT0("frame", "Frame");
     ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
-    int painted = sceneGraph.paint(builder, pointScale);
-    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
+    int painted;
+    {
+      TRACE_EVENT0("paint", "PaintWalk");
+      painted = sceneGraph.paint(builder, pointScale);
+    }
+    ImpellerDisplayList dl;
+    {
+      TRACE_EVENT0("paint", "DisplayListBuild");
+      dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
+    }
     frame->RecordBuildEnd();
     frame->RecordRasterStart();
     if (dl) {
+      TRACE_EVENT0("raster", "Draw");
       surface.drawDisplayList(dl);
       ImpellerDisplayListRelease(dl);
     }
@@ -666,9 +721,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       grabOk = surface.readPixels(&grabPx);
       grabArmed = false;
     }
-    surface.present();
+    {
+      TRACE_EVENT0("raster", "Present");
+      surface.present();
+    }
     frame->RecordPresent();
     frameTimings.Commit(std::move(frame));
+    TRACE_COUNTER("presents", paintsTotal + 1);
     // ⛔ COUNTED HERE, AT THE PRESENT, NOT AT THE CALLER.
     // refreshPaints is derived from this counter, so "a frame was painted
     // during the stall" is measured at the only place a frame actually
@@ -1677,6 +1736,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // FP-01: presents counted at surface.present(), independent of the recorder.
   printf("rn-impeller: presents=%d\n", paintsTotal);
   FinishFrameTimings(frameTimings);
+  FinishTrace();
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
   // a completely different failure from touch_downs=3 touch_hits=0 (clicks
@@ -1731,6 +1791,7 @@ int main(int argc, char** argv) {
   // MUST be first: ReactNativeFeatureFlags::override() throws once any flag has
   // been read, and plenty of construction paths read one.
   rni::installFeatureFlags();
+  rni::trace::SetThreadName("main");
 
   std::string bundlePath, appName, screenshot;
   std::string colorScheme = "light";
@@ -1891,6 +1952,10 @@ int main(int argc, char** argv) {
     else if (a == "--window") windowMode = true;
     else if (a == "--frames") frames = atoi(next("--frames").c_str());
     else if (a == "--frame-timings-out") gFrameTimingsOut = next("--frame-timings-out");
+    else if (a == "--trace-out") {
+      gTraceOut = next("--trace-out");
+      rni::trace::Start(gTraceOut);
+    } else if (a == "--trace-bench") return RunTraceBench(atol(next("--trace-bench").c_str()));
     // ── P12-01 idle-frame damage-skip flags ──────────────────────────────────
     //   --idle-skip           enable the dirty-frame skip + glfwWaitEventsTimeout
     //                         sleep (default OFF so every existing gate keeps its
@@ -2925,19 +2990,31 @@ int main(int argc, char** argv) {
         host.pumpNativeAnimated();
         host.waitForJsIdle(5000);
 
+        TRACE_EVENT0("frame", "Frame");
         ImpellerDisplayListBuilder fb = ImpellerDisplayListBuilderNew(nullptr);
-        sceneGraph.paint(fb, pointScale);
-        ImpellerDisplayList fdl =
-            ImpellerDisplayListBuilderCreateDisplayListNew(fb);
+        {
+          TRACE_EVENT0("paint", "PaintWalk");
+          sceneGraph.paint(fb, pointScale);
+        }
+        ImpellerDisplayList fdl;
+        {
+          TRACE_EVENT0("paint", "DisplayListBuild");
+          fdl = ImpellerDisplayListBuilderCreateDisplayListNew(fb);
+        }
         hf->RecordBuildEnd();
         hf->RecordRasterStart();
         if (fdl != nullptr) {
+          TRACE_EVENT0("raster", "Draw");
           surface.drawDisplayList(fdl);
           ImpellerDisplayListRelease(fdl);
         }
         ImpellerDisplayListBuilderRelease(fb);
         hf->RecordRasterEnd();
-        hf->RecordPresent();
+        {
+          // Headless has no swap; the readback below is its present.
+          TRACE_EVENT0("raster", "Present");
+          hf->RecordPresent();
+        }
         ++headlessPresents;
         headlessTimings.Commit(std::move(hf));
 
@@ -3035,6 +3112,7 @@ int main(int argc, char** argv) {
     ImpellerDisplayListBuilderRelease(builder);
     printf("rn-impeller: presents=%d\n", headlessPresents);
     FinishFrameTimings(headlessTimings);
+    FinishTrace();
   }
 
   std::vector<rni::Px> px;

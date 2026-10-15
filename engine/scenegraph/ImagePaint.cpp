@@ -1,4 +1,5 @@
 // A19 (SC-30): <Image> painting, see ImagePaint.h.
+#include "base/Trace.h"
 #include "scenegraph/ImagePaint.h"
 
 #include <algorithm>
@@ -31,6 +32,7 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, const std::string& u
       ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {d->width, d->height}, 1};
       // The mapping keeps the decoded pixels alive until Impeller has uploaded them.
       ImpellerMapping mapping = {d->rgba.data(), (uint64_t)d->rgba.size(), &ReleaseDecoded};
+      TRACE_EVENT0("image", "ImageUpload");
       e.texture = ImpellerTextureCreateWithContentsNew(
           context, &desc, &mapping, new std::shared_ptr<const image::Decoded>(d));
       e.width = d->width;

@@ -1,3 +1,4 @@
+#include "base/Trace.h"
 #include "text/ImpellerTextLayoutManager.h"
 
 #include <react/renderer/attributedstring/AttributedString.h>
@@ -50,6 +51,7 @@ react::TextMeasurement ImpellerTextLayoutManager::measure(
     const react::ParagraphAttributes& paragraphAttributes,
     const react::TextLayoutContext& /*layoutContext*/,
     const react::LayoutConstraints& layoutConstraints) const {
+  TRACE_EVENT0("text", "TextMeasure");
   react::TextMeasurement::Attachments attachments;
   const auto& attributedString = attributedStringBox.getValue();
 

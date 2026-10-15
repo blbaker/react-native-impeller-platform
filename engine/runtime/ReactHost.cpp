@@ -1,4 +1,5 @@
 #include "runtime/ReactHost.h"
+#include "base/Trace.h"
 #include "runtime/InspectorHost.h"
 
 #include <ReactCommon/TurboModuleBinding.h>
@@ -501,6 +502,7 @@ void ReactHost::pumpNativeAnimated() {
   // same timestamp, the delta is 0, and the animation holds its start value
   // for one extra frame on every restart.
   advanceAnimationClock();
+  TRACE_EVENT0("animated", "NativeAnimatedPump");
   // Hop to the JS thread: tick() walks the animated node graph and touches the
   // shadow tree and JSI, which is JS-thread work in this engine.
   scheduler->scheduleWork(

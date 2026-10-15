@@ -1,4 +1,5 @@
 #include "runtime/JsThread.h"
+#include "base/Trace.h"
 
 #include <cstdio>
 #include <future>
@@ -22,6 +23,7 @@ JsThread::~JsThread() {
 }
 
 void JsThread::loop() {
+  rni::trace::SetThreadName("js");
   while (true) {
     std::function<void()> task;
     std::function<void(uint32_t)> fire;

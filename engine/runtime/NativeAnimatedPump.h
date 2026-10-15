@@ -40,6 +40,7 @@
 // shadow-tree + JSI work, which is JS-thread work in this engine.
 #pragma once
 
+#include "base/Trace.h"
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -78,6 +79,7 @@ class NativeAnimatedPump {
       cb = onRender_;
     }
     if (cb) {
+      TRACE_EVENT0("animated", "NativeAnimatedTick");
       const auto t0 = std::chrono::steady_clock::now();
       cb();
       tickNanos_.fetch_add(
