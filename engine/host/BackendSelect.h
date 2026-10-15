@@ -1,7 +1,7 @@
 // FP-21: which GPU backend a run gets. darwin windowed defaults to native Metal
 // (Flutter macOS/iOS render with Metal only: ios_surface_metal_impeller.mm);
-// darwin headless stays on ANGLE GLES until SDK patch 0004 adds a Metal
-// offscreen surface (FP-23). linux/win32 are GLES (Flutter: fl_engine.cc,
+// darwin headless defaults to ANGLE GLES; `--headless --backend metal` renders
+// into an offscreen MTLTexture (FP-23, SDK patch 0005). linux/win32 are GLES (Flutter: fl_engine.cc,
 // windows/egl/manager.cc).
 #pragma once
 

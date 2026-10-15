@@ -2884,6 +2884,9 @@ int main(int argc, char** argv) {
 
   PlatformSurface surface;
   std::string error;
+#if !defined(_WIN32)
+  surface.setMetal(gGpuBackend == rni::GpuBackend::kMetal);  // FP-23: offscreen MTLTexture
+#endif
   if (!surface.init(width, height, &error)) {
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;

@@ -31,3 +31,4 @@ tools/ci-raster-thread.sh     # FP-15 raster thread: stall still presents, 0 tor
 tools/ci-partial-repaint.sh    # FP-18 partial repaint: <= 5% per spinner frame, pixel-identical to full, 0.7 rule
 tools/ci-backend-agnostic.sh  # FP-20 no GL above the backend, pixels == pre-pass, metal/vulkan policy: 0 GL names, no supersample
 tools/ci-metal.sh             # FP-21 Metal: refused off darwin, gles default (darwin arms run via parity-mac.sh)
+tools/ci-metal-headless.sh    # FP-23 headless Metal: refused off darwin, headless gles default (darwin arms via parity-mac.sh)

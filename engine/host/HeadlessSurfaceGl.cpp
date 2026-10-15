@@ -35,11 +35,17 @@ HeadlessSurface::~HeadlessSurface() {
   }
   if (surface_) ImpellerSurfaceRelease(surface_);
   if (context_) ImpellerContextRelease(context_);
+#if RNI_HEADLESS_METAL
+  releaseMetal();  // the texture outlives the surface that wraps it
+#endif
 }
 
 bool HeadlessSurface::init(int width, int height, std::string* error) {
   width_ = width;
   height_ = height;
+#if RNI_HEADLESS_METAL
+  if (metalRequested_) return initMetal(error);  // FP-23
+#endif
 
   auto fail = [&](const char* msg) {
     if (error) *error = msg;
@@ -264,12 +270,18 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
 bool HeadlessSurface::drawDisplayList(ImpellerDisplayList dl) {
   if (!surface_) return false;  // degraded run: no drawable
   if (!ImpellerSurfaceDrawDisplayList(surface_, dl)) return false;
+#if RNI_HEADLESS_METAL
+  if (metalTexture_) return true;  // readPixelsMetal waits on Impeller's queue
+#endif
   glFinish();
   return true;
 }
 
 bool HeadlessSurface::readPixels(std::vector<Px>* out) {
   if (!surface_) return false;  // degraded run: nothing was drawn
+#if RNI_HEADLESS_METAL
+  if (metalTexture_) return readPixelsMetal(out);
+#endif
   std::vector<Px> raw((size_t)width_ * height_);
   glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
   glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());

@@ -3,6 +3,8 @@
 
 #include <cstdio>
 
+#include "host/HeadlessSurface.h"  // RNI_HEADLESS_METAL (FP-23)
+
 namespace rni {
 
 bool ResolveGpuBackend(bool window, bool given, GpuBackend* backend, std::string* error) {
@@ -17,13 +19,15 @@ bool ResolveGpuBackend(bool window, bool given, GpuBackend* backend, std::string
     return false;
   } else if (*backend == GpuBackend::kMetal) {
 #if !defined(__APPLE__) || !RNI_WITH_WINDOW
-    *error = "--backend metal is darwin-only (windowed)";
+    *error = "--backend metal is darwin-only";
     return false;
 #else
+#if !RNI_HEADLESS_METAL
     if (!window) {
-      *error = "--backend metal is windowed-only until FP-23 (headless darwin renders through ANGLE gles)";
+      *error = "--backend metal headless needs SDK patch 0005 (ImpellerSurfaceReadPixels); this SDK lacks it";
       return false;
     }
+#endif
 #endif
   }
   std::printf("rn-impeller: backend_select backend=%s given=%d window=%d\n", GpuBackendName(*backend),

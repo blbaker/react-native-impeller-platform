@@ -88,7 +88,7 @@ mutate "$SS" '  ImpellerDisplayListBuilderTranslate(b, 0, (float)dstH);
 run M4 'BACKEND_AGNOSTIC FAIL P pixels differ from the pre-pass binary: [a-z-]+-ss4'
 
 echo "== M5: --backend metal accepted =="
-mutate "$SEL" '    *error = "--backend metal is darwin-only (windowed)";
+mutate "$SEL" '    *error = "--backend metal is darwin-only";
     return false;' \
 '    (void)error;  // MUTANT M5: metal accepted off darwin'
 run M5 'BACKEND_AGNOSTIC FAIL B --backend metal was accepted'

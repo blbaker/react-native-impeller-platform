@@ -275,6 +275,8 @@ add_executable(rn-impeller
   # FP-21: native Metal window backend (CAMetalLayer + ImpellerContextCreateMetalNew).
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/MetalSurface.mm>
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceMetal.cpp>
+  # FP-23: headless darwin on Metal (offscreen MTLTexture, SDK patch 0005).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   runtime/InspectorHost.cpp
@@ -444,6 +446,7 @@ elseif(RNI_WITH_WINDOW)
       "-framework Metal")
     # MetalSurface.mm holds strong ObjC members in a C++ struct: ARC only.
     set_source_files_properties("${CMAKE_SOURCE_DIR}/host/MetalSurface.mm"
+      "${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm"
       PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   else()
     set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")

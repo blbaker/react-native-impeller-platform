@@ -12,6 +12,16 @@
 #include "host/Pixel.h"
 #include "impeller.h"
 
+// FP-23: darwin headless can render on native Metal into an offscreen
+// MTLTexture (SDK patch 0005: ImpellerSurfaceCreateWrappedMetalTextureNew +
+// ImpellerSurfaceReadPixels). Needs the Metal frameworks the windowed darwin
+// build links, and the patched SDK header.
+#if defined(__APPLE__) && defined(RNI_WITH_WINDOW) && defined(IMPELLER_RNI_SURFACE_READBACK)
+#define RNI_HEADLESS_METAL 1
+#else
+#define RNI_HEADLESS_METAL 0
+#endif
+
 namespace rni {
 
 class HeadlessSurface {
@@ -21,6 +31,10 @@ class HeadlessSurface {
   // Returns false and fills `error` rather than aborting: the caller prints a
   // specific failure instead of the process dying with no explanation.
   bool init(int width, int height, std::string* error);
+
+  // FP-23: before init(). On a RNI_HEADLESS_METAL build, init() then creates a
+  // Metal context and an offscreen BGRA8 texture instead of EGL + an FBO.
+  void setMetal(bool on) { metalRequested_ = on; }
 
   ImpellerContext context() const { return context_; }
   ImpellerSurface surface() const { return surface_; }
@@ -65,6 +79,12 @@ class HeadlessSurface {
   ImpellerContext context_{nullptr};
   ImpellerSurface surface_{nullptr};
   ImpellerTypographyContext typography_{nullptr};
+  // FP-23 (HeadlessSurfaceMetal.mm): the retained id<MTLTexture> render target.
+  bool metalRequested_{false};
+  void* metalTexture_{nullptr};
+  bool initMetal(std::string* error);
+  bool readPixelsMetal(std::vector<Px>* out);
+  void releaseMetal();
 };
 
 }  // namespace rni
