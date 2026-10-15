@@ -76,6 +76,7 @@
 #include "host/UniformProbe.h"
 #include "host/PoisonProbe.h"
 #include "scenegraph/GpuBackend.h"
+#include "host/BackendSelect.h"
 #include "scenegraph/IoUploader.h"
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
@@ -162,7 +163,7 @@ void Usage() {
           "                     prove glfwSetScrollCallback is registered.)\n"
           "                   [--log-mutations] [--color-scheme light|dark]\n"
           "                   [--backend gles|metal|vulkan]  GPU backend (FP-20);\n"
-          "                     only gles is available yet\n"
+          "                     metal = darwin windowed default (FP-21), else gles\n"
           "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
           "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
           "                   [--sdf-aa on|off]  analytic SDF AA for circles, ovals,\n"
@@ -483,6 +484,7 @@ static bool gPartialRepaint = true;
 // RNI_TEST_BACKEND_POLICY=metal|vulkan (headless GL context, other backend's rules).
 static rni::GpuBackend gGpuBackend = rni::GpuBackend::kGles;
 static rni::GpuBackend gGpuPolicy = rni::GpuBackend::kGles;
+static bool gBackendGiven = false;  // FP-21
 static int gMainStallAfterFrames = 0;
 static int gMainStallMs = 0;
 [[maybe_unused]] static long long SteadyNowUs() {  // same clock as the raster_present t_us lines
@@ -600,6 +602,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::GlfwSurface surface;
   std::string error;
   surface.setTitle(gWindowTitle);  // before init: glfwCreateWindow takes it
+  surface.setMetal(gGpuBackend == rni::GpuBackend::kMetal);  // FP-21
   std::printf("rn-impeller: window_title=%s\n", surface.title().c_str());
   std::fflush(stdout);
   if (!surface.initWindow(width, height, &error)) {
@@ -2103,6 +2106,7 @@ int main(int argc, char** argv) {
 #else
   int supersampleRnsvg = 0;
 #endif
+  bool supersampleGiven = false;  // FP-21: Metal's default is 0 (surface MSAA)
   // Arbitrary pixel probes, so a gate can assert the geometry ITS fixture
   // declares instead of whatever probes happen to be hardcoded here. Each
   // prints `probe=<x>,<y> rgb=r,g,b`.
@@ -2168,11 +2172,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "rn-impeller: FATAL: --backend wants gles|metal|vulkan (got '%s')\n", v.c_str());
         return 2;
       }
-      if (gGpuBackend != rni::GpuBackend::kGles) {
-        fprintf(stderr, "rn-impeller: FATAL: --backend %s is not available yet (only gles)\n", v.c_str());
-        return 2;
-      }
-      gGpuPolicy = gGpuBackend;
+      gBackendGiven = true;  // FP-21: resolved after parsing (BackendSelect)
     } else if (a == "--io-upload") {  // FP-17
       const std::string v = next("--io-upload");
       if (v != "on" && v != "off") {
@@ -2656,6 +2656,7 @@ int main(int argc, char** argv) {
       // value is rejected rather than silently clamped: it is a caller error,
       // not a mode.
       supersampleRnsvg = atoi(next("--supersample-rnsvg").c_str());
+      supersampleGiven = true;
       if (supersampleRnsvg < 0) {
         fprintf(stderr, "rn-impeller: --supersample-rnsvg must be >= 0 (got %s)\n",
                 argv[i]);
@@ -2733,6 +2734,21 @@ int main(int argc, char** argv) {
   if (bundlePath.empty() || appName.empty()) {
     Usage();
     return 2;
+  }
+  // FP-21: darwin windowed defaults to native Metal; Metal gets 4x MSAA from
+  // the drawable wrap (surface_mtl.mm), so supersample defaults to 0 there and
+  // the IO thread (GL name hand-off) stays off: Metal uploads its own textures.
+  {
+    std::string why;
+    if (!rni::ResolveGpuBackend(windowMode && !headless, gBackendGiven, &gGpuBackend, &why)) {
+      fprintf(stderr, "rn-impeller: FATAL: %s\n", why.c_str());
+      return 2;
+    }
+    gGpuPolicy = gGpuBackend;
+    if (gGpuBackend == rni::GpuBackend::kMetal) {
+      if (!supersampleGiven) supersampleRnsvg = 0;
+      rni::io::SetEnabled(false);
+    }
   }
   // FP-20 test hook: paint with another backend's rules (Impeller-owned
   // uploads, no supersample offscreen) on the GL context. Headless only: there

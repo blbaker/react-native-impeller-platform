@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@
 // itself and attaches it to the Cocoa view's layer. Those handles have to live
 // for the surface's lifetime, so they are members here. See GlfwSurface.cpp.
 #include <EGL/egl.h>
+#include "host/MetalSurface.h"  // FP-21: complete type for the unique_ptr member
 #endif
 
 struct GLFWwindow;
@@ -462,6 +464,11 @@ class GlfwSurface {
 
   bool drawDisplayList(ImpellerDisplayList dl);
 
+  // FP-21: call before initWindow. darwin only: the window gets a CAMetalLayer
+  // and a native Metal context (host/MetalSurface) instead of ANGLE.
+  void setMetal(bool on) { metalRequested_ = on; }
+  bool metal() const { return metalRequested_; }
+
   // Reads the DEFAULT framebuffer back, already Y-flipped into top-left
   // order (same convention as HeadlessSurface::readPixels) so a screenshot
   // gate can treat both surfaces identically.
@@ -507,6 +514,9 @@ class GlfwSurface {
   // Builds the ANGLE display/context and the window surface bound to the
   // Cocoa view. Split out because it is the entire darwin-only story.
   bool initAngleForWindow(std::string* error);
+  // FP-21 (GlfwSurfaceMetal.cpp): the Metal halves of initGpu / releaseGpu.
+  bool initGpuMetal(bool rasterThread, std::string* error);
+  void releaseGpuMetal();
 #endif
 
   // Converts a GLFW screen-coordinate cursor position into LAYOUT POINTS and
@@ -667,7 +677,9 @@ class GlfwSurface {
   // list. Re-entry is dropped rather than queued: the outer paint is already
   // producing a frame for the current geometry.
   bool paintInFlight_{false};
+  bool metalRequested_{false};
 #if defined(__APPLE__)
+  std::unique_ptr<MetalSurface> metal_;  // FP-21
   EGLDisplay display_{EGL_NO_DISPLAY};
   EGLSurface eglSurface_{EGL_NO_SURFACE};
   EGLContext eglContext_{EGL_NO_CONTEXT};

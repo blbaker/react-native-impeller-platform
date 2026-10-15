@@ -129,7 +129,7 @@ for b in metal vulkan bogus; do
   ( cd "$(dirname "$BIN")" && timeout 60 "$BIN" --headless --bundle "$FX/eng-supersample/prebuilt/eng-supersample.bundle" \
       --app-name EngSupersample --backend "$b" --screenshot "$WORK/b-$b.ppm" ) > "$WORK/b-$b.log" 2>&1 || rc=$?
   [ "$rc" = 2 ] || fail "B --backend $b was accepted (exit $rc, want 2): $(grep -m1 gpu_backend "$WORK/b-$b.log")"
-  if [ "$b" = bogus ]; then want='--backend wants gles\|metal\|vulkan'; else want="--backend $b is not available yet"; fi
+  if [ "$b" = bogus ]; then want='--backend wants gles\|metal\|vulkan'; else want="--backend $b is (not available yet|darwin-only)"; fi  # FP-21: metal runs windowed on darwin
   grep -qE -- "$want" "$WORK/b-$b.log" || fail "B --backend $b: no refusal line ($(tail -1 "$WORK/b-$b.log"))"
 done
 echo "   B: --backend gles runs (gl_name uploader, gl supersample); metal/vulkan/bogus refused with exit 2"

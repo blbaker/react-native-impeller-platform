@@ -35,6 +35,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <EGL/eglext_angle.h>
+#include "host/MetalSurface.h"
 #endif
 
 #include <cstdio>
@@ -306,6 +307,9 @@ GlfwSurface::~GlfwSurface() {
     ImpellerTypographyContextRelease(typography_);
   }
   if (surface_) ImpellerSurfaceRelease(surface_);
+#if defined(__APPLE__)
+  if (metal_) metal_->Release();
+#endif
   if (context_) ImpellerContextRelease(context_);
   // ENG-09 hover/cursor. Destroy the standard cursors before glfwTerminate,
   // which would otherwise leak them (GLFW frees its own on terminate, but
@@ -614,6 +618,9 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
       window_, [](GLFWwindow* w, int, int) {
         auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
         if (self) self->dirty_.store(true, std::memory_order_release);
+#if defined(__APPLE__)
+        if (self && self->metal_) self->metal_->MarkDamage();  // FP-21: see MetalSurface.h
+#endif
       });
 
   // ⛔ MARKING DIRTY IS NOT ENOUGH DURING A LIVE DRAG — SEE GlfwSurface.h.
@@ -786,9 +793,19 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   shapeCursors_[rni::kCursorNotAllowed] = glfwCreateStandardCursor(GLFW_NOT_ALLOWED_CURSOR);
 
 #if defined(__APPLE__)
-  if (!initAngleForWindow(error)) return false;
-  // FP-15: initGpu makes the context current on the thread that will own it.
-  eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+  if (metalRequested_) {  // FP-21: no ANGLE, no EGL on the window
+    metal_ = std::make_unique<MetalSurface>();
+    if (!metal_->Attach(window_, error)) return false;
+    metal_->SetDamageHandler([this] {  // the refresh callback, as updateLayer would raise it
+      if (refreshHandler_ && !paintInFlight_) refreshHandler_();
+    });
+  } else {
+    if (!initAngleForWindow(error)) return false;
+    // FP-15: initGpu makes the context current on the thread that will own it.
+    eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+  }
+#else
+  if (metalRequested_) return fail("--backend metal is darwin-only");
 #endif
 
   typography_ = ImpellerTypographyContextNew();
@@ -804,6 +821,7 @@ bool GlfwSurface::initGpu(bool rasterThread, std::string* error) {
     return false;
   };
 #if defined(__APPLE__)
+  if (metal_) return initGpuMetal(rasterThread, error);
   if (!eglMakeCurrent(display_, eglSurface_, eglSurface_, eglContext_)) {
     return fail("eglMakeCurrent (window) failed");
   }
@@ -878,6 +896,7 @@ bool GlfwSurface::consumeDirty() {
   // true 2x pixel size and width_/height_ carry the physical backing again.
   // The old code set the scale AFTER the query, one frame too late.
   GlfwCocoaSetLayerScale(window_);
+  if (metal_) metal_->SyncFromWindow();  // FP-21: live-resize flag for the raster side
 #endif
 
   int fbWidth = 0, fbHeight = 0;
@@ -911,6 +930,14 @@ bool GlfwSurface::consumeDirty() {
 
 bool GlfwSurface::ensureGpuSize(int w, int h) {
   if (!context_ || w <= 0 || h <= 0) return false;
+#if defined(__APPLE__)
+  if (metal_) {  // FP-21: the next drawable is acquired at the tree's size
+    metal_->SetDrawableSize(w, h);
+    gpuWidth_ = w;
+    gpuHeight_ = h;
+    return true;
+  }
+#endif
   if (surface_ && w == gpuWidth_ && h == gpuHeight_) return true;
   glViewport(0, 0, w, h);
   if (surface_) {
@@ -926,6 +953,9 @@ bool GlfwSurface::ensureGpuSize(int w, int h) {
 }
 
 void GlfwSurface::releaseGpu() {
+#if defined(__APPLE__)
+  if (metal_) return releaseGpuMetal();
+#endif
   // FP-15 read-back (ci-raster-thread): Impeller's GLES context is released on
   // the thread that holds the GL context, while it is still current.
 #if defined(_WIN32)
@@ -1337,6 +1367,9 @@ void GlfwSurface::requestSize(int pointW, int pointH) {
 }
 
 bool GlfwSurface::drawDisplayList(ImpellerDisplayList dl) {
+#if defined(__APPLE__)
+  if (metal_) return metal_->Draw(context_, dl);
+#endif
   if (!surface_ || !ImpellerSurfaceDrawDisplayList(surface_, dl)) return false;
   glFinish();
   return true;
@@ -1346,6 +1379,12 @@ bool GlfwSurface::readPixels(std::vector<Px>* out) {
   // FP-15: the GL thread's size (the frame just drawn), not main's width_.
   const int w = gpuWidth_, h = gpuHeight_;
   if (!context_ || w <= 0 || h <= 0) return false;
+#if defined(__APPLE__)
+  if (metal_) {  // FP-21: the drawable texture, before present
+    int tw = 0, th = 0;
+    return metal_->ReadPixels(out, &tw, &th) && tw == w && th == h;
+  }
+#endif
   std::vector<Px> raw((size_t)w * h);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
@@ -1361,11 +1400,19 @@ bool GlfwSurface::readPixels(std::vector<Px>* out) {
   return true;
 }
 
-void GlfwSurface::pollEvents() { glfwPollEvents(); }
+void GlfwSurface::pollEvents() {
+  glfwPollEvents();
+#if defined(__APPLE__)
+  if (metal_) metal_->SyncFromWindow();  // FP-21: inLiveResize for the raster side
+#endif
+}
 
 void GlfwSurface::waitEvents(double timeoutSeconds) {
   if (timeoutSeconds <= 0.0) return;
   glfwWaitEventsTimeout(timeoutSeconds);
+#if defined(__APPLE__)
+  if (metal_) metal_->SyncFromWindow();
+#endif
 }
 
 // P12-01: wake a thread parked in glfwWaitEventsTimeout. glfwPostEmptyEvent is
@@ -1396,6 +1443,7 @@ bool GlfwSurface::shouldClose() const {
 
 void GlfwSurface::setSwapInterval(int interval) {
 #if defined(__APPLE__)
+  if (metal_) return metal_->SetDisplaySync(interval != 0);
   eglSwapInterval(display_, interval);
 #else
   glfwSwapInterval(interval);
@@ -1404,6 +1452,7 @@ void GlfwSurface::setSwapInterval(int interval) {
 
 void GlfwSurface::present() {
 #if defined(__APPLE__)
+  if (metal_) return metal_->Present();
   // glfwSwapBuffers is a NO-OP for a GLFW_NO_API window — GLFW has no context
   // to swap. The swap belongs to the EGL surface we created.
   eglSwapBuffers(display_, eglSurface_);

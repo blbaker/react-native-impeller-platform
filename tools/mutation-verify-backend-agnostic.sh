@@ -11,7 +11,7 @@
 #       supersample backend for every policy -> M: offscreen targets > 0
 #   M4  moving the GL offscreen lost HalveInto's Y-flip -> P: pixels differ
 #       from the pre-pass binary
-#   M5  --backend metal accepted although only gles exists -> B
+#   M5  --backend metal accepted off darwin (FP-21: BackendSelect.cpp) -> B
 # The clean binary is NOT rebuilt here: tools/parity-check.sh rebuilds after
 # mutants (run tools/engine-build.sh yourself when running this standalone).
 set -euo pipefail
@@ -23,7 +23,8 @@ GB="engine/scenegraph/GpuBackend.cpp"
 SG="engine/scenegraph/SceneGraph.cpp"
 SS="engine/scenegraph/SupersampleBackendGl.cpp"
 MAIN="engine/host/main.cpp"
-FILES=("$GB" "$SG" "$SS" "$MAIN")
+SEL="engine/host/BackendSelect.cpp"  # FP-21: the --backend refusal moved here
+FILES=("$GB" "$SG" "$SS" "$MAIN" "$SEL")
 BACKUP="$(mktemp -d)"
 for f in "${FILES[@]}"; do cp "$f" "$BACKUP/$(basename "$f")"; done
 restore() { for f in "${FILES[@]}"; do cp "$BACKUP/$(basename "$f")" "$f"; done; }
@@ -87,8 +88,9 @@ mutate "$SS" '  ImpellerDisplayListBuilderTranslate(b, 0, (float)dstH);
 run M4 'BACKEND_AGNOSTIC FAIL P pixels differ from the pre-pass binary: [a-z-]+-ss4'
 
 echo "== M5: --backend metal accepted =="
-mutate "$MAIN" '      if (gGpuBackend != rni::GpuBackend::kGles) {' \
-'      if (false && gGpuBackend != rni::GpuBackend::kGles) {  // MUTANT M5'
+mutate "$SEL" '    *error = "--backend metal is darwin-only (windowed)";
+    return false;' \
+'    (void)error;  // MUTANT M5: metal accepted off darwin'
 run M5 'BACKEND_AGNOSTIC FAIL B --backend metal was accepted'
 
 trap - EXIT

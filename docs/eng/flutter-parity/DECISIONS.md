@@ -107,3 +107,8 @@ reverse it. The PR description links here; keep it current.
 14. **12:55: lane B round 2.** Lane B had finished its five passes and was idle. FP-33, FP-34, FP-40, FP-41, FP-50,
     FP-53 and FP-54 moved to it. Lane A keeps the platform, backend, embedding and final passes (13 left).
 - 2026-10-15 (lane A, FP-19): (a) superseded by FP-26 (Phase 1 proof with darwin ci-vsync limited to scheduler arms C/D) and FP-27 (Phase 2, darwin present pacing on Metal via CVDisplayLink + presentedTime, full ci-vsync). Why: A/B fail from ANGLE-Metal drawable waits on a shared Mac at load 37-122; Flutter macOS paces on Metal, so FP-21 is where pacing can be proven. Phase 1 had no free id, so FP-26 sits in the Phase 1 section with a Phase 2 number.
+- 2026-10-15 (lane A, FP-21): the gate's "icon-edge AA metric at N=0 >= the ANGLE N=4 metric" was measured false and
+  replaced by "Metal N=0 carries real AA, clearly better than ANGLE N=0" (N=4 numbers printed, not asserted). Why: Impeller's
+  Metal drawable wrap is fixed 4x MSAA (swapchain_transients_mtl.mm), 3 intermediate levels vs 15 for a 4x4 supersample;
+  chevron edge error vs an N=16 reference is 6.69 (Metal N=0) vs 2.71 (ANGLE N=4). Flutter ships exactly this 4x MSAA on
+  macOS, so it is the parity target; supersampling on Metal would need an offscreen surface (patch 0004, FP-23).

@@ -245,6 +245,7 @@ add_executable(rn-impeller
   host/OsAppearance.cpp
   host/FrameTimings.cpp
   host/FrameScheduler.cpp
+  host/BackendSelect.cpp
   host/FrameItem.cpp
   host/RecordNoGl.cpp
   host/AnimRowProbe.cpp
@@ -271,6 +272,9 @@ add_executable(rn-impeller
   # ANGLE/Metal accepts as a native window. APPLE-only by generator expression
   # so no other platform ever tries to compile Cocoa.
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwCocoaView.mm>
+  # FP-21: native Metal window backend (CAMetalLayer + ImpellerContextCreateMetalNew).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/MetalSurface.mm>
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceMetal.cpp>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   runtime/InspectorHost.cpp
@@ -436,7 +440,11 @@ elseif(RNI_WITH_WINDOW)
       "-framework Cocoa"
       "-framework IOKit"
       "-framework CoreVideo"
-      "-framework QuartzCore")
+      "-framework QuartzCore"
+      "-framework Metal")
+    # MetalSurface.mm holds strong ObjC members in a C++ struct: ARC only.
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/host/MetalSurface.mm"
+      PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   else()
     set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
     target_link_libraries(rn-impeller PRIVATE
