@@ -55,7 +55,8 @@ echo "   $NS ns per disabled span"
 echo "== C: tracing on, 300 headless frames =="
 run on "${HL[@]}" --bundle "$ROT" --app-name NativeRotateProbe --frames 300 --trace-out "$WORK/on.json"
 grep -qE '^rn-impeller: trace enabled=0 events=[1-9][0-9]* written=1' "$WORK/on.log" || fail "arm C wrote no trace"
-OUT="$(python3 tools/trace_check.py "$WORK/on.json" --frames 300 --expect NativeAnimatedTick@main:1 --expect NativeAnimatedPump@main:300)" || fail "$OUT"
+# FP-13: the final capture paint is a traced frame too, so --frames 300 = 301 frames.
+OUT="$(python3 tools/trace_check.py "$WORK/on.json" --frames 301 --expect NativeAnimatedTick@main:1 --expect NativeAnimatedPump@main:300)" || fail "$OUT"
 echo "   $OUT"
 SPF=$(echo "$OUT" | sed -n 's/.*spans_per_frame=\([0-9.]*\).*/\1/p')
 
@@ -97,6 +98,6 @@ check "$WORK/img.json" --expect ImageFetch@image-io:1 --expect ImageDecode@image
 
 echo "== G: text measure span =="
 run txt "${HL[@]}" --bundle "$LH" --app-name Eng23LineHeight --frames 3 --trace-out "$WORK/txt.json"
-check "$WORK/txt.json" --frames 3 --expect TextMeasure@js:1 --expect MountTransaction@js:1 --expect JsCommit@js:1
+check "$WORK/txt.json" --frames 4 --expect TextMeasure@js:1 --expect MountTransaction@js:1 --expect JsCommit@js:1
 
 echo "TRACE_PASS off+bench+headless+windowed+image+text"

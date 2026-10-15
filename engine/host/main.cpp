@@ -67,6 +67,7 @@
 #include <process.h>
 #endif
 #include "host/FrameTimings.h"
+#include "host/FrameItem.h"
 #include "host/FrameScheduler.h"
 #include "host/AnimRowProbe.h"
 #include "base/Trace.h"
@@ -715,37 +716,16 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
           : rni::FrameScheduler::WakeFn([&surface]() { surface.postEmptyEvent(); }),
       [&surface](int interval) { surface.setSwapInterval(interval); });
 
-  auto paintFrame = [&](std::unique_ptr<rni::FrameTimingsRecorder> frame) -> int {
-    // ⛔ THE PAINT-IN-FLIGHT SCOPE GOES HERE, AT THE ONE SHARED BODY.
-    // Both the frame loop and the window-refresh callback paint through this
-    // lambda, so scoping the guard here is what makes it cover every paint
-    // rather than only the callback's. surface.present() below is the call
-    // that can re-enter: eglSwapBuffers -> CAMetalLayer update ->
-    // -[NSView updateLayer] -> _glfwInputWindowDamage -> refresh callback.
-    // With this scope live, that callback is dropped instead of starting a
-    // second paint on top of this one.
-    rni::GlfwSurface::PaintScope paintScope(&surface);
-    TRACE_EVENT0("frame", "Frame");
-    ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
-    int painted;
-    {
-      TRACE_EVENT0("paint", "PaintWalk");
-      painted = sceneGraph.paint(builder, pointScale);
-    }
-    ImpellerDisplayList dl;
-    {
-      TRACE_EVENT0("paint", "DisplayListBuild");
-      dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
-    }
-    frame->RecordBuildEnd();
-    frame->RecordRasterStart();
-    if (dl) {
-      TRACE_EVENT0("raster", "Draw");
-      surface.drawDisplayList(dl);
-      ImpellerDisplayListRelease(dl);
-    }
-    ImpellerDisplayListBuilderRelease(builder);
-    frame->RecordRasterEnd();
+  // FP-13: platform == raster until FP-15, so one slot (animator.cc).
+  rni::FramePipeline framePipeline(rni::PipelineDepthFor(/*platformIsRaster=*/true));
+
+  // FP-13 RASTER + present: the pipeline consumer. Draws the FrameItem the
+  // RECORD half produced, reads back for captures BEFORE the present (see
+  // grabArmed above), presents, and commits the item's timings.
+  auto rasterAndPresent = [&](std::unique_ptr<rni::FrameItem> item) {
+    rni::RasterFrame(*item, [&](ImpellerDisplayList dl) {
+      return surface.drawDisplayList(dl);
+    });
     if (grabArmed) {
       grabOk = surface.readPixels(&grabPx);
       grabArmed = false;
@@ -764,8 +744,6 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       surface.present();
       scheduler.DidPresent(paintsTotal + 1);
     }
-    frame->RecordPresent();
-    frameTimings.Commit(std::move(frame));
     TRACE_COUNTER("presents", paintsTotal + 1);
     // ⛔ COUNTED HERE, AT THE PRESENT, NOT AT THE CALLER.
     // refreshPaints is derived from this counter, so "a frame was painted
@@ -788,6 +766,34 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       folly::dynamic payload = folly::dynamic::object("sinceLaunchMs", ms);
       host.deviceEvents()->emit("firstFramePresented", payload);
     }
+    item->timings->RecordPresent();
+    frameTimings.Commit(std::move(item->timings));
+  };
+
+  auto paintFrame = [&](std::unique_ptr<rni::FrameTimingsRecorder> frame) -> int {
+    // ⛔ THE PAINT-IN-FLIGHT SCOPE GOES HERE, AT THE ONE SHARED BODY.
+    // Both the frame loop and the window-refresh callback paint through this
+    // lambda, so scoping the guard here is what makes it cover every paint
+    // rather than only the callback's. surface.present() below is the call
+    // that can re-enter: eglSwapBuffers -> CAMetalLayer update ->
+    // -[NSView updateLayer] -> _glfwInputWindowDamage -> refresh callback.
+    // With this scope live, that callback is dropped instead of starting a
+    // second paint on top of this one.
+    rni::GlfwSurface::PaintScope paintScope(&surface);
+    TRACE_EVENT0("frame", "Frame");
+    // FP-13: RECORD -> Pipeline -> RASTER (model: shell/common/animator.cc
+    // BeginFrame reserves the slot, the build completes it, the rasterizer
+    // consumes). One thread, depth 1: Consume runs right here.
+    auto slot = framePipeline.Produce();
+    if (!slot) {
+      frameTimings.Discard(std::move(frame));
+      return 0;
+    }
+    auto recorded = rni::RecordFrame(sceneGraph, pointScale, surface.width(),
+                                     surface.height(), std::move(frame));
+    const int painted = recorded->painted;
+    (void)slot.Complete(std::move(recorded));
+    (void)framePipeline.Consume(rasterAndPresent);
     return painted;
   };
 
@@ -1797,6 +1803,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // FP-01: presents counted at surface.present(), independent of the recorder.
   printf("rn-impeller: presents=%d\n", paintsTotal);
   scheduler.PrintSummary();
+  rni::PrintPipelineSummary(framePipeline);  // FP-13
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();
@@ -3059,6 +3066,8 @@ int main(int argc, char** argv) {
     // draw into the offscreen target returns.
     rni::FrameTimings headlessTimings;
     int headlessPresents = 0;
+    // FP-13: like flutter_tester, headless stays single-threaded: one slot.
+    rni::FramePipeline headlessPipeline(rni::PipelineDepthFor(/*platformIsRaster=*/true));
     if (frames > 0) {
       // Per-frame JS-work baseline, taken after boot settled: everything
       // counted from here on happened DURING the stepped frames.
@@ -3076,33 +3085,23 @@ int main(int argc, char** argv) {
         host.waitForJsIdle(5000);
 
         TRACE_EVENT0("frame", "Frame");
-        ImpellerDisplayListBuilder fb = ImpellerDisplayListBuilderNew(nullptr);
-        {
-          TRACE_EVENT0("paint", "PaintWalk");
-          sceneGraph.paint(fb, pointScale);
-        }
-        ImpellerDisplayList fdl;
-        {
-          TRACE_EVENT0("paint", "DisplayListBuild");
-          fdl = ImpellerDisplayListBuilderCreateDisplayListNew(fb);
-        }
-        hf->RecordBuildEnd();
-        hf->RecordRasterStart();
-        if (fdl != nullptr) {
-          TRACE_EVENT0("raster", "Draw");
-          surface.drawDisplayList(fdl);
-          ImpellerDisplayListRelease(fdl);
-        }
-        ImpellerDisplayListBuilderRelease(fb);
-        hf->RecordRasterEnd();
-        {
-          // Headless has no swap; the readback below is its present.
-          TRACE_EVENT0("raster", "Present");
-          hf->RecordPresent();
-        }
-        ++headlessPresents;
-        rni::glvalidation::OnFrame();  // FP-05 test hook
-        headlessTimings.Commit(std::move(hf));
+        // FP-13: RECORD -> Pipeline -> RASTER on this one thread.
+        auto slot = headlessPipeline.Produce();
+        (void)slot.Complete(rni::RecordFrame(sceneGraph, pointScale, width,
+                                             height, std::move(hf)));
+        (void)headlessPipeline.Consume([&](std::unique_ptr<rni::FrameItem> item) {
+          rni::RasterFrame(*item, [&](ImpellerDisplayList dl) {
+            return surface.drawDisplayList(dl);
+          });
+          {
+            // Headless has no swap; the readback below is its present.
+            TRACE_EVENT0("raster", "Present");
+            item->timings->RecordPresent();
+          }
+          ++headlessPresents;
+          rni::glvalidation::OnFrame();  // FP-05 test hook
+          headlessTimings.Commit(std::move(item->timings));
+        });
 
         // Frame-0 capture, taken AFTER the first real paint so it is a
         // rendered frame and not an uninitialised buffer. This plus the final
@@ -3164,39 +3163,54 @@ int main(int argc, char** argv) {
     auto finalFrame = std::make_unique<rni::FrameTimingsRecorder>();
     finalFrame->RecordVsync();
     finalFrame->RecordBuildStart();
-    ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
-    painted = sceneGraph.paint(builder, pointScale);
-    // ENG-10: GPU sprite quads actually issued this paint (gate arm).
-    printf("rn-impeller: world_sprites_drawn=%d\n",
-           sceneGraph.worldSpritesDrawn());
-    if (probeBanner) {
-      DrawProbeBanner(builder, shimOk, bundleSize, width, height);
-    }
-    // Degraded (no drawable): the paint walk above already produced `painted`
-    // and the node_frame report, which is the count-only proof. Skip the draw
-    // and readback — there is no surface to draw into. Do NOT abort.
-    if (havePixels) {
-      ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(builder);
-      finalFrame->RecordBuildEnd();
-      finalFrame->RecordRasterStart();
-      if (dl == nullptr) {
-        fprintf(stderr, "rn-impeller: FATAL: CreateDisplayListNew returned null\n");
-        return 1;
-      }
-      if (!surface.drawDisplayList(dl)) {
-        fprintf(stderr, "rn-impeller: FATAL: SurfaceDrawDisplayList failed\n");
-        return 1;
-      }
-      ImpellerDisplayListRelease(dl);
-      finalFrame->RecordRasterEnd();
-      finalFrame->RecordPresent();
-      ++headlessPresents;
-      headlessTimings.Commit(std::move(finalFrame));
-    } else {
-      headlessTimings.Discard(std::move(finalFrame));
-    }
-    ImpellerDisplayListBuilderRelease(builder);
+    // FP-13: the final capture paint is a frame like the loop's (Frame span,
+    // RECORD -> RASTER -> Present), so --frames N traces N+1 frames.
+    int finalRc = 0;
+    {
+      TRACE_EVENT0("frame", "Frame");
+      auto finalSlot = headlessPipeline.Produce();
+      (void)finalSlot.Complete(rni::RecordFrame(
+          sceneGraph, pointScale, width, height, std::move(finalFrame),
+          [&](ImpellerDisplayListBuilder builder) {
+            if (probeBanner) {
+              DrawProbeBanner(builder, shimOk, bundleSize, width, height);
+            }
+          }));
+      // ENG-10: GPU sprite quads actually issued this paint (gate arm).
+      printf("rn-impeller: world_sprites_drawn=%d\n",
+             sceneGraph.worldSpritesDrawn());
+      (void)headlessPipeline.Consume([&](std::unique_ptr<rni::FrameItem> item) {
+        painted = item->painted;
+        // Degraded (no drawable): the paint walk above already produced `painted`
+        // and the node_frame report, which is the count-only proof. Skip the draw
+        // and readback — there is no surface to draw into. Do NOT abort.
+        if (!havePixels) {
+          headlessTimings.Discard(std::move(item->timings));
+          return;
+        }
+        if (item->displayList == nullptr) {
+          fprintf(stderr, "rn-impeller: FATAL: CreateDisplayListNew returned null\n");
+          finalRc = 1;
+          return;
+        }
+        if (!rni::RasterFrame(*item, [&](ImpellerDisplayList dl) {
+              return surface.drawDisplayList(dl);
+            })) {
+          fprintf(stderr, "rn-impeller: FATAL: SurfaceDrawDisplayList failed\n");
+          finalRc = 1;
+          return;
+        }
+        {
+          TRACE_EVENT0("raster", "Present");
+          item->timings->RecordPresent();
+        }
+        ++headlessPresents;
+        headlessTimings.Commit(std::move(item->timings));
+      });
+    }  // Frame span
+    if (finalRc != 0) return finalRc;
     printf("rn-impeller: presents=%d\n", headlessPresents);
+    rni::PrintPipelineSummary(headlessPipeline);  // FP-13
     FinishFrameTimings(headlessTimings);
     FinishTrace();
     rni::glvalidation::Finish();

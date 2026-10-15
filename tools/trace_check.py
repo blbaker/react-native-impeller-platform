@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 
 FRAME_CHILDREN = ["PaintWalk", "DisplayListBuild", "Draw", "Present"]
 # Spans that may only ever appear on the named thread.
-HOME = {"Frame": "main", "PaintWalk": "main", "DisplayListBuild": "main", "Draw": "main",
+HOME = {"Frame": "main", "Record": "main", "Raster": "main", "PaintWalk": "main", "DisplayListBuild": "main", "Draw": "main",
         "Present": "main", "NativeAnimatedPump": "main", "NativeAnimatedTick": "main",
         "JsCommit": "js", "MountTransaction": "js", "TextMeasure": "js",
         "ImageFetch": "image-io", "ImageDecode": "image-io", "ImageUpload": "main"}

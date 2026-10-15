@@ -245,6 +245,7 @@ add_executable(rn-impeller
   host/OsAppearance.cpp
   host/FrameTimings.cpp
   host/FrameScheduler.cpp
+  host/FrameItem.cpp
   host/AnimRowProbe.cpp
   base/Trace.cpp
   base/SanitizerHooks.cpp
