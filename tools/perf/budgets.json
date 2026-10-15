@@ -1,0 +1,71 @@
+{
+  "fixtures": {
+    "native-rotate": {
+      "baseline": {
+        "raster_p95_us": 1138,
+        "raster_p99_us": 1836,
+        "record_p95_us": 36,
+        "record_p99_us": 59,
+        "startup_ms": 242,
+        "total_p95_us": 1289,
+        "total_p99_us": 6549
+      },
+      "control_ms": 14.51,
+      "runs": 5,
+      "spread": {
+        "raster_p95_us": 307,
+        "raster_p99_us": 2022,
+        "record_p95_us": 23,
+        "record_p99_us": 64,
+        "startup_ms": 45,
+        "total_p95_us": 371,
+        "total_p99_us": 607
+      }
+    },
+    "sdf-aa": {
+      "baseline": {
+        "raster_p95_us": 1341,
+        "raster_p99_us": 1659,
+        "record_p95_us": 26,
+        "record_p99_us": 55,
+        "startup_ms": 216,
+        "total_p95_us": 1514,
+        "total_p99_us": 8941
+      },
+      "control_ms": 14.53,
+      "runs": 5,
+      "spread": {
+        "raster_p95_us": 216,
+        "raster_p99_us": 663,
+        "record_p95_us": 14,
+        "record_p99_us": 35,
+        "startup_ms": 43,
+        "total_p95_us": 225,
+        "total_p99_us": 1670
+      }
+    },
+    "style-g2": {
+      "baseline": {
+        "raster_p95_us": 6472,
+        "raster_p99_us": 10135,
+        "record_p95_us": 4906,
+        "record_p99_us": 6185,
+        "startup_ms": 323,
+        "total_p95_us": 11928,
+        "total_p99_us": 33603
+      },
+      "control_ms": 14.76,
+      "runs": 5,
+      "spread": {
+        "raster_p95_us": 11395,
+        "raster_p99_us": 15204,
+        "record_p95_us": 6077,
+        "record_p99_us": 6852,
+        "startup_ms": 437,
+        "total_p95_us": 18502,
+        "total_p99_us": 52108
+      }
+    }
+  },
+  "tolerance_pct": 10
+}
