@@ -29,6 +29,7 @@
 #include "modules/WorldRasterStore.h"
 #include "scenegraph/ImageEvents.h"
 #include "scenegraph/ImagePaint.h"
+#include "scenegraph/RasterJobs.h"
 #include "scenegraph/Shadows.h"
 #include "scenegraph/TextInputStyle.h"
 
@@ -476,7 +477,13 @@ class SceneGraph {
   // ImpellerTextureCreateWithOpenGLTextureHandleNew. Without it, supersample_
   // is inert (the in-place path runs) rather than crashing: a null context is
   // exactly the "not wired" state, distinct from N=0 "disabled".
-  void setRenderContext(ImpellerContext context) { renderContext_ = context; }
+  // FP-14: also creates the GL name pool RECORD wraps textures from and fills
+  // it, so call it with the context current (the raster side).
+  void setRenderContext(ImpellerContext context);
+  // FP-14: the GPU jobs one RECORD may queue; null when there is no GL context
+  // (Android Vulkan, an unresolved Windows table): paint() then never takes
+  // the offscreen/world paths and uploads images in place.
+  std::unique_ptr<RasterJobs> makeRasterJobs();
 
   // N. 0 disables (the exact current in-place path, zero behavioural change).
   // >=2 supersamples. 1 is the mutant control: an offscreen round-trip at
@@ -610,7 +617,10 @@ class SceneGraph {
   // it. pointScaleFactor is applied as a root transform, which is also what
   // makes text and vector geometry rasterise at full device resolution rather
   // than being upscaled after the fact.
-  int paint(ImpellerDisplayListBuilder builder, float pointScaleFactor = 1.0f);
+  // FP-14: `jobs` receives every GPU job the walk needs (uploads, supersample
+  // offscreens); the walk itself makes no GL call. RasterFrame runs them.
+  int paint(ImpellerDisplayListBuilder builder, float pointScaleFactor = 1.0f,
+            RasterJobs* jobs = nullptr);
   // A22: the topmost visible modal (0 if none) and its emitter, for Escape.
   facebook::react::Tag topModal(facebook::react::EventEmitter::Shared* emitter);
 
@@ -862,20 +872,10 @@ class SceneGraph {
   // is the same device scale paint() would otherwise apply at the root.
   bool paintTreeSupersampled(ImpellerDisplayListBuilder builder,
                              float pointScaleFactor);
-  // Renders the <Svg> subtree rooted at `node` (painted at x,y,w,h) into a
-  // fresh pxW x pxH offscreen FBO and returns the adopted ImpellerTexture
-  // (ownership transferred from the GL handle — caller Releases it), or null on
-  // any GL/Impeller failure. Depth+stencil attached so concave fills work.
-  ImpellerTexture renderSvgSubtreeToTexture(const SceneNode& node, float x,
-                                            float y, float w, float h, int pxW,
-                                            int pxH);
-  // Downsamples `src` (size srcW x srcH) into a fresh dstW x dstH texture via a
-  // single LINEAR DrawTextureRect — an EXACT box average only when it is a 2x
-  // reduction, which is why paintSvgRootSupersampled halves iteratively rather
-  // than reducing N x in one step. Returns the adopted texture (caller
-  // Releases) or null. Does NOT release `src`.
-  ImpellerTexture halveTexture(ImpellerTexture src, int srcW, int srcH,
-                               int dstW, int dstH);
+  // FP-14: records the <Svg> subtree rooted at `node` (painted at x,y,w,h)
+  // mapped onto a pxW x pxH offscreen, for a raster-side offscreen job.
+  ImpellerDisplayList recordSvgSubtree(const SceneNode& node, float x, float y,
+                                       float w, float h, int pxW, int pxH);
   // <world> ENG-09. Reads WorldRasterStore by node.worldRasterName and paints
   // the RGBA buffer into (x,y,w,h) as a textured rect. Returns false (paints
   // nothing) when the store is unwired, the name is empty, or nothing has
@@ -926,7 +926,11 @@ class SceneGraph {
   // modalWalk_; the modal passes run after the app root, at window (0,0).
   facebook::react::Tag modalWalk_{0};
   int paintLocked(ImpellerDisplayListBuilder builder, float pointScaleFactor,
-                  std::vector<facebook::react::EventEmitter::Shared>* shows);
+                  std::vector<facebook::react::EventEmitter::Shared>* shows,
+                  RasterJobs* jobs);
+  // FP-14: the current paint()'s job list (null outside paint / without GL).
+  RasterJobs* jobs_{nullptr};
+  std::shared_ptr<GlNamePool> namePool_;
   void collectModalsLocked(facebook::react::Tag tag,
                            std::vector<facebook::react::Tag>* out) const;
   void paintModalsLocked(ImpellerDisplayListBuilder builder);
@@ -971,6 +975,7 @@ class SceneGraph {
     ImpellerTexture texture{nullptr};
     int texW{0};
     int texH{0};
+    JobFlag job;  // FP-14: the raster job that renders it
   };
   static constexpr size_t kSvgCacheMax = 256;
   std::unordered_map<std::string, SvgCacheEntry> svgCache_;
@@ -995,6 +1000,7 @@ class SceneGraph {
     int texW{0};
     int texH{0};
     uint64_t uploadedVersion{0};
+    JobFlag job;  // FP-14: the last upload queued for it
   };
   std::unordered_map<facebook::react::Tag, WorldTextureEntry> worldTextureCache_;
   // <world> ENG-10. Sprite-atlas GPU textures keyed by textureId (NOT by node

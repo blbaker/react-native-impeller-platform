@@ -15,7 +15,11 @@
 #include <GLES3/gl3.h>
 
 #include "host/PointScale.h"
+#include "host/RecordNoGl.h"
 #include "scenegraph/CursorKinds.h"
+#if !defined(_WIN32) && !defined(__APPLE__)
+#include <EGL/egl.h>  // FP-14: eglGetCurrentContext for the record assert
+#endif
 
 #if defined(__APPLE__)
 // ⛔ macOS REACHES THE WINDOW THROUGH ANGLE, NOT THROUGH SYSTEM EGL.
@@ -291,6 +295,7 @@ bool GlfwKeyFromName(const std::string& name, int* outKey) {
 }  // namespace
 
 GlfwSurface::~GlfwSurface() {
+  rni::recordgl::SetContextHooks({});
   if (typography_) {
     rni::typography::Unbind(typography_);
     ImpellerTypographyContextRelease(typography_);
@@ -798,6 +803,7 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   if (!typography_) return fail("ImpellerTypographyContextNew returned null");
   // FP-12: the paint thread's context; other threads (measure on JS) get their own.
   rni::typography::Bind(typography_);
+  installRecordHooks();  // FP-14
 
   std::printf("rn-impeller: GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
   // ⛔ REPORT WHAT GL GRANTED, NOT WHAT WE ASKED FOR. GLFW_SAMPLES is a HINT:
@@ -1336,6 +1342,39 @@ void GlfwSurface::present() {
 #else
   glfwSwapBuffers(window_);
 #endif
+}
+
+}  // namespace rni
+
+namespace rni {
+
+// FP-14: RNI_ASSERT_NO_GL_IN_RECORD releases the window's context around RECORD.
+void GlfwSurface::installRecordHooks() {
+  rni::recordgl::ContextHooks h;
+#if defined(__APPLE__)
+  h.release = [this] {
+    return eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) == EGL_TRUE;
+  };
+  h.acquire = [this] {
+    return eglMakeCurrent(display_, eglSurface_, eglSurface_, eglContext_) == EGL_TRUE;
+  };
+  h.isCurrent = [] { return eglGetCurrentContext() != EGL_NO_CONTEXT; };
+#else
+  h.release = [] {
+    glfwMakeContextCurrent(nullptr);
+    return true;
+  };
+  h.acquire = [this] {
+    glfwMakeContextCurrent(window_);
+    return glfwGetCurrentContext() == window_;
+  };
+#if defined(_WIN32)
+  h.isCurrent = [] { return glfwGetCurrentContext() != nullptr; };
+#else
+  h.isCurrent = [] { return eglGetCurrentContext() != EGL_NO_CONTEXT; };
+#endif
+#endif
+  rni::recordgl::SetContextHooks(std::move(h));
 }
 
 }  // namespace rni

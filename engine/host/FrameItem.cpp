@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "base/Trace.h"
+#include "host/RecordNoGl.h"
 #include "scenegraph/SceneGraph.h"
 
 namespace rni {
@@ -21,10 +22,12 @@ std::unique_ptr<FrameItem> RecordFrame(SceneGraph& scene, float pointScale,
   item->height = height;
   item->frameNumber = timings ? timings->frameNumber() : 0;
   TRACE_EVENT1("record", "Record", "frame", item->frameNumber);
+  recordgl::RecordScope noGl;  // FP-14: no context current, no GL call
+  item->jobs = scene.makeRasterJobs();
   ImpellerDisplayListBuilder builder = ImpellerDisplayListBuilderNew(nullptr);
   {
     TRACE_EVENT0("paint", "PaintWalk");
-    item->painted = scene.paint(builder, pointScale);
+    item->painted = scene.paint(builder, pointScale, item->jobs.get());
   }
   if (extras) extras(builder);
   {
@@ -42,10 +45,17 @@ bool RasterFrame(FrameItem& item,
                  const std::function<bool(ImpellerDisplayList)>& draw) {
   TRACE_EVENT1("raster", "Raster", "frame", item.frameNumber);
   if (item.timings) item.timings->RecordRasterStart();
+  recordgl::RasterScope gl;
+  // FP-14: the textures this list samples are filled before it is drawn.
+  if (item.jobs) item.jobs->Run();
   bool ok = false;
   if (item.displayList) {
     TRACE_EVENT0("raster", "Draw");
     ok = draw(item.displayList);
+  }
+  if (item.jobs) {
+    item.jobs->pool().Refill();  // names for the next RECORD
+    recordgl::NoteStarved(item.jobs->pool().starved());
   }
   if (item.timings) item.timings->RecordRasterEnd();
   return ok;
@@ -59,6 +69,7 @@ void PrintPipelineSummary(const FramePipeline& pipeline) {
          (unsigned long long)s.consumed, (unsigned long long)s.abandoned,
          (unsigned long long)s.refused, s.maxInflight);
   fflush(stdout);
+  recordgl::PrintSummary();
 }
 
 }  // namespace rni

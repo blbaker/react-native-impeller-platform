@@ -409,6 +409,22 @@ SceneGraph::~SceneGraph() {
   if (treeTexture_) ImpellerTextureRelease(treeTexture_);
 }
 
+void SceneGraph::setRenderContext(ImpellerContext context) {
+  renderContext_ = context;
+#if RNI_SUPERSAMPLE_GL
+  // FP-14: names RECORD wraps; generated here, where the context is current.
+  if (context != nullptr && rni::scenegraph_gl::Ready()) {
+    if (!namePool_) namePool_ = std::make_shared<GlNamePool>();
+    namePool_->Refill();
+  }
+#endif
+}
+
+std::unique_ptr<RasterJobs> SceneGraph::makeRasterJobs() {
+  if (renderContext_ == nullptr || !namePool_) return nullptr;
+  return std::make_unique<RasterJobs>(renderContext_, namePool_);
+}
+
 void SceneGraph::updateFromShadowView(SceneNode& node,
                                       const react::ShadowView& view) {
   node.tag = view.tag;
@@ -2009,8 +2025,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // control the gate proves does NOT anti-alias. A failure inside the helper
   // returns false and we fall through to the in-place walk below, so a broken
   // offscreen degrades to a correct-but-aliased icon, never a blank one.
-  if (node.isSvgRoot && supersample_ >= 1 && renderContext_ != nullptr &&
-      rni::scenegraph_gl::Ready()) {
+  if (node.isSvgRoot && supersample_ >= 1 && jobs_ != nullptr) {
     if (paintSvgRootSupersampled(builder, node, x, y, w, h)) {
       // ⛔ COUNT THE SUBTREE CACHE-INDEPENDENTLY. The offscreen render (which is
       // the only thing that walks the children, and only on a cache MISS) does
@@ -2034,7 +2049,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // through to the plain in-place walk below, which paints this leaf's
   // background/border and nothing else -- never a crash, never a blank
   // surprise beyond "no image".
-  if (node.isWorldRaster && renderContext_ != nullptr) {
+  if (node.isWorldRaster && jobs_ != nullptr) {
     if (paintWorldNode(builder, node, x, y, w, h)) {
       // ENG-10: the drawSprites list composites OVER the world buffer, on the
       // GPU, inside this same single <world> node (no per-sprite nodes).
@@ -2310,7 +2325,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // ENG-10: a <world> with a sprite list but NO setPixels buffer still
   // composites its sprites, over its own background painted just above. (With
   // a buffer, the early return in the <world> hook already drew them.)
-  if (node.isWorldRaster && renderContext_ != nullptr) {
+  if (node.isWorldRaster && jobs_ != nullptr) {
     paintWorldSprites(builder, node, x, y, w, h);
   }
 #endif
@@ -2560,12 +2575,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   if (node.isImage && w > 0.0f && h > 0.0f && !node.imgSources.empty()) {
     const SceneNode::ImageSrc& src = PickImageSource(node.imgSources, w, h);
     int tw = 0, th = 0;
-    ImpellerTexture tex = imageTextures_.Get(renderContext_, src.uri, &tw, &th);
+    ImpellerTexture tex = imageTextures_.Get(renderContext_, jobs_, src.uri, &tw, &th);
     // Natural size: the source's declared size if JS sent one, else pixels / scale.
     float scale = src.scale > 0.0f ? src.scale : 1.0f;
     if (src.width > 0.0f) scale = (float)tw / src.width;
     if (tex == nullptr && !node.imgDefaultUri.empty()) {
-      tex = imageTextures_.Get(renderContext_, node.imgDefaultUri, &tw, &th);
+      tex = imageTextures_.Get(renderContext_, jobs_, node.imgDefaultUri, &tw, &th);
       scale = 1.0f;
     }
     if (tex != nullptr) {
@@ -2980,188 +2995,40 @@ std::string SceneGraph::svgSubtreeCacheKey(const SceneNode& node, int pxW,
 }
 
 #if RNI_SUPERSAMPLE_GL
-// ENG item 2 — render the <Svg> subtree into a fresh pxW x pxH offscreen FBO and
-// adopt its colour texture. The heavy lifting (GL FBO dance, re-entry guard,
-// coordinate mapping) lives here so both the initial N x rasterise and any
-// intermediate size go through one code path.
-ImpellerTexture SceneGraph::renderSvgSubtreeToTexture(const SceneNode& node,
-                                                      float x, float y, float w,
-                                                      float h, int pxW,
-                                                      int pxH) {
-  GLint prevFbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-  GLint prevViewport[4] = {0, 0, 0, 0};
-  glGetIntegerv(GL_VIEWPORT, prevViewport);
-
-  GLuint colorTex = 0, fbo = 0, depthStencil = 0;
-  glGenTextures(1, &colorTex);
-  glBindTexture(GL_TEXTURE_2D, colorTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, pxW, pxH, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         colorTex, 0);
-  // ⛔ DEPTH+STENCIL OR EVERY CONCAVE FILL PAINTS ITS BOUNDING BOX. Impeller's
-  // non-convex fills are stencil-then-cover; a colour-only offscreen FBO makes
-  // the accumulate pass a no-op and the cover pass unmasked. Chevrons are
-  // strokes (convex quads, would survive), but an icon set has filled concave
-  // glyphs too — the exact silent-wrong-shape trap HeadlessSurface documents.
-  glGenRenderbuffers(1, &depthStencil);
-  glBindRenderbuffer(GL_RENDERBUFFER, depthStencil);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, pxW, pxH);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                            GL_RENDERBUFFER, depthStencil);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                            GL_RENDERBUFFER, depthStencil);
-
-  ImpellerTexture texture = nullptr;
-  bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-  ImpellerSurface offscreen = nullptr;
-  if (ok) {
-    ImpellerISize size = {pxW, pxH};
-    offscreen = ImpellerSurfaceCreateWrappedFBONew(
-        renderContext_, fbo, kImpellerPixelFormatRGBA8888, &size);
-    ok = offscreen != nullptr;
-  }
-  if (ok) {
-    // Map the painted box (x,y,w,h) onto the whole (0,0,pxW,pxH) offscreen.
-    // Scale then translate: a point p lands at scale*(p - origin), so
-    // (x,y)->(0,0) and (x+w,y+h)->(pxW,pxH). Exact ratios absorb the ceil().
-    const float sx = (float)pxW / w;
-    const float sy = (float)pxH / h;
-    ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
-    ImpellerDisplayListBuilderScale(off, sx, sy);
-    ImpellerDisplayListBuilderTranslate(off, -x, -y);
-    // ⛔ SUPPRESS RE-ENTRY. paintNode would otherwise take the supersample hook
-    // again for this very node and recurse forever. Zero it for the inner walk,
-    // restore after — nested <Svg> roots simply paint in place.
-    const int savedN = supersample_;
-    supersample_ = 0;
-    // ⛔ THE OFFSCREEN WALK MUST COUNT NOTHING. painted_nodes is attributed
-    // CACHE-INDEPENDENTLY at the supersample hook (paintNode: `painted_ +=
-    // countPaintedNodes(node) - 1`), which fires on BOTH a cache hit and miss.
-    // This inner paintNode walk only happens on a MISS (renderSvgSubtreeToTexture
-    // runs only when svgCache_.find misses), so letting it touch painted_ would
-    // make the tally cache-dependent: a hit would count the subtree once (via the
-    // hook), a miss would count it twice (hook + this walk). Save painted_ before
-    // the walk and restore it after so the offscreen render leaves the counter
-    // exactly as it found it — the hook is the single source of truth.
-    //   NOT a `--painted_` (the old fix): that cancelled only the ROOT's extra
-    //   increment and left the CHILDREN double-counted on a miss. With the hook
-    //   attributing the whole subtree, the correct move is to zero this walk's
-    //   contribution entirely, hence save/restore rather than a single decrement.
-    const int savedPainted = painted_;
-    // Reproduce the exact absolute coordinates the caller used: paintNode
-    // computes x = originX + frame.origin.x, so pass origin = painted - frame.
-    const float originX = x - (float)node.layoutMetrics.frame.origin.x;
-    const float originY = y - (float)node.layoutMetrics.frame.origin.y;
-    paintNode(off, node, originX, originY);
-    supersample_ = savedN;
-    painted_ = savedPainted;
-
-    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
-    if (dl) {
-      ImpellerSurfaceDrawDisplayList(offscreen, dl);
-      ImpellerDisplayListRelease(dl);
-      glFinish();
-      // Adopt the FBO's colour texture. Ownership TRANSFERS to Impeller — never
-      // glDeleteTextures(colorTex) after this; the caller holds the
-      // ImpellerTexture (re-adopting the same handle double-frees).
-      ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                        {pxW, pxH}, 1};
-      texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-          renderContext_, &desc, (uint64_t)colorTex);
-    }
-    ImpellerDisplayListBuilderRelease(off);
-  }
-
-  if (offscreen) ImpellerSurfaceRelease(offscreen);
-  // The FBO and depth/stencil renderbuffer are OURS; free them. The colour
-  // texture is NOT — Impeller owns it now (or, on the rare adoption-failure
-  // path, we drop the handle: a single leaked texture, preferable to a
-  // double-free).
-  glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
-  glDeleteFramebuffers(1, &fbo);
-  glDeleteRenderbuffers(1, &depthStencil);
-  glViewport(prevViewport[0], prevViewport[1], prevViewport[2],
-             prevViewport[3]);
-  return texture;
-}
-
-// ENG item 2 — one 2x downsample step. Draws `src` into a fresh dstW x dstH FBO
-// with LINEAR sampling. This is an EXACT box average ONLY at a 2x reduction: a
-// linear tap reads a 2x2 texel footprint, so halving averages all four source
-// texels per destination texel. Reducing 4x in one linear step reads a 2x2
-// footprint out of a 4x4 region and MISSES half the samples — which is why the
-// caller halves iteratively (16x -> 8 -> 4 -> 2 -> 1) instead of once.
-ImpellerTexture SceneGraph::halveTexture(ImpellerTexture src, int srcW,
-                                         int srcH, int dstW, int dstH) {
-  GLint prevFbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-  GLint prevViewport[4] = {0, 0, 0, 0};
-  glGetIntegerv(GL_VIEWPORT, prevViewport);
-
-  GLuint colorTex = 0, fbo = 0;
-  glGenTextures(1, &colorTex);
-  glBindTexture(GL_TEXTURE_2D, colorTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dstW, dstH, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         colorTex, 0);
-  // No depth/stencil needed: this pass draws ONE textured quad, no path fills.
-
-  ImpellerTexture out = nullptr;
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-    ImpellerISize size = {dstW, dstH};
-    ImpellerSurface surf = ImpellerSurfaceCreateWrappedFBONew(
-        renderContext_, fbo, kImpellerPixelFormatRGBA8888, &size);
-    if (surf) {
-      ImpellerDisplayListBuilder b = ImpellerDisplayListBuilderNew(nullptr);
-      // ⛔ Y-FLIP THE DRAW. `src` is read out of a wrapped GL FBO
-      // (ImpellerSurfaceCreateWrappedFBONew), whose colour attachment is
-      // BOTTOM-LEFT origin, while DrawTextureRect samples TOP-LEFT — so each such
-      // draw comes out vertically mirrored. A negative-height srcRect does NOT
-      // flip here (Impeller clamps it and fills the whole surface); flip via a
-      // builder transform instead: translate down by the dst height, scale y by
-      // -1. This MUST be at every FBO-texture draw: the root chain does
-      // (halves + 1) such hops, so flipping only the final composite would leave
-      // odd hop counts (N=2, N=8) mirrored while even counts (N=4) stay upright —
-      // the exact N-dependent parity bug measured.
-      ImpellerRect srcRect = {0, 0, (float)srcW, (float)srcH};
-      ImpellerRect dstRect = {0, 0, (float)dstW, (float)dstH};
-      ImpellerDisplayListBuilderSave(b);
-      ImpellerDisplayListBuilderTranslate(b, 0, (float)dstH);
-      ImpellerDisplayListBuilderScale(b, 1.0f, -1.0f);
-      ImpellerDisplayListBuilderDrawTextureRect(
-          b, src, &srcRect, &dstRect, kImpellerTextureSamplingLinear, nullptr);
-      ImpellerDisplayListBuilderRestore(b);
-      ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(b);
-      if (dl) {
-        ImpellerSurfaceDrawDisplayList(surf, dl);
-        ImpellerDisplayListRelease(dl);
-        glFinish();
-        ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                          {dstW, dstH}, 1};
-        out = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-            renderContext_, &desc, (uint64_t)colorTex);
-      }
-      ImpellerDisplayListBuilderRelease(b);
-      ImpellerSurfaceRelease(surf);
-    }
-  }
-
-  glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
-  glDeleteFramebuffers(1, &fbo);
-  glViewport(prevViewport[0], prevViewport[1], prevViewport[2],
-             prevViewport[3]);
-  return out;
+// ENG item 2 / FP-14 — record the <Svg> subtree mapped onto a pxW x pxH
+// offscreen. RasterJobs renders it (depth+stencil FBO) and halves it on the
+// raster side; this half only walks the tree.
+ImpellerDisplayList SceneGraph::recordSvgSubtree(const SceneNode& node, float x,
+                                                 float y, float w, float h,
+                                                 int pxW, int pxH) {
+  // Map the painted box (x,y,w,h) onto the whole (0,0,pxW,pxH) offscreen.
+  // Scale then translate: a point p lands at scale*(p - origin), so
+  // (x,y)->(0,0) and (x+w,y+h)->(pxW,pxH). Exact ratios absorb the ceil().
+  const float sx = (float)pxW / w;
+  const float sy = (float)pxH / h;
+  ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
+  ImpellerDisplayListBuilderScale(off, sx, sy);
+  ImpellerDisplayListBuilderTranslate(off, -x, -y);
+  // ⛔ SUPPRESS RE-ENTRY. paintNode would otherwise take the supersample hook
+  // again for this very node and recurse forever. Zero it for the inner walk,
+  // restore after — nested <Svg> roots simply paint in place.
+  const int savedN = supersample_;
+  supersample_ = 0;
+  // ⛔ THE OFFSCREEN WALK MUST COUNT NOTHING. painted_nodes is attributed
+  // cache-independently at the supersample hook (paintNode: `painted_ +=
+  // countPaintedNodes(node) - 1`), which fires on both a cache hit and miss;
+  // this walk only runs on a miss, so it saves and restores painted_.
+  const int savedPainted = painted_;
+  // Reproduce the exact absolute coordinates the caller used: paintNode
+  // computes x = originX + frame.origin.x, so pass origin = painted - frame.
+  const float originX = x - (float)node.layoutMetrics.frame.origin.x;
+  const float originY = y - (float)node.layoutMetrics.frame.origin.y;
+  paintNode(off, node, originX, originY);
+  supersample_ = savedN;
+  painted_ = savedPainted;
+  ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
+  ImpellerDisplayListBuilderRelease(off);
+  return dl;
 }
 
 // <world> ENG-09 — WORLD PAINTER. Reads WorldRasterStore by node name (set
@@ -3213,55 +3080,39 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
   if (entry->pixels.size() < (size_t)srcW * (size_t)srcH * 4) return false;
 
   WorldTextureEntry& cacheEntry = worldTextureCache_[node.tag];
+  // FP-14: an upload whose frame was dropped never ran; start over.
+  if (JobFailed(cacheEntry.job)) cacheEntry.glTex = 0;
   const bool sizeChanged =
       cacheEntry.glTex == 0 || cacheEntry.texW != srcW || cacheEntry.texH != srcH;
 
+  // FP-14: RECORD wraps a raster-generated name and queues the upload; the
+  // raster side runs glTexImage2D / glTexSubImage2D before it draws the list.
+  // The job keeps `entry` (immutable after publish) alive until then.
   if (sizeChanged) {
-    // First frame for this node, or its buffer's dimensions changed --
-    // (re)allocate.
-    //
-    // ⛔ A RESIZE NEEDS A FRESH GL NAME. RELEASE FIRST, THEN glGenTextures.
-    // ImpellerTextureCreateWithOpenGLTextureHandleNew TAKES OWNERSHIP of the
-    // handle: Impeller calls glDeleteTextures on it when the last reference
-    // drops (impeller.h, "Ownership of the handle is transferred"). The old
-    // order reused the adopted name: glTexImage2D the new pixels into it,
-    // THEN release the old wrapper, which DELETED that name along with the
-    // pixels just uploaded, THEN adopt the dead name. Every frame after a
-    // size change sampled a texture with no storage: pure black terrain on
-    // Mesa, with world_sprites_drawn and scene_nodes still reporting success.
-    // Measured by tools/ci-world-resize.sh (a 160x120 -> 320x240 swap
-    // mid-session). Once adopted, the name belongs to Impeller; never reuse it.
+    // ⛔ A RESIZE NEEDS A FRESH GL NAME. ImpellerTextureCreateWithOpenGLTextureHandleNew
+    // TAKES OWNERSHIP of the handle: Impeller deletes it when the last
+    // reference drops. Reusing the adopted name after releasing its wrapper
+    // sampled a deleted texture: pure black terrain on Mesa (measured by
+    // tools/ci-world-resize.sh, 160x120 -> 320x240 mid-session).
     if (cacheEntry.texture) {
-      ImpellerTextureRelease(cacheEntry.texture);
+      ImpellerTextureRelease(cacheEntry.texture);  // GL-free: marks the handle
       cacheEntry.texture = nullptr;
-      cacheEntry.glTex = 0;  // Impeller deletes it; it is no longer ours
     }
-    if (cacheEntry.glTex == 0) {
-      GLuint tex = 0;
-      glGenTextures(1, &tex);
-      cacheEntry.glTex = tex;
-    }
-    glBindTexture(GL_TEXTURE_2D, cacheEntry.glTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, srcW, srcH, 0, GL_RGBA,
-                GL_UNSIGNED_BYTE, entry->pixels.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    uint32_t name = 0;
+    cacheEntry.texture = jobs_->WrapNewName(srcW, srcH, &name);
+    cacheEntry.glTex = name;
+    if (cacheEntry.texture == nullptr) return false;
     cacheEntry.texW = srcW;
     cacheEntry.texH = srcH;
     cacheEntry.uploadedVersion = entry->version;
-    ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                      {srcW, srcH}, 1};
-    cacheEntry.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-        renderContext_, &desc, (uint64_t)cacheEntry.glTex);
+    cacheEntry.job = jobs_->AddUpload(cacheEntry.texture, name, srcW, srcH,
+                                      entry->pixels.data(), entry, /*allocate=*/true,
+                                      /*clampEdges=*/false, /*image=*/false);
   } else if (entry->version != cacheEntry.uploadedVersion) {
-    // Same dimensions, new pixels -- a partial update via glTexSubImage2D is
-    // the whole point of tracking uploadedVersion: re-running glTexImage2D
-    // every frame would reallocate GPU storage for a texture that never
-    // changed size, which is wasteful and is exactly what glTexSubImage2D
-    // avoids.
-    glBindTexture(GL_TEXTURE_2D, cacheEntry.glTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH, GL_RGBA,
-                    GL_UNSIGNED_BYTE, entry->pixels.data());
+    // Same dimensions, new pixels: glTexSubImage2D, no reallocation.
+    cacheEntry.job = jobs_->AddUpload(cacheEntry.texture, cacheEntry.glTex, srcW, srcH,
+                                      entry->pixels.data(), entry, /*allocate=*/false,
+                                      /*clampEdges=*/false, /*image=*/false);
     cacheEntry.uploadedVersion = entry->version;
   }
 
@@ -3343,40 +3194,27 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
     if (src && srcW > 0 && srcH > 0 &&
         src->pixels.size() >= (size_t)srcW * (size_t)srcH * 4) {
       WorldTextureEntry& e = spriteTextureCache_[textureId];
+      if (JobFailed(e.job)) e.glTex = 0;  // FP-14: its upload never ran
       const bool sizeChanged = e.glTex == 0 || e.texW != srcW || e.texH != srcH;
       if (sizeChanged) {
-        // ⛔ Same ownership rule as paintWorldNode: the adopted name is
-        // Impeller's and dies with the old wrapper. Release FIRST, then take a
-        // fresh name, or a re-registered sprite of a new size adopts a deleted
-        // texture and draws black.
+        // ⛔ Same ownership rule as paintWorldNode: a fresh name per size.
         if (e.texture) {
           ImpellerTextureRelease(e.texture);
           e.texture = nullptr;
-          e.glTex = 0;
         }
-        if (e.glTex == 0) {
-          GLuint tex = 0;
-          glGenTextures(1, &tex);
-          e.glTex = tex;
+        uint32_t name = 0;
+        e.texture = jobs_->WrapNewName(srcW, srcH, &name);
+        e.glTex = name;
+        if (e.texture) {
+          e.texW = srcW;
+          e.texH = srcH;
+          e.uploadedVersion = src->version;
+          e.job = jobs_->AddUpload(e.texture, name, srcW, srcH, src->pixels.data(), src,
+                                   /*allocate=*/true, /*clampEdges=*/true, /*image=*/false);
         }
-        glBindTexture(GL_TEXTURE_2D, e.glTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, srcW, srcH, 0, GL_RGBA,
-                     GL_UNSIGNED_BYTE, src->pixels.data());
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        e.texW = srcW;
-        e.texH = srcH;
-        e.uploadedVersion = src->version;
-        ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                          {srcW, srcH}, 1};
-        e.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-            renderContext_, &desc, (uint64_t)e.glTex);
       } else if (src->version != e.uploadedVersion) {
-        glBindTexture(GL_TEXTURE_2D, e.glTex);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH, GL_RGBA,
-                        GL_UNSIGNED_BYTE, src->pixels.data());
+        e.job = jobs_->AddUpload(e.texture, e.glTex, srcW, srcH, src->pixels.data(), src,
+                                 /*allocate=*/false, /*clampEdges=*/true, /*image=*/false);
         e.uploadedVersion = src->version;
       }
       if (e.texture) out = &e;
@@ -3488,6 +3326,15 @@ bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
   ImpellerTexture texture = nullptr;
   int texW = 0, texH = 0;
   auto cacheIt = svgCache_.find(key);
+  // FP-14: an entry whose offscreen job failed or was dropped is re-recorded.
+  if (cacheIt != svgCache_.end() && JobFailed(cacheIt->second.job)) {
+    if (cacheIt->second.texture) ImpellerTextureRelease(cacheIt->second.texture);
+    svgCache_.erase(cacheIt);
+    auto oit = std::find(svgCacheOrder_.begin(), svgCacheOrder_.end(), key);
+    if (oit != svgCacheOrder_.end()) svgCacheOrder_.erase(oit);
+    cacheIt = svgCache_.end();
+  }
+  JobFlag job;
   if (cacheIt != svgCache_.end()) {
     texture = cacheIt->second.texture;
     texW = cacheIt->second.texW;
@@ -3497,33 +3344,26 @@ bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
     if (oit != svgCacheOrder_.end()) svgCacheOrder_.erase(oit);
     svgCacheOrder_.push_back(key);
   } else {
-    // 1. Rasterise the subtree at full N x.
-    ImpellerTexture cur = renderSvgSubtreeToTexture(node, x, y, w, h, pxW, pxH);
-    if (cur == nullptr) return false;  // fall back to in-place
-    int curW = pxW, curH = pxH;
-
-    // 2. Halve repeatedly until within 2x of native. Each step is an exact box
-    //    average; stopping at 2x leaves the final 2x reduction to the composite
-    //    DrawTextureRect below, which is itself an exact 2x box average. This is
-    //    what makes N=4, 8, 16 antialias instead of degenerating to point
-    //    sampling (a single linear tap cannot average more than a 2x2 footprint).
-    int guard = 0;
-    while ((curW > nativeW * 2 || curH > nativeH * 2) && guard++ < 16) {
-      const int nW = std::max(nativeW, curW / 2);
-      const int nH = std::max(nativeH, curH / 2);
-      ImpellerTexture half = halveTexture(cur, curW, curH, nW, nH);
-      ImpellerTextureRelease(cur);  // done with this level
-      if (half == nullptr) return false;
-      cur = half;
-      curW = nW;
-      curH = nH;
+    // FP-14: RECORD records the subtree and wraps the final texture's name;
+    // the raster side rasterises it at full N x and halves it repeatedly until
+    // within 2x of native (each step an exact box average), leaving the final
+    // 2x to the composite below. That is what makes N=4, 8, 16 antialias
+    // instead of degenerating to point sampling.
+    const auto hops = RasterJobs::HalveChain(pxW, pxH, nativeW, nativeH);
+    texW = hops.empty() ? pxW : hops.back().first;
+    texH = hops.empty() ? pxH : hops.back().second;
+    uint32_t name = 0;
+    texture = jobs_->WrapNewName(texW, texH, &name);
+    if (texture == nullptr) return false;  // pool empty: paint in place
+    ImpellerDisplayList dl = recordSvgSubtree(node, x, y, w, h, pxW, pxH);
+    if (dl == nullptr) {
+      ImpellerTextureRelease(texture);
+      return false;
     }
-    texture = cur;
-    texW = curW;
-    texH = curH;
+    job = jobs_->AddOffscreen(dl, pxW, pxH, hops, name, texture);
 
     // Insert into the cache and evict LRU past the bound.
-    svgCache_[key] = SvgCacheEntry{texture, texW, texH};
+    svgCache_[key] = SvgCacheEntry{texture, texW, texH, job};
     svgCacheOrder_.push_back(key);
     while (svgCacheOrder_.size() > kSvgCacheMax) {
       const std::string& victim = svgCacheOrder_.front();
@@ -3595,104 +3435,42 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   // View borders on an oversize surface lose it. A strict superset of b9edbee.
   if (pxW <= 0 || pxH <= 0 || pxW > 8192 || pxH > 8192) return false;
 
-  GLint prevFbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-  GLint prevViewport[4] = {0, 0, 0, 0};
-  glGetIntegerv(GL_VIEWPORT, prevViewport);
+  // FP-14: RECORD records the N x list and wraps the final texture's name;
+  // RasterJobs renders it (depth+stencil, for stencil-then-cover concave
+  // fills) and halves it to within 2x native before RASTER draws this frame.
+  // One linear tap averages a 2x2 footprint, so reducing N x in one step
+  // would point-sample.
+  const auto hops = RasterJobs::HalveChain(pxW, pxH, nativeW, nativeH);
+  const int texW = hops.empty() ? pxW : hops.back().first;
+  const int texH = hops.empty() ? pxH : hops.back().second;
+  uint32_t name = 0;
+  ImpellerTexture texture = jobs_->WrapNewName(texW, texH, &name);
+  if (texture == nullptr) return false;  // pool empty: in-place walk
 
-  GLuint colorTex = 0, fbo = 0, depthStencil = 0;
-  glGenTextures(1, &colorTex);
-  glBindTexture(GL_TEXTURE_2D, colorTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, pxW, pxH, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         colorTex, 0);
-  // Depth+stencil for the same reason renderSvgSubtreeToTexture attaches it: any
-  // concave fill in the tree is stencil-then-cover and paints its bounding box
-  // without a stencil buffer.
-  glGenRenderbuffers(1, &depthStencil);
-  glBindRenderbuffer(GL_RENDERBUFFER, depthStencil);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, pxW, pxH);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                            GL_RENDERBUFFER, depthStencil);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                            GL_RENDERBUFFER, depthStencil);
-
-  ImpellerTexture texture = nullptr;
-  int texW = 0, texH = 0;
-  bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-  ImpellerSurface offscreen = nullptr;
-  if (ok) {
-    ImpellerISize size = {pxW, pxH};
-    offscreen = ImpellerSurfaceCreateWrappedFBONew(
-        renderContext_, fbo, kImpellerPixelFormatRGBA8888, &size);
-    ok = offscreen != nullptr;
+  ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
+  // points -> N x device pixels: the same root scale paint() applies, times N.
+  const float s = pointScaleFactor * (float)N;
+  ImpellerDisplayListBuilderScale(off, s, s);
+  // ⛔ SUPPRESS THE PER-<Svg>-ROOT HOOK for the inner walk. With supersample_
+  // still >=2, paintNode would take paintSvgRootSupersampled for each icon —
+  // supersampling twice (wasteful) and, worse, at a scale the icon path does
+  // not expect. The root offscreen already supersamples the icons.
+  const int savedN = supersample_;
+  supersample_ = 0;
+  for (auto rootTag : roots_) {
+    auto it = nodes_.find(rootTag);
+    if (it == nodes_.end()) continue;
+    paintNode(off, it->second, 0, 0);
   }
-  if (ok) {
-    ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
-    // points -> N x device pixels: the same root scale paint() applies, times N.
-    const float s = pointScaleFactor * (float)N;
-    ImpellerDisplayListBuilderScale(off, s, s);
-    // ⛔ SUPPRESS THE PER-<Svg>-ROOT HOOK for the inner walk. With supersample_
-    // still >=2, paintNode would take paintSvgRootSupersampled for each icon —
-    // supersampling twice (wasteful) and, worse, at a scale the icon path does
-    // not expect. Zero it so the inner walk is a plain in-place render; restore
-    // after. The root offscreen already supersamples the icons along with
-    // everything else.
-    const int savedN = supersample_;
-    supersample_ = 0;
-    for (auto rootTag : roots_) {
-      auto it = nodes_.find(rootTag);
-      if (it == nodes_.end()) continue;
-      paintNode(off, it->second, 0, 0);
-    }
-    paintModalsLocked(off);
-    supersample_ = savedN;
-
-    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
-    if (dl) {
-      ImpellerSurfaceDrawDisplayList(offscreen, dl);
-      ImpellerDisplayListRelease(dl);
-      glFinish();
-      ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                        {pxW, pxH}, 1};
-      texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-          renderContext_, &desc, (uint64_t)colorTex);
-      texW = pxW;
-      texH = pxH;
-    }
-    ImpellerDisplayListBuilderRelease(off);
+  paintModalsLocked(off);
+  supersample_ = savedN;
+  ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
+  ImpellerDisplayListBuilderRelease(off);
+  if (dl == nullptr) {
+    ImpellerTextureRelease(texture);
+    return false;
   }
-
-  if (offscreen) ImpellerSurfaceRelease(offscreen);
-  glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
-  glDeleteFramebuffers(1, &fbo);
-  glDeleteRenderbuffers(1, &depthStencil);
-  glViewport(prevViewport[0], prevViewport[1], prevViewport[2],
-             prevViewport[3]);
-
-  if (texture == nullptr) return false;  // fall back to in-place walk
-
-  // Halve iteratively to within 2x native; the final composite is the last 2x
-  // box average. Exactly the icon path's reasoning: one linear tap averages a
-  // 2x2 footprint, so reducing N x in one step would point-sample.
-  {
-    int guard = 0;
-    while ((texW > nativeW * 2 || texH > nativeH * 2) && guard++ < 16) {
-      const int nW = std::max(nativeW, texW / 2);
-      const int nH = std::max(nativeH, texH / 2);
-      ImpellerTexture half = halveTexture(texture, texW, texH, nW, nH);
-      ImpellerTextureRelease(texture);
-      if (half == nullptr) return false;  // fall back; frame paints in place
-      texture = half;
-      texW = nW;
-      texH = nH;
-    }
-  }
+  jobs_->AddOffscreen(dl, pxW, pxH, hops, name, texture);
 
   // ---- Composite in DEVICE PIXELS. ----
   // paint() applies its pointScaleFactor scale around the in-place walk; the
@@ -3923,7 +3701,14 @@ ImpellerColorSource SceneGraph::makeGradientSource(const SceneNode* def,
 
 int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
                             float pointScaleFactor,
-                            std::vector<facebook::react::EventEmitter::Shared>* shows) {
+                            std::vector<facebook::react::EventEmitter::Shared>* shows,
+                            RasterJobs* jobs) {
+  // FP-14: GPU work found by this walk is queued here, never done here.
+  struct JobsScope {
+    RasterJobs*& slot;
+    ~JobsScope() { slot = nullptr; }
+  } jobsScope{jobs_};
+  jobs_ = jobs;
   // Rebuild the gradient registry before walking the tree: a def may be
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
@@ -3955,7 +3740,7 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   pointScale_ = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;  // elevation DPR
   painted_ = 0;  // per frame: the root hook's inner walk counts into it (else N>=2 sums frames)
   spritesDrawn_ = 0;  // same rule: world_sprites_drawn is one frame's count
-  if (supersample_ >= 2 && rni::scenegraph_gl::Ready() &&
+  if (supersample_ >= 2 && jobs_ != nullptr &&
       paintTreeSupersampled(builder, pointScaleFactor)) {
     // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
     // so it already reflects the visited node count.

@@ -475,6 +475,13 @@ static void FinishTrace() {
 
 // FP-02: cost of a span while tracing is OFF, measured in-process through the
 // same macro the engine uses, against an empty loop with the same barrier.
+// MSVC has no GNU inline asm (FP-02 broke the win32 build with it).
+#if defined(_MSC_VER)
+#include <intrin.h>
+#define RNI_COMPILER_BARRIER() _ReadWriteBarrier()
+#else
+#define RNI_COMPILER_BARRIER() asm volatile("" ::: "memory")
+#endif
 static int RunTraceBench(long iterations) {
   using Clock = std::chrono::steady_clock;
   auto timeLoop = [&](bool withSpan) {
@@ -482,9 +489,9 @@ static int RunTraceBench(long iterations) {
     for (long i = 0; i < iterations; ++i) {
       if (withSpan) {
         TRACE_EVENT0("bench", "span");
-        asm volatile("" ::: "memory");
+        RNI_COMPILER_BARRIER();
       } else {
-        asm volatile("" ::: "memory");
+        RNI_COMPILER_BARRIER();
       }
     }
     return std::chrono::duration<double, std::nano>(Clock::now() - t0).count();

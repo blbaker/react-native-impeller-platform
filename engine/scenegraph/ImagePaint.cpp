@@ -22,13 +22,27 @@ ImageTextures::~ImageTextures() {
   }
 }
 
-ImpellerTexture ImageTextures::Get(ImpellerContext context, const std::string& uri, int* outW,
-                                   int* outH) {
+ImpellerTexture ImageTextures::Get(ImpellerContext context, RasterJobs* jobs,
+                                   const std::string& uri, int* outW, int* outH) {
   auto it = entries_.find(uri);
+  // FP-14: an upload whose frame was dropped never ran; upload again.
+  if (it != entries_.end() && JobFailed(it->second.job)) {
+    if (it->second.texture) ImpellerTextureRelease(it->second.texture);
+    entries_.erase(it);
+    it = entries_.end();
+  }
   if (it == entries_.end()) {
     Entry e;
     auto d = image::Load(uri);
-    if (d && context) {
+    if (d && context && jobs) {
+      uint32_t name = 0;
+      e.texture = jobs->WrapNewName(d->width, d->height, &name);
+      if (e.texture == nullptr) return nullptr;  // pool empty: next frame
+      e.job = jobs->AddUpload(e.texture, name, d->width, d->height, d->rgba.data(), d,
+                              /*allocate=*/true, /*clampEdges=*/false, /*image=*/true);
+      e.width = d->width;
+      e.height = d->height;
+    } else if (d && context) {
       ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {d->width, d->height}, 1};
       // The mapping keeps the decoded pixels alive until Impeller has uploaded them.
       ImpellerMapping mapping = {d->rgba.data(), (uint64_t)d->rgba.size(), &ReleaseDecoded};

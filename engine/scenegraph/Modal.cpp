@@ -12,12 +12,13 @@ namespace rni {
 
 namespace react = facebook::react;
 
-int SceneGraph::paint(ImpellerDisplayListBuilder builder, float pointScaleFactor) {
+int SceneGraph::paint(ImpellerDisplayListBuilder builder, float pointScaleFactor,
+                      RasterJobs* jobs) {
   std::vector<react::EventEmitter::Shared> shows;
   int painted;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    painted = paintLocked(builder, pointScaleFactor, &shows);
+    painted = paintLocked(builder, pointScaleFactor, &shows, jobs);
   }
   // onShow once the modal has been painted; dispatched outside mutex_.
   for (const auto& e : shows) {

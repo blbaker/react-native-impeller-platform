@@ -13,8 +13,9 @@
 //   RASTER  RasterFrame(): stamp raster start, draw the list onto the surface,
 //           stamp raster end. The caller presents (windowed) or reads back.
 //
-// RECORD still touches GL in places (supersample offscreens, world/sprite
-// texture adoption, image texture creation); STATE.md lists them for FP-14.
+// FP-14: RECORD makes no GL call. GPU work the walk needs (supersample
+// offscreens, world/sprite/image uploads) rides in `jobs`; RASTER runs it
+// before the draw (scenegraph/RasterJobs.h).
 #pragma once
 
 #include <cstdint>
@@ -24,6 +25,7 @@
 #include "host/FrameTimings.h"
 #include "host/Pipeline.h"
 #include "impeller.h"
+#include "scenegraph/RasterJobs.h"
 
 namespace rni {
 
@@ -41,6 +43,7 @@ struct FrameItem {
   int painted = 0;  // nodes the walk visited
   uint64_t frameNumber = 0;  // == timings->frameNumber()
   std::unique_ptr<FrameTimingsRecorder> timings;
+  std::unique_ptr<RasterJobs> jobs;  // FP-14: null without a GL context
 };
 
 using FramePipeline = Pipeline<FrameItem>;
@@ -54,12 +57,13 @@ std::unique_ptr<FrameItem> RecordFrame(SceneGraph& scene, float pointScale,
                                        std::unique_ptr<FrameTimingsRecorder> timings,
                                        const RecordExtras& extras = nullptr);
 
-// RASTER. Stamps raster start/end around draw(item.displayList); false when
-// the item has no display list or draw fails.
+// RASTER. Stamps raster start/end around the item's jobs + draw(displayList);
+// false when the item has no display list or draw fails.
 bool RasterFrame(FrameItem& item,
                  const std::function<bool(ImpellerDisplayList)>& draw);
 
 // `pipeline depth= produced= consumed= abandoned= refused= max_inflight=`
+// plus FP-14's `record_gl ...` line.
 void PrintPipelineSummary(const FramePipeline& pipeline);
 
 }  // namespace rni

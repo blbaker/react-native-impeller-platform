@@ -16,7 +16,8 @@ FRAME_CHILDREN = ["PaintWalk", "DisplayListBuild", "Draw", "Present"]
 HOME = {"Frame": "main", "Record": "main", "Raster": "main", "PaintWalk": "main", "DisplayListBuild": "main", "Draw": "main",
         "Present": "main", "NativeAnimatedPump": "main", "NativeAnimatedTick": "main",
         "JsCommit": "js", "MountTransaction": "js", "TextMeasure": "js",
-        "ImageFetch": "image-io", "ImageDecode": "image-io", "ImageUpload": "main"}
+        "ImageFetch": "image-io", "ImageDecode": "image-io", "ImageUpload": "main",
+        "RasterJobs": "main", "Offscreen": "main", "TextureUpload": "main"}
 
 
 def fail(msg):

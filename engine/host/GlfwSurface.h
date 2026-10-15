@@ -481,6 +481,7 @@ class GlfwSurface {
 
  private:
   std::string title_ = "React Native (Impeller)";
+  void installRecordHooks();  // FP-14
 
 #if defined(__APPLE__)
   // Builds the ANGLE display/context and the window surface bound to the

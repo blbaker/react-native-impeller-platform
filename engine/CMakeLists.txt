@@ -246,6 +246,7 @@ add_executable(rn-impeller
   host/FrameTimings.cpp
   host/FrameScheduler.cpp
   host/FrameItem.cpp
+  host/RecordNoGl.cpp
   host/AnimRowProbe.cpp
   base/Trace.cpp
   base/SanitizerHooks.cpp
@@ -292,6 +293,7 @@ add_executable(rn-impeller
   scenegraph/ActivityIndicator.cpp
   scenegraph/Modal.cpp
   scenegraph/ImagePaint.cpp
+  scenegraph/RasterJobs.cpp
   scenegraph/ImageEvents.cpp
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
