@@ -69,6 +69,7 @@
 #include "host/FrameTimings.h"
 #include "base/Trace.h"
 #include "base/SanitizerHooks.h"
+#include "base/GlValidation.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
@@ -737,6 +738,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // precisely the mark-only trap this fix exists to avoid, and exactly what
     // the M2 mutant in tools/mutation-verify-resize.sh does.
     ++paintsTotal;
+    rni::glvalidation::OnFrame();  // FP-05 test hook
     // ⛔ firstFramePresented: THE APP'S "YOU ARE ON SCREEN NOW" SIGNAL.
     // Emitted once, after the first present returns, so a launch animation
     // can start its clock from the moment pixels reach the window instead of
@@ -1738,6 +1740,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   printf("rn-impeller: presents=%d\n", paintsTotal);
   FinishFrameTimings(frameTimings);
   FinishTrace();
+  rni::glvalidation::Finish();
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
   // a completely different failure from touch_downs=3 touch_hits=0 (clicks
@@ -3018,6 +3021,7 @@ int main(int argc, char** argv) {
           hf->RecordPresent();
         }
         ++headlessPresents;
+        rni::glvalidation::OnFrame();  // FP-05 test hook
         headlessTimings.Commit(std::move(hf));
 
         // Frame-0 capture, taken AFTER the first real paint so it is a
@@ -3115,6 +3119,7 @@ int main(int argc, char** argv) {
     printf("rn-impeller: presents=%d\n", headlessPresents);
     FinishFrameTimings(headlessTimings);
     FinishTrace();
+    rni::glvalidation::Finish();
   }
 
   std::vector<rni::Px> px;

@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cmath>
 #include <chrono>
+#include "base/GlValidation.h"
 #include "host/GlfwSurface.h"
 
 #if defined(_WIN32)
@@ -410,7 +411,10 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
     return fail("eglCreateWindowSurface failed");
   }
 
-  const EGLint ctxAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_NONE};
+  // FP-05: a debug context so Mesa/ANGLE report API errors through KHR_debug.
+  const EGLint dbg = rni::glvalidation::Enabled() ? 1 : 0;
+  const EGLint ctxAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, 0x31B0 /*EGL_CONTEXT_OPENGL_DEBUG*/, dbg,
+                             EGL_NONE};
   eglContext_ = eglCreateContext(display_, cfg, EGL_NO_CONTEXT, ctxAttrs);
   if (eglContext_ == EGL_NO_CONTEXT) return fail("eglCreateContext failed");
   if (!eglMakeCurrent(display_, eglSurface_, eglSurface_, eglContext_)) {
@@ -457,6 +461,7 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
   // GLFW's desktop-GL default makes glfwCreateWindow fail.
   glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+  if (rni::glvalidation::Enabled()) glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);  // FP-05
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
 #endif
@@ -771,6 +776,7 @@ bool GlfwSurface::init(int width, int height, std::string* error) {
 #endif
 #endif
 
+  rni::glvalidation::Install(&ProcAddr, nullptr);  // FP-05
   context_ = ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ProcAddr, nullptr);
   if (!context_) return fail("ImpellerContextCreateOpenGLESNew returned null");
 

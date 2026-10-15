@@ -1,3 +1,4 @@
+#include "base/GlValidation.h"
 #include "host/HeadlessSurface.h"
 
 #include <EGL/egl.h>
@@ -113,7 +114,10 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
     return fail("eglChooseConfig failed");
   }
   if (!eglBindAPI(EGL_OPENGL_ES_API)) return fail("eglBindAPI failed");
-  const EGLint ctxAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_NONE};
+  // FP-05: a debug context so Mesa/ANGLE report API errors through KHR_debug.
+  const EGLint dbg = rni::glvalidation::Enabled() ? 1 : 0;
+  const EGLint ctxAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, 0x31B0 /*EGL_CONTEXT_OPENGL_DEBUG*/, dbg,
+                             EGL_NONE};
   EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctxAttrs);
   if (ctx == EGL_NO_CONTEXT) return fail("eglCreateContext failed");
   if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
@@ -195,6 +199,7 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   // context is independent of FBO completeness (it needs only a current GL
   // context), so create it either way — the degraded walk still needs it for
   // the offscreen supersample paths and for typography.
+  rni::glvalidation::Install(&ProcAddr, nullptr);  // FP-05
   context_ = ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ProcAddr, nullptr);
   if (!context_) return fail("ImpellerContextCreateOpenGLESNew returned null");
 

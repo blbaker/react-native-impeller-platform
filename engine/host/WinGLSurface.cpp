@@ -22,6 +22,7 @@
 // which takes a GL framebuffer (the only other one wraps a CAMetalDrawable). A
 // Vulkan context has nothing to render into headlessly, and every pixel gate in
 // this program is headless. GL is not a preference here, it is the only door.
+#include "base/GlValidation.h"
 #include "host/WinGLSurface.h"
 
 #include <cstdio>
@@ -220,6 +221,7 @@ bool WinGLSurface::init(int width, int height, std::string* error) {
     return fail("FBO incomplete");
   }
 
+  rni::glvalidation::Install(&ImpellerProcAddr, this);  // FP-05
   context_ = ImpellerContextCreateOpenGLESNew(IMPELLER_VERSION, &ImpellerProcAddr, this);
   if (!context_) return fail("ImpellerContextCreateOpenGLESNew returned null");
   ImpellerISize size = {width_, height_};
