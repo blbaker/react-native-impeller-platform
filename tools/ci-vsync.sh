@@ -45,6 +45,16 @@ else
   BIN="$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller"
 fi
 [ -x "$BIN" ] || fail "no engine binary at $BIN (set RNI_BIN)"
+# FP-57: under tools/ci-sanitize.sh (RNI_BUDGETS_FUNCTIONAL_ONLY=1, sanitizer builds only) the default
+# swaps B for `tick`: B's exact one-frame-per-vsync half stays, its load-relative short-interval
+# count (allowed 3 + 2x control) is a statistic ASan's frame jitter trips at load 0.6; A keeps
+# its paced-mean check and drops the jitter sd budget, D still needs 1-2 presents for the mutation
+# and none while idle but drops the 2-period latency budget (tools/vsync_check.py).
+if [ "${RNI_BUDGETS_FUNCTIONAL_ONLY:-0}" = 1 ]; then
+  "$BIN" --help 2>/dev/null | grep -q '^rn-impeller: sanitize_build=1 ' \
+    || fail "RNI_BUDGETS_FUNCTIONAL_ONLY=1 needs a sanitizer build (no sanitize_build=1 from $BIN --help)"
+  VSYNC_ARMS="${VSYNC_ARMS:-A tick C D}"
+fi
 VSYNC_ARMS="${VSYNC_ARMS:-A B C D}"
 export VSYNC_ARMS
 CONTROL=0

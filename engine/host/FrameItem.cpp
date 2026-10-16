@@ -2,9 +2,11 @@
 #include "host/FrameItem.h"
 
 #include <cstdio>
+#include <optional>
 
 #include "base/Trace.h"
 #include "host/RecordNoGl.h"
+#include "scenegraph/DrawOpLog.h"
 #include "scenegraph/SceneGraph.h"
 
 namespace rni {
@@ -36,7 +38,15 @@ std::unique_ptr<FrameItem> RecordFrame(SceneGraph& scene, float pointScale,
       allowPartial && !extras ? ImpellerDisplayListBuilderNew(nullptr) : nullptr;
   {
     TRACE_EVENT0("paint", "PaintWalk");
+    // FP-50: --dump-draw-ops records the painter's builder calls for this frame.
+    drawop::Capture ops;
+    std::optional<drawop::ScopedCapture> capture;
+    if (drawop::DumpEnabled()) capture.emplace(ops);
     item->painted = scene.paint(builder, pointScale, item->jobs.get(), &damage, culled);
+    if (capture) {
+      capture.reset();
+      drawop::AppendFrame(item->frameNumber, ops);
+    }
   }
   item->extTextures = scene.takeExternalTextureNote();
   item->platformViews = scene.takePlatformViewFrame();  // FP-44

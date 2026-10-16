@@ -23,7 +23,8 @@ int Row();
 inline bool Enabled() { return Row() >= 0; }
 
 // px is top-left ordered, width*height. Prints one anim_row line.
+// frame is the recorded frame's number (main prints `anim_frame frame=` when it records it).
 void OnPresent(const std::vector<Px>& px, int width, int height, int present,
-               uint64_t clock);
+               uint64_t clock, uint64_t frame);
 
 }  // namespace rni::animrow

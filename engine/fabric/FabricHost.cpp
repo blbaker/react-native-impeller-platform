@@ -59,6 +59,7 @@
 #include <unordered_set>
 
 #include "modules/CoreModules.h"
+#include "scenegraph/ImageEvents.h"
 #include "scenegraph/SceneGraph.h"
 #include "scenegraph/DynamicNumber.h"
 #include "text/ImpellerTextLayoutManager.h"
@@ -147,6 +148,7 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
     // FP-40: JS-thread commits and platform-thread LayoutAnimation ticks both
     // pull here. The lock spans pull AND apply so transactions mount in the
     // order they were pulled (fabric/LayoutAnimations.h).
+    rni::image_event_probe::BeforeMount();  // FP-57 test probe, before the mount lock
     std::lock_guard<std::mutex> mountLock(*mountMutex_);
     if (auto transaction = mountingCoordinator->pullTransaction()) {
       if (sceneGraph_ != nullptr) {
@@ -761,6 +763,7 @@ bool FabricHost::updateSurface(int surfaceId, float width, float height,
 void FabricHost::stopSurface() {
   if (!surfaceHandler_) return;
   if (surfaceHandler_->getStatus() == react::SurfaceHandler::Status::Running) {
+    rni::image_event_probe::SurfaceStopping();
     surfaceHandler_->stop();
   }
   scheduler_->unregisterSurface(*surfaceHandler_);

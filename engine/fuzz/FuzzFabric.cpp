@@ -172,6 +172,16 @@ react::Props::Shared MakeProps(const react::ComponentDescriptor& desc,
   }
 }
 
+react::Props::Shared MakePropsExact(const react::ComponentDescriptor& desc,
+                                    const react::Props::Shared& base, const folly::dynamic& raw) {
+  react::PropsParserContext ctx{1, *Get().context};
+  try {
+    return desc.cloneProps(ctx, base, react::RawProps(raw));
+  } catch (const std::exception&) {
+    return nullptr;
+  }
+}
+
 react::ShadowView MakeView(const react::ComponentDescriptor& desc, react::Tag tag,
                            react::Props::Shared props, float x, float y, float w, float h) {
   react::ShadowView v;

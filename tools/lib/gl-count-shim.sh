@@ -76,6 +76,14 @@ static void* realDlsym(void* h, const char* n) {
 
 static int isGl(const char* n) { return n && n[0] == 'g' && n[1] == 'l' && n[2] >= 'A' && n[2] <= 'Z'; }
 
+/* FP-57: no libc string calls on the dlsym path. A sanitizer runtime linked into the binary
+   (clang ASan/TSan) resolves its interceptors through dlsym while it initializes; a strcmp
+   here would enter ASan's not-yet-resolved strcmp interceptor and jump to null (rc 139). */
+static int streq(const char* a, const char* b) {
+  while (*a && *a == *b) { ++a; ++b; }
+  return *a == *b;
+}
+
 static void* wrap(const char* name, void* real) {
   if (!real || !isGl(name)) return real;
   pthread_mutex_lock(&procMutex);
@@ -105,7 +113,7 @@ void* eglGetProcAddress(const char* name) {
 
 void* dlsym(void* handle, const char* name) {
   void* r = realDlsym(handle, name);
-  if (r && name && strcmp(name, "eglGetProcAddress") == 0) {
+  if (r && name && streq(name, "eglGetProcAddress")) {
     if (!realEglGetProc) realEglGetProc = (GetProc)r;
     return (void*)&eglGetProcAddress;
   }

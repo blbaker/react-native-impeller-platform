@@ -41,4 +41,16 @@ class ImageEventBinding {
   std::shared_ptr<const facebook::react::ImageResponseObserver> observer_;
 };
 
+// FP-57 test probe (RNI_TEST_IMAGE_EVENT_STALL_MS; ImageEvents.cpp): quit lands while a
+// JS-thread mount with an <Image> is in flight. Main arms it when the windowed loop starts
+// and reports LoopExited / SurfaceStopping; the mount path calls BeforeMount (before the
+// mount lock) and BeforeLoadStart.
+namespace image_event_probe {
+void Arm();
+void LoopExited();
+void SurfaceStopping();
+void BeforeMount();
+void BeforeLoadStart();
+}  // namespace image_event_probe
+
 }  // namespace rni

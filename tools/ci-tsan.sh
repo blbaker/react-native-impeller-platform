@@ -25,9 +25,14 @@ SERVER_PID="" CHURN_PID=""
 cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; [ -n "$CHURN_PID" ] && kill "$CHURN_PID" 2>/dev/null; [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "kept $WORK" || rm -rf "$WORK"; }
 trap cleanup EXIT
 fail() { echo "TSAN_FAIL: $*"; exit 1; }
+. tools/lib/own-port.sh
 # FP-06: the instrumented binary is 2-5x slower; every gate scales its wait ceilings (never its
 # measured intervals) by this, and so does the engine (base/TestSync.h).
 export RNI_TIME_SCALE="${RNI_TIME_SCALE:-4}"
+# FP-57: the TSan runtime also parses UBSAN_OPTIONS (it embeds UBSan), so an outer ci-sanitize.sh's
+# UBSAN_OPTIONS log_path redirected this suite's race reports into ci-sanitize's dir and
+# tsan_check.py saw none. This suite owns its sanitizer options.
+unset ASAN_OPTIONS UBSAN_OPTIONS LSAN_OPTIONS
 
 echo "== 1. build engine/build-tsan (RNI_SANITIZE=thread)"
 cmake -S engine -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -102,12 +107,6 @@ AN=sc26-nw-animate/prebuilt/sc26-nw-animate.bundle
 TX=eng22-font-family/prebuilt/eng22-font-family.bundle
 IM=image-net/prebuilt/image-net.bundle
 FONTS="$ROOT/fixtures/eng22-font-family/fonts"
-wait_port() {  # port pid
-  for _ in $(seq 50); do
-    python3 -c "import socket; socket.create_connection(('127.0.0.1', $1), 0.2)" 2>/dev/null && return 0
-    kill -0 "$2" 2>/dev/null || fail "http server on $1 did not start (port busy?)"; sleep 0.1
-  done; fail "http server on $1 not reachable"
-}
 # The stress fixture's <Image> fetches /churn.png?n=K: any path gets a 2x2 PNG, logged.
 cat > "$WORK/churn_server.py" <<'PY'
 import http.server, struct, sys, zlib
@@ -132,8 +131,9 @@ http.server.ThreadingHTTPServer(("127.0.0.1", 18932), H).serve_forever()
 PY
 if want churn-window || want churn-headless; then
   : > "$WORK/churn_requests.log"
-  python3 "$WORK/churn_server.py" "$WORK/churn_requests.log" > "$WORK/churn_server.out" 2>&1 & CHURN_PID=$!
-  wait_port 18932 "$CHURN_PID"
+  rni_own_port 18932 "$WORK/churn_server.out" python3 "$WORK/churn_server.py" "$WORK/churn_requests.log" \
+    || fail "churn server could not own 127.0.0.1:18932 for 2 min"
+  CHURN_PID="$OWN_PORT_PID"
 fi
 # --idle-skip is the windowed default for apps (no --frames); it reads the scene version on main.
 run churn-window    window   "$S"  TsanTextChurn 600 --idle-skip
@@ -162,8 +162,9 @@ if want image-window || want image-headless; then
   # The image fixture fetches from ci-image-net.sh's local server: reuse that server verbatim.
   sed -n "/^cat > \"\$WORK\/server.py\" <<'PY'\$/,/^PY\$/p" tools/ci-image-net.sh | sed '1d;$d' > "$WORK/server.py"
   grep -q 'ThreadingHTTPServer(("127.0.0.1", 18931)' "$WORK/server.py" || fail "could not extract the image server from tools/ci-image-net.sh"
-  python3 "$WORK/server.py" "$WORK/requests.log" > "$WORK/server.out" 2>&1 & SERVER_PID=$!
-  wait_port 18931 "$SERVER_PID"
+  rni_own_port 18931 "$WORK/server.out" python3 "$WORK/server.py" "$WORK/requests.log" \
+    || fail "image server could not own 127.0.0.1:18931 for 2 min"
+  SERVER_PID="$OWN_PORT_PID"
   # --idle-skip: the fetch thread bumps the scene version (image damage wake) while main reads it.
   run image-window   window   "$IM" probe 120 --idle-skip
   run image-headless headless "$IM" probe 5

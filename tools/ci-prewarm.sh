@@ -27,6 +27,14 @@ RUNS="${RNI_PREWARM_RUNS:-7}"
 fail() { echo "PREWARM_GATE_FAIL: $*" >&2; exit 1; }
 [ "$(uname -s)" = Linux ] || fail "linux only"
 [ -x "$BIN" ] || fail "no engine binary at $BIN"
+# FP-57: under tools/ci-sanitize.sh (sanitizer builds only) the two absolute time budgets (tour
+# < 150 ms, first use <= 15 ms) are skipped; coverage, hidden, off, log == json, and the tour-vs-off
+# control comparisons still run.
+FUNCTIONAL="${RNI_BUDGETS_FUNCTIONAL_ONLY:-0}"
+if [ "$FUNCTIONAL" = 1 ]; then
+  "$BIN" --help 2>/dev/null | grep -q '^rn-impeller: sanitize_build=1 ' \
+    || fail "RNI_BUDGETS_FUNCTIONAL_ONLY=1 needs a sanitizer build (no sanitize_build=1 from $BIN --help)"
+fi
 [ -s "$FX" ] && [ -s "$STATIC" ] || fail "missing prebuilt bundles"
 command -v xvfb-run > /dev/null || fail "xvfb-run is required"
 WORK="$(mktemp -d)"
@@ -72,8 +80,21 @@ grep -q 'prewarm skipped=off' "$WORK/hid-off.log" || fail "off: no 'prewarm skip
 [ "$(python3 "$H" prewarm "$WORK/hid-off.json")" = -1 ] || fail "off: prewarm_us is not -1 with the tour off"
 
 echo "== cost + first-use ($RUNS runs per arm) =="
+# A wait ceiling, scaled like every other (FP-06): unpaced frames on xvfb, 500 last ~1 s and the
+# fixture repaints at 700 ms, which a loaded ASan run missed once (FP-57). Only S1/S2 are measured.
+FX_FRAMES="$(awk -v s="${RNI_TIME_SCALE:-1}" 'BEGIN{n=int(500*s); print (n < 500 ? 500 : n)}')"
 for i in $(seq 1 "$RUNS"); do
-  for m in on off; do run "fx-$m-$i" "$FX" Fp34Prewarm 500 --prewarm "$m"; done
+  for m in on off; do
+    # A run whose frames lack the S1/S2 shape (first frame after the 700 ms repaint, or the repaint
+    # after the last frame) measured nothing: a loaded ASan box did both (FP-57). Rerun it, at most 2x.
+    for try in 1 2 3; do
+      run "fx-$m-$i" "$FX" Fp34Prewarm "$FX_FRAMES" --prewarm "$m"
+      python3 "$H" s1s2 "$WORK/fx-$m-$i.json" > /dev/null 2>&1 && break
+      if [ "$try" -lt 3 ]; then
+        echo "   fx-$m-$i: no S1/S2 frames ($(python3 "$H" s1s2 "$WORK/fx-$m-$i.json" 2>&1 | tail -1)), rerun $try" >&2
+      fi
+    done
+  done
 done
 for i in $(seq 1 "$RUNS"); do
   log_us="$(field fx-on-$i us)"; json_us="$(python3 "$H" prewarm "$WORK/fx-on-$i.json")"
@@ -82,7 +103,7 @@ for i in $(seq 1 "$RUNS"); do
   echo "$log_us"
 done > "$WORK/us.txt"
 med_us="$(median < "$WORK/us.txt")"
-[ "$med_us" -lt 150000 ] || fail "cost: median tour time $med_us us >= 150000 (runs: $(tr '\n' ' ' < "$WORK/us.txt"))"
+[ "$FUNCTIONAL" = 1 ] || [ "$med_us" -lt 150000 ] || fail "cost: median tour time $med_us us >= 150000 (runs: $(tr '\n' ' ' < "$WORK/us.txt"))"
 echo "   tour median ${med_us} us (runs: $(tr '\n' ' ' < "$WORK/us.txt"))"
 for m in on off; do
   for i in $(seq 1 "$RUNS"); do
@@ -95,6 +116,6 @@ for m in on off; do
 done
 on="$(cat "$WORK/med-on.txt")"; off="$(cat "$WORK/med-off.txt")"
 awk -v o="$off" 'BEGIN{exit !(o >= 16)}' || fail "first-use: the --prewarm off control costs only $off ms over a warm repeat (< 16): the fixture cannot see the defect"
-awk -v o="$on" 'BEGIN{exit !(o <= 15)}' || fail "first-use: with the tour, first use still costs $on ms over a warm repeat (> 15)"
+[ "$FUNCTIONAL" = 1 ] || awk -v o="$on" 'BEGIN{exit !(o <= 15)}' || fail "first-use: with the tour, first use still costs $on ms over a warm repeat (> 15)"
 awk -v o="$on" -v f="$off" 'BEGIN{exit !(o <= 0.65 * f)}' || fail "first-use: tour median $on ms is not <= 65% of the off control $off ms"
-echo "PREWARM_GATE_PASS"
+echo "PREWARM_GATE_PASS$([ "$FUNCTIONAL" = 1 ] && echo " functional-only (sanitizer build: tour $med_us us, first use $on ms vs off $off ms; absolute budgets skipped)")"

@@ -355,6 +355,9 @@ add_executable(rn-impeller
   scenegraph/EllipsizeText.cpp
   scenegraph/BorderCurve.cpp
   scenegraph/BorderDashRounded.cpp
+  scenegraph/DrawOpLog.cpp
+  scenegraph/DrawOpHooks.cpp
+  scenegraph/DrawOpHooksObjects.cpp
   text/ImpellerTextLayoutManager.cpp
   text/FontRegistry.cpp
   text/TypographyContexts.cpp
@@ -362,6 +365,26 @@ add_executable(rn-impeller
   text/FontFallback.cpp
   fabric/platform/impeller/PlatformColorTable.cpp
 )
+
+# FP-50: the painter's translation units are compiled with scenegraph/DrawOpHook.h force-included, so
+# every Impeller builder/paint/path call they make can be recorded (--dump-draw-ops, rni-scenegraph-tests).
+# Only .cpp files here: see the note in DrawOpHook.h about inline functions in headers.
+set(RNI_DRAWOP_HOOKED
+  SceneGraph.cpp Shadows.cpp BackgroundLayers.cpp BorderRounded.cpp Outline.cpp ScrollIndicators.cpp
+  ActivityIndicator.cpp Modal.cpp ImagePaint.cpp DamageTracker.cpp ContentFilters.cpp BackdropBlur.cpp
+  BlendGroup.cpp BorderCurve.cpp BorderDashRounded.cpp ExternalTexturePaint.cpp PlatformViewRecord.cpp
+  SnapshotRecord.cpp)
+set(RNI_DRAWOP_HOOKED_PATHS "${CMAKE_SOURCE_DIR}/svg/SvgPath.cpp" "${CMAKE_SOURCE_DIR}/svg/SvgDash.cpp")
+foreach(_f IN LISTS RNI_DRAWOP_HOOKED)
+  list(APPEND RNI_DRAWOP_HOOKED_PATHS "${CMAKE_SOURCE_DIR}/scenegraph/${_f}")
+endforeach()
+foreach(_f IN LISTS RNI_DRAWOP_HOOKED_PATHS)
+  if(MSVC)
+    set_property(SOURCE "${_f}" APPEND PROPERTY COMPILE_OPTIONS "/FI${CMAKE_SOURCE_DIR}/scenegraph/DrawOpHook.h")
+  else()
+    set_property(SOURCE "${_f}" APPEND PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_SOURCE_DIR}/scenegraph/DrawOpHook.h")
+  endif()
+endforeach()
 
 target_include_directories(rn-impeller PRIVATE
   ${CMAKE_SOURCE_DIR}
@@ -520,6 +543,7 @@ if(RNI_WITH_RNSVG)
   target_link_libraries(rn-impeller PRIVATE rnsvg_common)
 endif()
 include(${CMAKE_SOURCE_DIR}/cmake/Fuzz.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/SceneGraphTests.cmake)
 
 # ⛔ SHARED-vs-STATIC IS A PACKAGING DIFFERENCE, AND IT LEAKS INTO OUR LINK LINE.
 # `hermesvm` is a SHARED library on Linux — libhermesvm.so has already absorbed

@@ -215,7 +215,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   // FP-44 (SubmitFlutterView): this frame's views placed + overlays drawn,
   // then the background presents.
   if (embedder_) embedder_->SubmitFrame(item->platformViews, n, item->frameNumber);
-  if (hooks_.beforePresent) hooks_.beforePresent(n);
+  if (hooks_.beforePresent) hooks_.beforePresent(n, item->frameNumber);
   gpu::Note(gpu::Counter::kPresent);
   {
     TRACE_EVENT0("raster", "Present");

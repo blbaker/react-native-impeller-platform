@@ -30,6 +30,11 @@ facebook::react::Props::Shared MakeProps(const facebook::react::ComponentDescrip
                                          const facebook::react::Props::Shared& base,
                                          const folly::dynamic& raw);
 
+// FP-50 (rni-scenegraph-tests): the same, without the AsJsEmits filter. Test fixtures pass the exact
+// shapes RN's JS processors emit, including boxShadow/filter values the filter would drop.
+facebook::react::Props::Shared MakePropsExact(const facebook::react::ComponentDescriptor& desc,
+                                              const facebook::react::Props::Shared& base,
+                                              const folly::dynamic& raw);
 facebook::react::ShadowView MakeView(const facebook::react::ComponentDescriptor& desc,
                                      facebook::react::Tag tag,
                                      facebook::react::Props::Shared props,
