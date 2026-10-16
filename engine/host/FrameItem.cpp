@@ -39,6 +39,8 @@ std::unique_ptr<FrameItem> RecordFrame(SceneGraph& scene, float pointScale,
     item->painted = scene.paint(builder, pointScale, item->jobs.get(), &damage, culled);
   }
   item->extTextures = scene.takeExternalTextureNote();
+  // FP-43: queued snapshots record after the walk; their jobs run after its uploads.
+  scene.recordSnapshots(item->jobs.get());
   if (extras) extras(builder);
   {
     TRACE_EVENT0("paint", "DisplayListBuild");

@@ -387,6 +387,7 @@ SceneGraph::~SceneGraph() {
     std::lock_guard<std::mutex> lock(imageDamage_->mutex);
     imageDamage_->wake = nullptr;
   }
+  if (snapshots_) snapshots_->SetWake(nullptr);  // FP-43: the controller outlives us
   // Release every cached offscreen texture. Ownership of each was transferred
   // to Impeller when it was adopted from the GL handle, so Impeller frees the
   // underlying GL texture on the last Release — we must not glDeleteTextures it.
@@ -1329,7 +1330,7 @@ void SceneGraph::bumpRevision() {
 // node's box (shadows, filters, images, SVG content) are recorded unbounded.
 void SceneGraph::recordDamage(ImpellerDisplayListBuilder builder, const SceneNode& node,
                               float x, float y, float w, float h, bool unbounded) {
-  if (cullActive_) return;
+  if (cullActive_ || snapshotWalk_) return;  // FP-43: a snapshot is not this frame's damage
   bool textShadow = false;
   float font = node.fontSize;
   for (const auto& r : node.runs) {
@@ -3733,18 +3734,7 @@ ImpellerColorSource SceneGraph::makeGradientSource(const SceneNode* def,
       kImpellerTileModeClamp, nullptr);
 }
 
-int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
-                            float pointScaleFactor,
-                            std::vector<facebook::react::EventEmitter::Shared>* shows,
-                            RasterJobs* jobs) {
-  // FP-14: GPU work found by this walk is queued here, never done here.
-  struct JobsScope {
-    RasterJobs*& slot;
-    ~JobsScope() { slot = nullptr; }
-  } jobsScope{jobs_};
-  jobs_ = jobs;
-  if (!cullActive_) damage_.BeginWalk();  // FP-18
-  damageSpread_ = 0;
+void SceneGraph::rebuildPaintRegistriesLocked() {
   // Rebuild the gradient registry before walking the tree: a def may be
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
@@ -3760,6 +3750,21 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
       svgDefs_[n.svgDefName] = &n;
     }
   }
+}
+
+int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
+                            float pointScaleFactor,
+                            std::vector<facebook::react::EventEmitter::Shared>* shows,
+                            RasterJobs* jobs) {
+  // FP-14: GPU work found by this walk is queued here, never done here.
+  struct JobsScope {
+    RasterJobs*& slot;
+    ~JobsScope() { slot = nullptr; }
+  } jobsScope{jobs_};
+  jobs_ = jobs;
+  if (!cullActive_) damage_.BeginWalk();  // FP-18
+  damageSpread_ = 0;
+  rebuildPaintRegistriesLocked();
   svgUseDepth_ = 0;
   spinnerAnimating_.store(false, std::memory_order_relaxed);
   // ENG item 2b — ROOT SUPERSAMPLE HOOK. At N>=2 with a wired context and known

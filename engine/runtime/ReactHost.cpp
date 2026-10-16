@@ -316,6 +316,10 @@ ReactHost::ReactHost(bool withInspector) {
   modules_->add("ImpellerTextureRegistry", [r = textureRegistry_](auto inv) {
     return std::make_shared<rni::TextureRegistryModule>(inv, r);
   });
+  // FP-43. react-native-view-shot's native module (captureRef / captureScreen).
+  modules_->add("RNViewShot", [c = snapshots_](auto inv) {
+    return std::make_shared<rni::ViewShotModule>(inv, c);
+  });
 
   // item 5. System clipboard. See ClipboardBridge.h for the thread-safety
   // design (GLFW's clipboard functions are main-thread only; this module

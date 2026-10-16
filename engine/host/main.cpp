@@ -265,6 +265,7 @@ int ListModules() {
   // ENG-09 — wire the world raster store so --list-modules boots identically.
   sceneGraph.setWorldRasterStore(host.worldRasterStore());
   sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
+  sceneGraph.setSnapshotController(host.snapshots());  // FP-43
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          /*logMutations*/ false, host.displayMetrics());
 
@@ -693,6 +694,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // TurboModule writes; give the SceneGraph the same store the host owns.
   sceneGraph.setWorldRasterStore(host.worldRasterStore());
   sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
+  sceneGraph.setSnapshotController(host.snapshots());  // FP-43
   host.displayMetrics()->set((float)pxWidth / pointScale,
                              (float)pxHeight / pointScale, pointScale);
   host.appearance()->set(colorScheme);
@@ -2080,6 +2082,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::PrintGpuTextureTotals();  // FP-20
   host.textureRegistry()->PrintSummary();  // FP-42
   rni::exttexprobe::PrintSummary();  // FP-42 test hook
+  host.snapshots()->PrintSummary();  // FP-43
   rni::typography::PrintSummary();  // FP-12
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
@@ -3110,6 +3113,7 @@ int main(int argc, char** argv) {
     // ENG-09 — wire the world raster store, same as the primary path.
     sceneGraph.setWorldRasterStore(host.worldRasterStore());
     sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
+  sceneGraph.setSnapshotController(host.snapshots());  // FP-43
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
     // Dimensions/PixelRatio read this. RN code branches on PixelRatio.get()
     // for asset selection (@2x/@3x) and hairline widths, so reporting 1 while
@@ -3606,6 +3610,7 @@ int main(int argc, char** argv) {
     rni::image::PrintStats();  // FP-16
     rni::io::PrintStats();  // FP-17
     rni::PrintGpuTextureTotals();  // FP-20
+    host.snapshots()->PrintSummary();  // FP-43
     rni::typography::PrintSummary();  // FP-12
   }
 

@@ -31,6 +31,7 @@
 #include "scenegraph/ImageEvents.h"
 #include "scenegraph/ImagePaint.h"
 #include "scenegraph/TextureRegistry.h"
+#include "scenegraph/SnapshotController.h"
 #include "scenegraph/GpuBackend.h"
 #include "scenegraph/RasterJobs.h"
 #include "scenegraph/Shadows.h"
@@ -530,6 +531,11 @@ class SceneGraph {
   // FP-42: "id:seq:marks,..." for each texture the last full paint drew
   // (seq 0 = registered, no frame). Read by RecordFrame into the FrameItem.
   std::string takeExternalTextureNote();
+  // FP-43. RNViewShot requests wake a frame; RECORD (RecordFrame, after the
+  // frame's walk) records each one's subtree into its own display list and
+  // queues its render + readback on `jobs` (snapshot_controller_impeller.cc).
+  void setSnapshotController(std::shared_ptr<SnapshotController> controller);
+  void recordSnapshots(RasterJobs* jobs);
   // ENG-10. Sprite quads the <world> painter actually issued as GPU
   // DrawTextureRect calls during the LAST paint(). Reset per paint(). The gate
   // asserts this equals the drawSprites list length -- proof the quads went
@@ -1038,6 +1044,12 @@ class SceneGraph {
   std::shared_ptr<TextureRegistry> textureRegistry_;
   std::unordered_map<facebook::react::Tag, WorldTextureEntry> extTextureCache_;
   std::string extTextureNote_;
+  // FP-43 (SnapshotRecord.cpp).
+  std::shared_ptr<SnapshotController> snapshots_;
+  bool snapshotWalk_{false};  // a snapshot walk: no damage recorded
+  ImpellerDisplayList recordSnapshotLocked(const SceneNode* node, int pxW, int pxH);
+  // gradients_ + svgDefs_ for the walk that follows (paintLocked, snapshots).
+  void rebuildPaintRegistriesLocked();
   // <world> ENG-10. Sprite-atlas GPU textures keyed by textureId (NOT by node
   // tag -- one peep texture is shared by every sprite and every <world> that
   // references it). Uploaded once per registerSprite version; drawSprites

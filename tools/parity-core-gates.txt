@@ -37,3 +37,4 @@ tools/ci-resize-geometry.sh   # FP-30 resize sync: no stale-size present, 1 s wa
 tools/ci-gpu-availability.sh  # FP-31 GPU availability switch: zero draw/present/upload while unavailable, full repaint on restore (~45 s)
 tools/ci-context-loss.sh     # FP-32 context loss: 10 forced losses, every box correct on the 1st present after each, ASan arm (~15 s + incremental ASan build)
 tools/ci-external-texture.sh  # FP-42 external textures: 30 fps producer under clip+rotate+opacity, right frame per present, unregister repaints (~16 s)
+tools/ci-snapshot.sh          # FP-43 view snapshots: captureRef == on-screen crop within 2 levels, upright, scale 1/2, ss4, headless (~25 s)

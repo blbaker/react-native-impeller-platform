@@ -44,6 +44,8 @@ class GlNamePool {
 ImpellerTexture WrapNewGlName(ImpellerContext ctx, GlNamePool& pool, int w, int h,
                               uint32_t* name);
 
+// FP-43: SnapshotReadbackGl.cpp. Context must be current when it runs.
+SnapshotReadback MakeGlSnapshotReadback(ImpellerContext ctx);
 std::unique_ptr<SupersampleBackend> MakeGlSupersample(ImpellerContext ctx,
                                                       std::shared_ptr<GlNamePool> pool);
 

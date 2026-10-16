@@ -231,6 +231,8 @@ const OWN_SPEC_FOR = {
   WorldRaster: 'src/worldraster/index.js',
   // FP-42. Our own module: its JS half is package/src/externaltexture.
   ImpellerTextureRegistry: 'src/externaltexture/index.js',
+  // FP-43. react-native-view-shot's module; this package ships its JS API.
+  RNViewShot: 'src/viewshot/index.js',
 };
 // Where OWN_SPEC_FOR paths resolve: our installed package, not react-native.
 const OWN_PKG = 'node_modules/@react-native-impeller/core';

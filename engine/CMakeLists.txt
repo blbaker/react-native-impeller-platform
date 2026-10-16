@@ -311,6 +311,10 @@ add_executable(rn-impeller
   # FP-42: external textures (Flutter TextureRegistry + TextureLayer).
   scenegraph/TextureRegistry.cpp
   scenegraph/ExternalTexturePaint.cpp
+  # FP-43: view snapshots (RNViewShot, SnapshotControllerImpeller).
+  scenegraph/SnapshotController.cpp
+  scenegraph/SnapshotRecord.cpp
+  scenegraph/ImageEncode.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/scenegraph/SceneGraphGlWin.cpp>
@@ -327,6 +331,7 @@ add_executable(rn-impeller
   scenegraph/GpuBackend.cpp
   scenegraph/TextureUploaderGl.cpp
   scenegraph/SupersampleBackendGl.cpp
+  scenegraph/SnapshotReadbackGl.cpp
   scenegraph/DamageTracker.cpp
   scenegraph/IoUploaderGl.cpp
   scenegraph/ImageEvents.cpp
