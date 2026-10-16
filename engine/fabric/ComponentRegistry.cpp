@@ -14,6 +14,7 @@
 #include "ModalHostShadowNode.h"
 #include "SwitchShadowNode.h"
 #include "TextureViewShadowNode.h"
+#include "PlatformViewShadowNode.h"
 #if RNI_WITH_RNSVG
 #include "RNSVGComponentDescriptors.h"
 #include <react/renderer/components/rnsvg/ComponentDescriptors.h>
@@ -77,6 +78,9 @@ MakeComponentProviderRegistry() {
   // FP-42 <ImpellerTextureView textureId>: paints a TextureRegistry frame.
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::ImpellerTextureViewComponentDescriptor>());
+  // FP-44 <ImpellerPlatformView color>: a native child view (PlatformViewEmbedder).
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::ImpellerPlatformViewComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
   // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --

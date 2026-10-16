@@ -261,6 +261,9 @@ add_executable(rn-impeller
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextLossGl.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextRecovery.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceRebuild.cpp>
+  # FP-44: platform views (X11 child windows; stubs on other hosts).
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PlatformViewsX11Gl.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PlatformViewProbeX11.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeProbe.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
@@ -311,6 +314,7 @@ add_executable(rn-impeller
   # FP-42: external textures (Flutter TextureRegistry + TextureLayer).
   scenegraph/TextureRegistry.cpp
   scenegraph/ExternalTexturePaint.cpp
+  scenegraph/PlatformViewRecord.cpp  # FP-44
   # FP-43: view snapshots (RNViewShot, SnapshotControllerImpeller).
   scenegraph/SnapshotController.cpp
   scenegraph/SnapshotRecord.cpp

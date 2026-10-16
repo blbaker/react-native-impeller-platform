@@ -30,6 +30,7 @@ namespace rni {
 class FrameScheduler;
 class FrameTimings;
 class GlfwSurface;
+class PlatformViewEmbedder;
 class ResizeSync;
 
 class WindowRasterizer {
@@ -50,6 +51,8 @@ class WindowRasterizer {
   // FP-30: stale-size discard + present reports (Rasterizer::Delegate).
   void SetResizeSync(ResizeSync* sync) { resizeSync_ = sync; }
   void SetHooks(Hooks hooks) { hooks_ = std::move(hooks); }
+  // FP-44: native child views composited with each frame (before Start).
+  void SetPlatformViewEmbedder(PlatformViewEmbedder* e) { embedder_ = e; }
   // FP-18: --partial-repaint. Before Start; partialRepaint() is the verdict
   // (requested and supported), which RECORD reads to allow a clipped list.
   void SetPartialRepaint(bool on) { partialRequested_ = on; }
@@ -104,6 +107,7 @@ class WindowRasterizer {
   FrameScheduler* scheduler_ = nullptr;
   ResizeSync* resizeSync_ = nullptr;
   Hooks hooks_;
+  PlatformViewEmbedder* embedder_ = nullptr;
   PartialRepaint partial_;  // raster thread only
   bool partialRequested_ = true;
   std::atomic<bool> partialEnabled_{false};

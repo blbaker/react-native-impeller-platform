@@ -56,6 +56,7 @@
 #if RNI_WITH_WINDOW
 #include "host/GlfwSurface.h"
 #include "host/WindowRasterizer.h"
+#include "host/PlatformViewEmbedder.h"
 #include "host/ContextLoss.h"
 #include "host/ContextRecovery.h"
 #include <chrono>
@@ -636,7 +637,10 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // input, mount, NativeAnimated, the FrameScheduler and RECORD.
   // FP-30: declared before the rasterizer, which reports into it until it joins.
   rni::ResizeSync resizeSync;
+  // FP-44: native child views (linux X11); null elsewhere (views paint their colour).
+  auto pvEmbedder = rni::MakePlatformViewEmbedder(surface);
   rni::WindowRasterizer rasterizer(surface, frameTimings, gRasterThread);
+  rasterizer.SetPlatformViewEmbedder(pvEmbedder.get());
   rasterizer.SetPartialRepaint(gPartialRepaint);
   rasterizer.SetResizeSync(&resizeSync);
   resizeSync.SetExpected(surface.width(), surface.height());
@@ -695,6 +699,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   sceneGraph.setWorldRasterStore(host.worldRasterStore());
   sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
   sceneGraph.setSnapshotController(host.snapshots());  // FP-43
+  sceneGraph.setPlatformViewsEmbedded(pvEmbedder != nullptr);  // FP-44
   host.displayMetrics()->set((float)pxWidth / pointScale,
                              (float)pxHeight / pointScale, pointScale);
   host.appearance()->set(colorScheme);
@@ -2069,6 +2074,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   printf("rn-impeller: presents=%d\n", rasterizer.presents());
   scheduler.PrintSummary();
   rasterizer.PrintSummary();  // FP-13 pipeline + FP-15 raster thread
+  if (pvEmbedder) pvEmbedder->PrintSummary();  // FP-44
   rni::uniformprobe::PrintSummary();  // FP-15 test hook
   rni::poisonprobe::PrintSummary();  // FP-17 test hook
   resizeSync.PrintSummary();  // FP-30

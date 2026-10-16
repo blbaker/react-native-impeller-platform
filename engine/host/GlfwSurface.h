@@ -85,6 +85,10 @@ class GlfwSurface {
   const std::string& title() const { return title_; }
 
   ImpellerContext context() const { return context_; }
+  // FP-44 (PlatformViewsX11Gl.cpp): the X11 window id (0 off X11) and the
+  // window's EGL objects (raster thread; replaced by a context-loss rebuild).
+  unsigned long x11Window() const;
+  const ctxlossgl::EglWindow& eglWindow() const { return egl_; }
   ImpellerSurface surface() const { return surface_; }
   ImpellerTypographyContext typography() const { return typography_; }
   int width() const { return width_; }

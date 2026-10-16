@@ -33,6 +33,7 @@
 #include "scenegraph/ActivityIndicator.h"
 #include <react/renderer/components/image/ImageProps.h>  // A19
 #include "fabric/TextureViewShadowNode.h"  // FP-42
+#include "fabric/PlatformViewShadowNode.h"  // FP-44
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
 #include "scenegraph/EllipsizeText.h"
@@ -831,6 +832,13 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.externalTextureId = tp->textureId;
     }
   }
+  // FP-44 <ImpellerPlatformView color>.
+  if (node.componentName == "ImpellerPlatformView") {
+    node.isPlatformView = true;
+    if (const auto* pp = dynamic_cast<const react::ImpellerPlatformViewProps*>(view.props.get())) {
+      if (pp->color) colorToFloats(pp->color, node.pvColor);
+    }
+  }
 
   // <Image>. A19: RN's ImageProps (sources, resizeMode, tintColor).
   if (node.componentName == "Image") {
@@ -1330,7 +1338,8 @@ void SceneGraph::bumpRevision() {
 // node's box (shadows, filters, images, SVG content) are recorded unbounded.
 void SceneGraph::recordDamage(ImpellerDisplayListBuilder builder, const SceneNode& node,
                               float x, float y, float w, float h, bool unbounded) {
-  if (cullActive_ || snapshotWalk_) return;  // FP-43: a snapshot is not this frame's damage
+  // FP-43: a snapshot is not this frame's damage; FP-44: nor an overlay slice.
+  if (cullActive_ || snapshotWalk_ || pvSliceWalk_) return;
   bool textShadow = false;
   float font = node.fontSize;
   for (const auto& r : node.runs) {
@@ -2148,6 +2157,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
   // FP-18: the node's box through every transform above it, its own included.
   if (!damageEarlyOut) recordDamage(builder, node, x, y, w, h, /*unbounded=*/false);
+  // FP-44: RN pixels painted after a platform view that land on it (view_slicer.cc).
+  if (pvFrame_ && pvMainWalk()) pvNoteDrawLocked(builder, node, x, y, w, h);
   // Effects that spread a descendant's change past its own box.
   const bool damageSpreads = node.blurSigma > 0.0f || !node.dropShadows.empty() ||
                              node.hasLayerShadow || node.isSvgRoot;
@@ -2332,6 +2343,10 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
 
   // A7: continuous corners fill and clip as the squircle path; borders stay circular.
   const bool continuous = rounded && node.borderContinuous;
+  // FP-44 overlay slice walk: outside the slice the node's OWN pixels go to a
+  // sink; its transform, layers and clips (real builder) still apply.
+  const ImpellerDisplayListBuilder sliceBuilder = builder;
+  if (pvSliceWalk_ && !pvSliceActive_) builder = pvSink_;
   auto drawBoxWith = [&](ImpellerPaint p) {
     ImpellerPath sq = rni::MakeContinuousRRectPath(x, y, w, h, radii);
     if (sq == nullptr) return false;
@@ -2677,6 +2692,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // FP-42: inside this node's transform / opacity and every ancestor clip
   // (TextureLayer is a leaf under the mutator stack). Leaf opacity = paint alpha.
   if (node.isExternalTexture) paintExternalTexture(builder, node, x, y, w, h, OwnAlpha(node));
+  // FP-44: the native view's box and mutators (a hole when the host embeds it).
+  if (node.isPlatformView) pvNoteViewLocked(builder, node, x, y, w, h, OwnAlpha(node));
 
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
   // field is focused, else its controlled value), or the placeholder when the
@@ -2881,10 +2898,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
 
   ImpellerPaintRelease(paint);
+  builder = sliceBuilder;  // FP-44
 
   // Children are positioned relative to this node's frame origin.
   const bool clip = node.overflowHidden;
   if (clip) {
+    pvPushClipLocked(builder, x, y, w, h);  // FP-44 kClipRect mutator
     ImpellerDisplayListBuilderSave(builder);
     // Style audit item 13: a rounded box clips its children to the ROUNDED
     // outline (iOS masksToBounds + cornerRadius), not to its square frame.
@@ -2990,6 +3009,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
   if (clip) {
     ImpellerDisplayListBuilderRestore(builder);
+    pvPopClipLocked();
   }
   // Paired with the viewBox save above. AFTER the child walk, for the same
   // reason the SVG-matrix restore is: the mapping exists to transform the
@@ -3493,11 +3513,13 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   // not expect. The root offscreen already supersamples the icons.
   const int savedN = supersample_;
   supersample_ = 0;
+  pvWalkScale_ = (float)N;  // FP-44: platform view boxes in surface pixels
   for (auto rootTag : roots_) {
     auto it = nodes_.find(rootTag);
     if (it == nodes_.end()) continue;
     paintNode(off, it->second, 0, 0);
   }
+  pvWalkScale_ = 1.0f;
   paintModalsLocked(off);
   supersample_ = savedN;
   ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
@@ -3763,6 +3785,7 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   } jobsScope{jobs_};
   jobs_ = jobs;
   if (!cullActive_) damage_.BeginWalk();  // FP-18
+  pvBeginWalkLocked();  // FP-44
   damageSpread_ = 0;
   rebuildPaintRegistriesLocked();
   svgUseDepth_ = 0;

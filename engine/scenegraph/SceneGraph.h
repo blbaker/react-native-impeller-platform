@@ -31,6 +31,7 @@
 #include "scenegraph/ImageEvents.h"
 #include "scenegraph/ImagePaint.h"
 #include "scenegraph/TextureRegistry.h"
+#include "scenegraph/PlatformViews.h"
 #include "scenegraph/SnapshotController.h"
 #include "scenegraph/GpuBackend.h"
 #include "scenegraph/RasterJobs.h"
@@ -459,6 +460,9 @@ struct SceneNode {
   // FP-42 <ImpellerTextureView textureId>: paints TextureRegistry's latest frame.
   bool isExternalTexture{false};
   int64_t externalTextureId{0};
+  // FP-44 <ImpellerPlatformView color>: a native child view (PlatformViewRecord.cpp).
+  bool isPlatformView{false};
+  float pvColor[4]{0, 0, 0, 1};
 
 
   std::vector<facebook::react::Tag> children;
@@ -536,6 +540,11 @@ class SceneGraph {
   // queues its render + readback on `jobs` (snapshot_controller_impeller.cc).
   void setSnapshotController(std::shared_ptr<SnapshotController> controller);
   void recordSnapshots(RasterJobs* jobs);
+  // FP-44. `on`: the host composites native child views (linux X11 windowed),
+  // so a platform view is a hole in the RN layers; off: it paints its colour.
+  void setPlatformViewsEmbedded(bool on) { pvEmbedded_ = on; }
+  // FP-44: the last full walk's views + overlay slices (null: none). RecordFrame.
+  std::shared_ptr<PlatformViewFrame> takePlatformViewFrame();
   // ENG-10. Sprite quads the <world> painter actually issued as GPU
   // DrawTextureRect calls during the LAST paint(). Reset per paint(). The gate
   // asserts this equals the drawSprites list length -- proof the quads went
@@ -1047,6 +1056,27 @@ class SceneGraph {
   // FP-43 (SnapshotRecord.cpp).
   std::shared_ptr<SnapshotController> snapshots_;
   bool snapshotWalk_{false};  // a snapshot walk: no damage recorded
+  // FP-44 (PlatformViewRecord.cpp): the mutator stack the walk keeps for
+  // platform views (device-px clip rects), the views found, and the overlay
+  // slice walks (view_slicer.cc).
+  bool pvEmbedded_{false};
+  std::vector<DamageTracker::Box> pvClips_;
+  std::shared_ptr<PlatformViewFrame> pvFrame_;
+  std::vector<facebook::react::Tag> pvUnsupportedLogged_, pvSeen_;
+  float pvWalkScale_{1.0f};  // N inside the root supersample walk
+  bool pvSliceWalk_{false}, pvSliceActive_{false};
+  facebook::react::Tag pvSliceStart_{0}, pvSliceEnd_{0};
+  ImpellerDisplayListBuilder pvSink_{nullptr};
+  bool pvMainWalk() const { return !cullActive_ && !snapshotWalk_ && !pvSliceWalk_; }
+  void pvBeginWalkLocked();
+  void pvNoteViewLocked(ImpellerDisplayListBuilder b, const SceneNode& n, float x, float y,
+                        float w, float h, float alpha);
+  void pvNoteDrawLocked(ImpellerDisplayListBuilder b, const SceneNode& n, float x, float y,
+                        float w, float h);
+  void pvPushClipLocked(ImpellerDisplayListBuilder b, float x, float y, float w, float h);
+  void pvPopClipLocked();
+  // After the main walk, same lock: one overlay list per view that needs one.
+  void pvRecordOverlaysLocked(float pointScale);
   ImpellerDisplayList recordSnapshotLocked(const SceneNode* node, int pxW, int pxH);
   // gradients_ + svgDefs_ for the walk that follows (paintLocked, snapshots).
   void rebuildPaintRegistriesLocked();
