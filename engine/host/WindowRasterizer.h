@@ -37,7 +37,7 @@ class WindowRasterizer {
  public:
   struct Hooks {
     // Raster thread, after the draw and before the present (pixels readable).
-    std::function<void(int presentNumber)> beforePresent;
+    std::function<void(int presentNumber, uint64_t frameNumber)> beforePresent;
     // Raster thread, after the present. presentNumber is 1-based.
     std::function<void(int presentNumber)> afterPresent;
   };

@@ -103,14 +103,18 @@ def check_mutation(work, fails):
         else:
             req = late[0][1]
             quiet = [p for p in presents if boot + 300_000 <= p[1] < req]
-            after = [p for p in presents if req <= p[1] <= req + 500_000]
+            # FP-57: a sanitizer build (ci-vsync.sh checks it) must still present the mutation, once
+            # or twice, but not within the latency budget; its window is the rest of the run.
+            functional = os.environ.get('RNI_BUDGETS_FUNCTIONAL_ONLY') == '1'
+            window = presents[-1][1] - req if functional else 500_000
+            after = [p for p in presents if req <= p[1] <= req + window]
             lat = (after[0][1] - req) if after else None
             print(f'  D: mutation at +{(req - boot) / 1e3:.0f}ms, latency='
                   f'{lat if lat is not None else "none"}us, presents for it={len(after)}, '
                   f'presents while idle before it={len(quiet)}')
             if quiet:
                 fails.append(f'D mutation: {len(quiet)} presents while idle before the mutation')
-            if lat is None or lat > 2 * period_d:
+            if lat is None or (not functional and lat > 2 * period_d):
                 fails.append(f'D mutation: first present {lat}us after the request (want <= 2 periods = {2 * period_d}us)')
             elif len(after) > 2:
                 fails.append(f'D mutation: one commit presented {len(after)} frames (want 1-2)')
@@ -214,7 +218,11 @@ def main():
                 fails.append(f'A pacing: frames displayed {lat / period:.1f} periods after their '
                              f'display-link target vblank (allowed {MAX_DISPLAY_LATENCY_PERIODS}): '
                              f'rendered ahead of the display, not paced on the link')
-        if abs(mean - period) > mean_tol or sd >= limit:
+        # FP-57: a sanitizer build (ci-vsync.sh checks it) keeps the paced mean, not the jitter budget.
+        sd_budget = os.environ.get('RNI_BUDGETS_FUNCTIONAL_ONLY') != '1'
+        if not sd_budget:
+            print(f'  A: functional-only (sanitizer build): sd {sd:.0f}us not held to {limit:.0f}us')
+        if abs(mean - period) > mean_tol or (sd_budget and sd >= limit):
             fails.append(f'A pacing: median present interval {mean:.0f}us sd {sd:.0f}us vs the '
                          f'{period}us period (mean within 5% + control drift {drift:.0f}us = '
                          f'{mean_tol:.0f}us, sd under 10% + 1.5x control {floor:.0f}us = '

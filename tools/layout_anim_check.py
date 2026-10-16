@@ -32,7 +32,16 @@ def parse(path):
     starts, presents, steps = [], [], []
     tick = None
     pending = None
+    # FP-57: ticks print on main, anim_row on the raster thread, so under load the next frame's
+    # tick can print before this present. Main's `anim_frame frame=` (printed when it records the
+    # frame, after that frame's tick) pairs each present with its own tick by frame number.
+    frame_tick = {}
     for line in open(path, errors="replace"):
+        m = re.search(r"anim_frame frame=(\d+)", line)
+        if m:
+            frame_tick[int(m.group(1))] = tick
+            tick = None
+            continue
         m = re.search(r"fp40 step=(\w+)", line)
         if m:
             steps.append(m.group(1))
@@ -42,12 +51,18 @@ def parse(path):
         m = re.search(r"layout_anim_tick n=\d+ t_ms=(\d+)", line)
         if m:
             tick = int(m.group(1))
-        m = re.search(r"anim_row present=(\d+) clock=\d+ x0=-?\d+ x1=(-?\d+)", line)
+        m = re.search(r"anim_row present=(\d+) clock=\d+ x0=-?\d+ x1=(-?\d+)(?: frame=(\d+))?", line)
         if m:
             if pending:
                 presents.append(pending)
-            pending = {"x1": int(m.group(2)), "g": None, "t": tick}
-            tick = None
+            if m.group(3) is not None:
+                if int(m.group(3)) not in frame_tick:
+                    fail("%s: present of frame %s with no anim_frame line before it" % (path, m.group(3)))
+                t = frame_tick[int(m.group(3))]
+            else:
+                t = tick
+                tick = None
+            pending = {"x1": int(m.group(2)), "g": None, "t": t}
         m = re.search(r"anim_px present=\d+ r=\d+ g=(\d+)", line)
         if m and pending:
             pending["g"] = int(m.group(1))

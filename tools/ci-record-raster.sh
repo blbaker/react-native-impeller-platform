@@ -85,14 +85,10 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 http.server.ThreadingHTTPServer(("127.0.0.1", 18931), H).serve_forever()
 PY
-for _ in $(seq 120); do
-  python3 "$WORK/server.py" > "$WORK/server.out" 2>&1 &
-  SERVER_PID=$!
-  sleep 0.3
-  kill -0 "$SERVER_PID" 2>/dev/null && break
-  SERVER_PID=""; sleep 1
-done
-[ -n "$SERVER_PID" ] || fail "setup: image server could not bind 127.0.0.1:18931 for 2 min"
+. tools/lib/own-port.sh
+rni_own_port 18931 "$WORK/server.out" python3 "$WORK/server.py" \
+  || fail "setup: image server could not own 127.0.0.1:18931 for 2 min"
+SERVER_PID="$OWN_PORT_PID"
 
 render() {  # bin case-line ss out-prefix [extra...]
   local bin="$1" line="$2" ss="$3" out="$4"; shift 4

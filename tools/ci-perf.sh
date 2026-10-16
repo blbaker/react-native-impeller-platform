@@ -7,6 +7,10 @@
 #   bash tools/ci-perf.sh            compare against the budgets
 #   bash tools/ci-perf.sh --record   re-measure and rewrite the baselines of the budget file
 #   bash tools/ci-perf.sh --mac      run on the Mac through tools/parity-mac.sh (darwin budgets)
+#   RNI_BUDGETS_FUNCTIONAL_ONLY=1   (tools/ci-sanitize.sh sets it) the binary must be a sanitizer build:
+#                                   every fixture runs once and must still mount, present and record
+#                                   >= 20 complete monotonic frame records; the time budgets are skipped
+#                                   because ASan/UBSan inflate them 2-5x (FP-57).
 # Node-free: committed prebuilt bundles. Model: Flutter's flutter/flow/frame_timings.h numbers fed to
 # a CI budget; the recorder is FP-01's.
 set -euo pipefail
@@ -28,6 +32,13 @@ else BUDGETS=tools/perf/budgets.json
 BUDGETS="${RNI_PERF_BUDGETS:-$BUDGETS}"
 [ -x "$BIN" ] || fail "no engine binary at $BIN"
 [ -f "$BUDGETS" ] || fail "no budget file $BUDGETS"
+FUNCTIONAL="${RNI_BUDGETS_FUNCTIONAL_ONLY:-0}"
+if [ "$FUNCTIONAL" = 1 ]; then
+  # Never a way around the budgets for a normal build: only an instrumented binary qualifies.
+  "$BIN" --help 2>/dev/null | grep -q '^rn-impeller: sanitize_build=1 ' \
+    || fail "RNI_BUDGETS_FUNCTIONAL_ONLY=1 needs a sanitizer build (no sanitize_build=1 from $BIN --help)"
+  RUNS=1; [ "$RECORD" = 0 ] || fail "--record under RNI_BUDGETS_FUNCTIONAL_ONLY would write sanitizer timings"
+fi
 echo "engine: $BIN ($( (shasum -a 256 "$BIN" 2>/dev/null || sha256sum "$BIN") | cut -c1-12)), $RUNS runs per fixture"
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
@@ -59,6 +70,12 @@ measure() {  # fixture name, batch dir
 }
 for spec in "${FIXTURES[@]}"; do measure "${spec%%|*}" "$WORK"; done
 
+if [ "$FUNCTIONAL" = 1 ]; then
+  # measure() already failed on a run that crashed, mounted nothing, never presented or recorded
+  # < 20 complete frames (perf_compare.py parse).
+  echo "PERF_GATE_PASS functional-only (sanitizer build: ${#FIXTURES[@]} fixtures mounted + presented + timed, budgets skipped)"
+  exit 0
+fi
 if [ "$RECORD" = 1 ]; then
   python3 tools/perf/perf_compare.py compare "$BUDGETS" "$WORK" --record
   exit 0

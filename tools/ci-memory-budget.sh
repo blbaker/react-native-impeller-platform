@@ -14,6 +14,9 @@
 #            and the painter holds exactly 8 textures at the end (textures_live=): the evicted bitmaps'
 #            textures were released, not leaked next to their reloads
 #   clear    same with the default floor 0: the cache is empty right after the signal, all 8 reload
+# RNI_BUDGETS_FUNCTIONAL_ONLY=1 (tools/ci-sanitize.sh, sanitizer builds only): every arm and every cache
+# byte count still asserted; only the rss PLATEAU (an RSS budget ASan's quarantine and shadow memory
+# inflate) is skipped. The unbounded control must still peak >= 60 MB above the bounded run (FP-57).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -24,6 +27,11 @@ fail() { echo "MEMORY_BUDGET_GATE_FAIL: $*" >&2; exit 1; }
 [ "$(uname -s)" = Linux ] || fail "linux only (reads VmHWM)"
 [ -x "$BIN" ] || fail "no engine binary at $BIN"
 [ -s "$BUNDLE" ] || fail "no bundle at $BUNDLE"
+FUNCTIONAL="${RNI_BUDGETS_FUNCTIONAL_ONLY:-0}"
+if [ "$FUNCTIONAL" = 1 ]; then
+  "$BIN" --help 2>/dev/null | grep -q '^rn-impeller: sanitize_build=1 ' \
+    || fail "RNI_BUDGETS_FUNCTIONAL_ONLY=1 needs a sanitizer build (no sanitize_build=1 from $BIN --help)"
+fi
 python3 -c 'import numpy, PIL' 2> /dev/null || fail "python3 with numpy + PIL is required"
 
 WORK="$(mktemp -d)"
@@ -92,7 +100,11 @@ run big 500 -- --image-cache-mb 100000
 R250="$(sv half rss_peak rss_peak_kb)"; R500="$(sv cycle rss_peak rss_peak_kb)"; RBIG="$(sv big rss_peak rss_peak_kb)"
 need rss "$R250"; need rss "$R500"; need rss "$RBIG"
 DIFF=$(( (R500 - R250) / 1024 )); CTRL=$(( (RBIG - R500) / 1024 ))
-[ "$DIFF" -le 24 ] || fail "rss: peak RSS grew ${DIFF} MB from 250 to 500 images, expected a plateau (<= 24 MB)"
+if [ "$FUNCTIONAL" = 1 ]; then
+  echo "rss plateau skipped (functional-only, sanitizer build): grew ${DIFF} MB from 250 to 500 images"
+else
+  [ "$DIFF" -le 24 ] || fail "rss: peak RSS grew ${DIFF} MB from 250 to 500 images, expected a plateau (<= 24 MB)"
+fi
 [ "$CTRL" -ge 60 ] || fail "rss: the unbounded control peaks only ${CTRL} MB above the bounded run (>= 60 MB wanted)"
 
 purge_arm() {  # tag floor_mb expect: 500-free run, 64 images, signal at frame 100

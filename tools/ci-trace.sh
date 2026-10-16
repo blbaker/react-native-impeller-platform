@@ -88,7 +88,9 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", 18931), H).serve_forever()
 PY
-python3 "$WORK/srv.py" > "$WORK/srv.out" 2>&1 & SRV=$!
+. tools/lib/own-port.sh
+rni_own_port 18931 "$WORK/srv.out" python3 "$WORK/srv.py" || fail "image server could not own 127.0.0.1:18931 for 2 min"
+SRV="$OWN_PORT_PID"
 for _ in $(seq 50); do
   python3 -c 'import socket; socket.create_connection(("127.0.0.1", 18931), 0.2)' 2> /dev/null && break
   kill -0 "$SRV" 2> /dev/null || fail "image server did not start (port 18931 busy?)"; sleep 0.1

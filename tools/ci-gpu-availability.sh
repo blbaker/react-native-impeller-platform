@@ -49,6 +49,13 @@ else
   BIN="$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller"
 fi
 [ -x "$BIN" ] || fail "no engine binary at $BIN (set RNI_BIN)"
+# FP-57: under tools/ci-sanitize.sh (sanitizer builds only) the restore LATENCY budget (2 vsyncs +
+# slack) is skipped; every count, pixel and ordering check of every arm still runs.
+FUNCTIONAL="${RNI_BUDGETS_FUNCTIONAL_ONLY:-0}"
+if [ "$FUNCTIONAL" = 1 ]; then
+  "$BIN" --help 2>/dev/null | grep -q '^rn-impeller: sanitize_build=1 ' \
+    || fail "RNI_BUDGETS_FUNCTIONAL_ONLY=1 needs a sanitizer build (no sanitize_build=1 from $BIN --help)"
+fi
 echo "engine: $BIN ($(shasum -a 256 "$BIN" | cut -c1-12)) host=$(rni_host)"
 
 WORK="$(mktemp -d)"
@@ -72,7 +79,7 @@ COMMON=(--window --scale 1 --width 400 --height 300 --supersample-rnsvg 0 --prob
         --gpu-availability-sequence "$OFF_MS:off,$ON_MS:on" --idle-run-sec 9)
 
 check_log() {  # log tag raster_delay_ms images (the slack allows the injected raster delay)
-  python3 - "$1" "$2" "$(( ${RNI_GPU_AVAIL_SLACK_MS:-40} + $3 ))" "$4" <<'PY' || exit 1
+  python3 - "$1" "$2" "$(( ${RNI_GPU_AVAIL_SLACK_MS:-40} + $3 ))" "$4" "$FUNCTIONAL" <<'PY' || exit 1
 import re, sys
 log = open(sys.argv[1], errors="replace").read(); tag = sys.argv[2]; slack_ms = float(sys.argv[3]); images = int(sys.argv[4])
 def bad(m): print("GPU_AVAILABILITY_FAIL: %s: %s" % (tag, m), file=sys.stderr); sys.exit(1)
@@ -112,7 +119,7 @@ if not rp: bad("no gpu_restore_present line")
 if rp.group(2) != "1": bad("restore frame was a damage-clipped partial repaint")
 period_ms = 1000.0 / 60.0
 lat = int(rp.group(3)) / 1000.0
-if lat > 2 * period_ms + slack_ms: bad("first frame %.1f ms after restore > 2 vsyncs (%.1f) + %.0f ms slack" % (lat, 2 * period_ms, slack_ms))
+if sys.argv[5] != "1" and lat > 2 * period_ms + slack_ms: bad("first frame %.1f ms after restore > 2 vsyncs (%.1f) + %.0f ms slack" % (lat, 2 * period_ms, slack_ms))
 summ = re.search(r"^rn-impeller: gpu_availability_summary flips=2 .*uploads=(\d+) ", log, re.M)
 if images and (not summ or int(summ.group(1)) <= on["uploads"]): bad("no image uploaded after the restore")
 print("%s: OK window=%.2fs ticks_inside=%d skipped_frames=%d skipped_uploads=%d counters_equal records=%d draws=%d "

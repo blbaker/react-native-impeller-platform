@@ -126,8 +126,9 @@ check_log "$log" A threaded
 
 echo "== B: raster hangs on the new-size frame: the wait gives up after 1 s =="
 log="$WORK/b.log"; rc=0
-# After the hang every loop frame waits 2 x 1 s for a pipeline slot: 14 frames ~ 28 s.
-RNI_TEST_RASTER_HANG_AFTER_RESIZE=1 RNI_TEST_RASTER_DELAY_MS=30 rni_xrun "$WORK/xb" timeout 60 "$BIN" "${COMMON[@]}" \
+# After the hang every loop frame waits 2 x 1 s for a pipeline slot: 14 frames ~ 28 s. Those waits
+# scale with RNI_TIME_SCALE (4 under ci-sanitize: ~112 s), so the hang ceiling scales too (FP-57).
+RNI_TEST_RASTER_HANG_AFTER_RESIZE=1 RNI_TEST_RASTER_DELAY_MS=30 rni_xrun "$WORK/xb" timeout "$(( $(rni_scaled 60000) / 1000 ))" "$BIN" "${COMMON[@]}" \
   --frames 20 --resize-sequence "6:520x340" > "$log" 2>&1 || rc=$?
 [ "$rc" = 124 ] && fail "B: hang: the platform thread waited for the resize frame without a timeout (rc 124)"
 [ "$rc" = 0 ] || { tail -15 "$log" >&2; fail "B: exit $rc"; }

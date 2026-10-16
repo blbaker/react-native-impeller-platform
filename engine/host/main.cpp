@@ -66,6 +66,7 @@
 // be testable (--test-pointscale) on hosts that have no window at all.
 #include "host/PointScale.h"
 #include "scenegraph/DrawOpLog.h"
+#include "scenegraph/ImageEvents.h"
 #include "scenegraph/CaretBlink.h"
 #include "scenegraph/CursorKinds.h"
 #include "impeller.h"
@@ -890,12 +891,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 
   // FP-15: what the raster thread does around each present besides drawing.
   rni::WindowRasterizer::Hooks rasterHooks;
-  rasterHooks.beforePresent = [&](int n) {
+  rasterHooks.beforePresent = [&](int n, uint64_t frameNumber) {
     if (rni::animrow::Enabled()) {  // FP-10 test hook, see AnimRowProbe.h
       std::vector<rni::Px> rowPx;
       if (surface.readPixels(&rowPx)) {
         rni::animrow::OnPresent(rowPx, surface.gpuWidth(), surface.gpuHeight(), n,
-                                rni::ReactHost::animationClockFrames());
+                                rni::ReactHost::animationClockFrames(), frameNumber);
       }
     }
     if (rni::uniformprobe::Enabled()) {  // FP-15 torn-frame probe
@@ -998,6 +999,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     const uint64_t number = recorded->frameNumber;
     if (stallItemDelayMs > 0) rasterizer.DelayFrame(number, stallItemDelayMs);
     lastSubmittedNumber = number;
+    if (rni::animrow::Enabled()) {
+      // Main thread, after this frame's animation tick: ties the tick line to the
+      // frame the raster thread later presents (anim_row ... frame=), FP-57.
+      printf("rn-impeller: anim_frame frame=%llu\n", (unsigned long long)number);
+      fflush(stdout);
+    }
     lastSubmitted = rasterizer.Submit(std::move(slot), std::move(recorded), readback);
     if (readback && !rasterizer.WaitPresented(lastSubmitted, rni::testsync::ScaledMs(5000))) {
       fprintf(stderr, "rn-impeller: WARN: frame %llu did not present for its capture\n",
@@ -1496,6 +1503,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   };
 
   if (gQuitOnTerm) rni::testsync::InstallQuitSignals();
+  rni::image_event_probe::Arm();  // FP-57: only loads mounted while the loop runs park
   if (rni::testsync::FrameDelayMs() > 0) {
     printf("rn-impeller: test_frame_delay_ms=%d\n", rni::testsync::FrameDelayMs());
     fflush(stdout);
@@ -1505,6 +1513,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // thread drained what the last input posted (its handlers' counters are
     // printed below), exactly like a window close.
     if (gQuitOnTerm && rni::testsync::QuitRequested()) {
+      rni::image_event_probe::LoopExited();
       const bool idle = host.waitForJsIdle(rni::testsync::ScaledMs(5000));
       printf("rn-impeller: quit_requested signal=%d frame=%d js_idle=%d\n",
              rni::testsync::QuitSignal(), frameIndex, idle ? 1 : 0);

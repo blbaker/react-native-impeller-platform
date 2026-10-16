@@ -30,7 +30,7 @@ bool PixelAt(int* x, int* y) {
 }  // namespace
 
 void OnPresent(const std::vector<Px>& px, int width, int height, int present,
-               uint64_t clock) {
+               uint64_t clock, uint64_t frame) {
   const int y = Row();
   int x0 = -1;
   int x1 = -1;
@@ -44,8 +44,8 @@ void OnPresent(const std::vector<Px>& px, int width, int height, int present,
       }
     }
   }
-  std::printf("rn-impeller: anim_row present=%d clock=%llu x0=%d x1=%d\n",
-              present, (unsigned long long)clock, x0, x1);
+  std::printf("rn-impeller: anim_row present=%d clock=%llu x0=%d x1=%d frame=%llu\n",
+              present, (unsigned long long)clock, x0, x1, (unsigned long long)frame);
   int sx = 0, sy = 0;
   if (PixelAt(&sx, &sy) && sx < width && sy < height &&
       px.size() >= (size_t)width * height) {

@@ -17,6 +17,7 @@ int ScaledMs(int ms);
 
 void InstallQuitSignals();
 bool QuitRequested();
+void RequestQuit();  // as if SIGTERM arrived (test probes; needs --quit-on-term to end the loop)
 int QuitSignal();  // 0 until a signal arrived
 
 int FrameDelayMs();

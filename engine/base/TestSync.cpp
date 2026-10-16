@@ -1,5 +1,6 @@
 #include "base/TestSync.h"
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -8,9 +9,10 @@
 
 namespace rni::testsync {
 namespace {
-volatile std::sig_atomic_t gQuitSignal = 0;
+// Atomic, not volatile sig_atomic_t: RequestQuit stores from a non-main thread (FP-57 probe).
+std::atomic<int> gQuitSignal{0};
 
-void OnQuitSignal(int sig) { gQuitSignal = sig; }
+void OnQuitSignal(int sig) { gQuitSignal.store(sig); }
 
 double ReadScale() {
   const char* v = std::getenv("RNI_TIME_SCALE");
@@ -41,9 +43,11 @@ void InstallQuitSignals() {
   std::signal(SIGINT, OnQuitSignal);
 }
 
-bool QuitRequested() { return gQuitSignal != 0; }
+bool QuitRequested() { return gQuitSignal.load() != 0; }
 
-int QuitSignal() { return static_cast<int>(gQuitSignal); }
+void RequestQuit() { gQuitSignal.store(SIGTERM); }
+
+int QuitSignal() { return gQuitSignal.load(); }
 
 int FrameDelayMs() {
   static const int ms = ReadFrameDelay();

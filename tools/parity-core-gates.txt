@@ -46,3 +46,4 @@ tools/ci-snapshot.sh          # FP-43 view snapshots: captureRef == on-screen cr
 tools/ci-platform-view.sh     # FP-44 platform views: X11 child window tracks scroll/translate/clip per present, RN overlay above it, 3 arms (~30 s)
 tools/ci-prewarm.sh  # FP-34 pre-warm tour: coverage counters, hidden, first-use cost vs off control, tour < 150 ms (about 20 s)
 tools/ci-unit.sh  # FP-50 rni-scenegraph-tests via CTest (>= 30 cases, < 5 s) + --dump-draw-ops stable dump (about 5 s)
+tools/ci-image-event-lifetime.sh  # FP-57: onLoadStart vs teardown setEnabled (TSan + RNI_BIN), ~40 s
