@@ -116,3 +116,15 @@ reverse it. The PR description links here; keep it current.
     from 15:02 to 19:09 on gates that cannot pass under ASan (perf/RSS budgets, an LD_PRELOAD shim). It also surfaced
     one intermittent report that may be a real bug (ImageEventEmitter::onLoadStart from applyMutations). Merges run
     the plain gates again. Lane B's FP-57 makes the suite ASan-clean, fixes the report, and turns it back on.
+16. **21:20-22:00: delivered to the Mac for testing (Baker: "get this over to mac to test").**
+    - **What shipped:** the macOS tester's tree got `mac/flutter-parity-1015` (c7369d1 = main a3d418a + the Mac's own
+      fix/textinput-inline-os fabcecf, so nothing it ran was dropped) via mac-sync (SYNC_OK, 1187 files), plus the
+      parity darwin SDK dir. The staged darwin binary was rebuilt.
+    - **Rollback:** the old bin dir is at `a local worktree/engine-darwin-arm64-bin-fabcecf-1015-2120` on the Mac.
+    - **Darwin checks:** ci-metal (MTL validation 0), ci-first-present, ci-native-transform and ci-native-anim-jsstall
+      all PASS. Linux: core + fix-branch gates on the merged tree, 21+ PASS.
+    - **Real HostApp:** `~/Applications/HostApp Parity.app` is a copy of HostApp.app with the new engine swapped in; the real HostApp.app
+      is untouched. On Metal it showed 491 nodes, first frame 973 ms, frame p95 9.0 ms, raster p95 2.0 ms
+      (evidence/MAC-1015-hostapp-parity-metal.png).
+    - **macOS tester:** it got the test checklist over the network, but its account hit the weekly limit (resets Sat Oct 18
+      10:00), so hands-on testing falls to Baker until then.
