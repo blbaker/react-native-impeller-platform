@@ -89,6 +89,7 @@
 #include "host/BackendSelect.h"
 #include "scenegraph/IoUploader.h"
 #include "base/Trace.h"
+#include "base/DevToolsFrames.h"
 #include "base/SanitizerHooks.h"
 #if RNI_FUZZ
 #include "fuzz/Fuzz.h"
@@ -97,6 +98,9 @@
 #include "base/TestSync.h"
 #include "base/ContextFlags.h"
 #include "fabric/ImageStore.h"
+#include "host/Prewarm.h"
+#include "base/ProgramCount.h"
+#include "host/MemoryPressure.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
@@ -176,6 +180,9 @@ void Usage() {
           "                     metal = darwin windowed default (FP-21), else gles\n"
           "                   [--supersample-rnsvg N]  offscreen N x SVG AA;\n"
           "                     default 4 on darwin + Windows, 0 (off) elsewhere\n"
+          "                   [--image-cache-mb N]  decoded-image LRU budget in MB;\n"
+          "                     default 100 (Flutter ImageCache). Env: RNI_IMAGE_CACHE_MB,\n"
+          "                     RNI_IMAGE_CACHE_FLOOR_MB (low-memory purge floor, default 0) (FP-33)\n"
           "                   [--sdf-aa on|off]  analytic SDF AA for circles, ovals,\n"
           "                     rects, rounded rects (Impeller Flags::use_sdfs, SDK\n"
           "                     patch 0003). Default off (FP-22)\n"
@@ -184,6 +191,7 @@ void Usage() {
           "                   [--screenshot-after-frames N] [--quit-on-term]\n"
           "                     (windowed; FP-06 frame-anchored capture, clean\n"
           "                     exit on SIGTERM/SIGINT)\n"
+          "                   [--prewarm on|off]  pipeline pre-warm tour before frame 1 (default on)\n"
           "                   [--frame-timings-out <file.json>]  one record per\n"
           "                     presented frame (FP-01)\n"
           "                   [--trace-out <file.json>]  Chrome/Perfetto trace of\n"
@@ -490,6 +498,7 @@ static bool gRasterThread = true;
 // FP-18: --partial-repaint on|off (windowed: clip RECORD to the damage when it
 // passes Flutter's 0.7 rule and keep the previous frame outside it).
 static bool gPartialRepaint = true;
+static bool gPrewarm = true;  // FP-34 --prewarm on|off
 // FP-20: --backend gles|metal|vulkan (only gles runs yet) and the test hook
 // RNI_TEST_BACKEND_POLICY=metal|vulkan (headless GL context, other backend's rules).
 static rni::GpuBackend gGpuBackend = rni::GpuBackend::kGles;
@@ -676,6 +685,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   sceneGraph.setGpuBackend(gGpuBackend, gGpuPolicy);  // FP-20
   rasterizer.thread().PostSync([&] { sceneGraph.setRenderContext(surface.context()); });
   sceneGraph.printGpuBackend();
+  // FP-34: the pipeline pre-warm tour, before the first frame (fonts are registered above).
+  if (gPrewarm) {
+    rni::RunPrewarmTour(surface, rasterizer.thread(), gGpuBackend, frameTimings);
+  } else {
+    printf("rn-impeller: prewarm skipped=off\n");
+    rni::programcount::SetPhase(rni::programcount::Phase::kFrames);
+  }
   sceneGraph.setSupersample(supersampleRnsvg);
   // ENG item 2b — the root supersample offscreen is sized N x this. Device
   // pixels (surface.width()/height()), re-set on resize below.
@@ -892,6 +908,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   };
   rasterHooks.afterPresent = [&](int n) {
     rni::glvalidation::OnFrame();  // FP-05 test hook
+    rni::image::OnFrame();         // FP-33 test hook (RNI_TEST_LOW_MEMORY_AT_FRAME)
     // ⛔ firstFramePresented: THE APP'S "YOU ARE ON SCREEN NOW" SIGNAL.
     // Emitted once, after the first present returns, so a launch animation
     // can start its clock from the moment pixels reach the window instead of
@@ -1386,6 +1403,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // wake (glfwPostEmptyEvent) unless M3 built it without one.
     sceneGraph.setDamageWake([&scheduler]() { scheduler.RequestFrame("damage"); });
     host.setNativeAnimatedStartHook([&scheduler]() { scheduler.RequestFrame("animation"); });
+    // FP-40: a LayoutAnimation starts inside a JS-thread pull.
+    fabric.setLayoutAnimationWake([&scheduler]() { scheduler.RequestFrame("layout_animation"); });
     {
       // ENG-09: a WorldRaster.setPixels write is scene damage the version
       // counter is otherwise blind to (it runs on the JS thread and never
@@ -1611,14 +1630,17 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     bool animatedThisFrame = false;
     if (shouldPaint) {
       scheduler.BeginFrame();
+      // FP-40: RN's animationTick (LayoutAnimation half), platform thread.
+      if (fabric.tickLayoutAnimations()) animatedThisFrame = true;
       const unsigned long ticksBefore = host.nativeAnimatedTicks();
       host.pumpNativeAnimated();
-      animatedThisFrame = host.nativeAnimatedTicks() != ticksBefore;
+      if (host.nativeAnimatedTicks() != ticksBefore) animatedThisFrame = true;
     }
     // A live clock asks for the next frame: a NativeAnimated animation in
     // flight, a focused field's caret blink, a spinning ActivityIndicator.
     // Nothing marks those dirty, so without this they freeze mid-cycle.
     if (idleSkip && (animatedThisFrame || host.nativeAnimatedActive() ||
+                     fabric.layoutAnimationActive() ||
                      sceneGraph.focusedTextInput() != 0 ||
                      sceneGraph.spinnerAnimating())) {
       scheduler.RequestFrame("clock");
@@ -2062,7 +2084,15 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
   // FP-01: presents counted at surface.present(), independent of the recorder.
   printf("rn-impeller: presents=%d\n", rasterizer.presents());
+  rni::programcount::PrintSummary();  // FP-34
   scheduler.PrintSummary();
+  {  // FP-54: frames handed to React Native DevTools (0 unless a trace recorded)
+    const rni::devtools::Stats dt = rni::devtools::GetStats();
+    printf("rn-impeller: devtools_frames sessions=%llu commits=%llu emitted=%llu\n",
+           (unsigned long long)dt.sessions, (unsigned long long)dt.commits,
+           (unsigned long long)dt.emitted);
+  }
+  fabric.printLayoutAnimationSummary();  // FP-40
   rasterizer.PrintSummary();  // FP-13 pipeline + FP-15 raster thread
   rni::uniformprobe::PrintSummary();  // FP-15 test hook
   rni::poisonprobe::PrintSummary();  // FP-17 test hook
@@ -2132,6 +2162,10 @@ int main(int argc, char** argv) {
   rni::installFeatureFlags();
   rni::trace::SetThreadName("main");
   rni::sanitize::RunTestHooks();
+  // FP-33: env defaults for hosts without argv (Android); --image-cache-mb below overrides.
+  if (const char* e = std::getenv("RNI_IMAGE_CACHE_MB")) rni::image::SetCacheBudget((int64_t)(atof(e) * 1048576.0));
+  if (const char* e = std::getenv("RNI_IMAGE_CACHE_FLOOR_MB")) rni::image::SetCacheFloor((int64_t)(atof(e) * 1048576.0));
+  rni::memorypressure::Start();
 #if RNI_FUZZ
   // FP-52: fuzz builds only. After the feature flags, which props parsing reads.
   if (rni::fuzz::Requested(argc, argv)) return rni::fuzz::Main(argc, argv);
@@ -2350,6 +2384,13 @@ int main(int argc, char** argv) {
         return 2;
       }
       gPartialRepaint = v == "on";
+    } else if (a == "--prewarm") {  // FP-34
+      const std::string v = next("--prewarm");
+      if (v != "on" && v != "off") {
+        fprintf(stderr, "rn-impeller: FATAL: --prewarm wants on|off (got '%s')\n", v.c_str());
+        return 2;
+      }
+      gPrewarm = v == "on";
     } else if (a == "--raster-thread") {
       const std::string v = next("--raster-thread");
       if (v != "on" && v != "off") {
@@ -2851,6 +2892,14 @@ int main(int argc, char** argv) {
         return 2;
       }
     }
+    else if (a == "--image-cache-mb") {
+      const double mb = atof(next("--image-cache-mb").c_str());
+      if (mb < 0) {
+        fprintf(stderr, "rn-impeller: --image-cache-mb must be >= 0\n");
+        return 2;
+      }
+      rni::image::SetCacheBudget((int64_t)(mb * 1048576.0));
+    }
     else if (a == "--sdf-aa") {
       std::string v = next("--sdf-aa");
       if (v != "on" && v != "off") {
@@ -3121,8 +3170,15 @@ int main(int argc, char** argv) {
     // Fabric must be up BEFORE the bundle evaluates: the Scheduler installs
     // UIManagerBinding through the unbuffered executor, and ReactFabric reads
     // global.nativeFabricUIManager the moment it initialises.
+    // FP-40: headless LayoutAnimation time is frame-counted (16.667 ms per
+    // stepped frame), like the NativeAnimated clock, so captures are repeatable.
+    // Declared before fabric: the KFM keeps the clock until fabric dies.
+    std::atomic<uint64_t> layoutAnimFrames{0};
     rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                            logMutations, host.displayMetrics());
+    fabric.setLayoutAnimationClock([&layoutAnimFrames]() -> uint64_t {
+      return layoutAnimFrames.load() * 16667 / 1000;
+    });
 
     host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
     host.runScript(std::move(bundle), sourceUrl);
@@ -3464,8 +3520,14 @@ int main(int argc, char** argv) {
         auto hf = std::make_unique<rni::FrameTimingsRecorder>();
         hf->RecordVsync();
         hf->RecordBuildStart();
+        layoutAnimFrames.fetch_add(1);
+        fabric.tickLayoutAnimations();  // FP-40
         host.pumpNativeAnimated();
         host.waitForJsIdle(5000);
+        // FP-33: decodes finish off-thread. Their load events are queued to JS before WaitIdle
+        // returns, so the NEXT frame's waitForJsIdle mounts what they trigger, and every frame
+        // paints the images its predecessor's events mounted (and reloads of purged images).
+        rni::image::WaitIdle(5000);
 
         TRACE_EVENT0("frame", "Frame");
         // FP-13: RECORD -> Pipeline -> RASTER on this one thread.
@@ -3483,8 +3545,10 @@ int main(int argc, char** argv) {
           }
           ++headlessPresents;
           rni::glvalidation::OnFrame();  // FP-05 test hook
+          item->timings->SetImageCacheBytes(rni::image::CacheBytes());  // FP-33
           headlessTimings.Commit(std::move(item->timings));
         });
+        rni::image::OnFrame();  // FP-33 test hook
 
         // Frame-0 capture, taken AFTER the first real paint so it is a
         // rendered frame and not an uninitialised buffer. This plus the final
@@ -3588,12 +3652,14 @@ int main(int argc, char** argv) {
           item->timings->RecordPresent();
         }
         ++headlessPresents;
+        item->timings->SetImageCacheBytes(rni::image::CacheBytes());  // FP-33
         headlessTimings.Commit(std::move(item->timings));
       });
     }  // Frame span
     if (finalRc != 0) return finalRc;
     printf("rn-impeller: presents=%d\n", headlessPresents);
     rni::PrintPipelineSummary(headlessPipeline);  // FP-13
+    fabric.printLayoutAnimationSummary();  // FP-40
     FinishFrameTimings(headlessTimings);
     FinishTrace();
     rni::glvalidation::Finish();

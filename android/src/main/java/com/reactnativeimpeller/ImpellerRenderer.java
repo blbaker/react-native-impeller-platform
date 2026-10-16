@@ -77,6 +77,13 @@ public final class ImpellerRenderer {
     }
   }
 
+  /** Forwards ComponentCallbacks2.onTrimMemory; a memory-pressure level purges the image cache. */
+  public static void onTrimMemory(int level) {
+    nativeOnTrimMemory(level);
+  }
+
+  private static native void nativeOnTrimMemory(int level);
+
   private static native long nativeCreate();
 
   private static native void nativeDestroy(long handle);

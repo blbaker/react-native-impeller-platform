@@ -4,6 +4,7 @@
 #include "base/ContextFlags.h"
 #include "base/GlLimits.h"
 #include "base/GlValidation.h"
+#include "base/ProgramCount.h"
 #include "fabric/ImageStore.h"
 #include "host/GlfwSurface.h"
 #include "host/IoContextEgl.h"
@@ -115,9 +116,13 @@ namespace {
 // GLFW created the window with GLFW_NO_API here, so it owns no GL context and
 // its loader resolves nothing. Impeller would get a table of null pointers and
 // fail somewhere far away from the cause.
-void* ProcAddr(const char* name, void*) { return (void*)eglGetProcAddress(name); }
+void* ProcAddr(const char* name, void*) {
+  return rni::programcount::Wrap(name, (void*)eglGetProcAddress(name));  // FP-34
+}
 #else
-void* ProcAddr(const char* name, void*) { return (void*)glfwGetProcAddress(name); }
+void* ProcAddr(const char* name, void*) {
+  return rni::programcount::Wrap(name, (void*)glfwGetProcAddress(name));  // FP-34
+}
 #endif
 
 void GlfwErrorCallback(int error, const char* description) {

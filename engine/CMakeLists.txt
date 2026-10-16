@@ -246,9 +246,11 @@ add_executable(rn-impeller
   host/FrameTimings.cpp
   host/FrameScheduler.cpp
   host/BackendSelect.cpp
+  host/Prewarm.cpp
   host/FrameItem.cpp
   host/RecordNoGl.cpp
   host/AnimRowProbe.cpp
+  host/MemoryPressure.cpp
   host/UniformProbe.cpp
   host/RasterThread.cpp
   host/IoContextEgl.cpp
@@ -263,11 +265,13 @@ add_executable(rn-impeller
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeProbe.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
+  base/DevToolsFrames.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
   base/TestSync.cpp
   base/GpuAvailability.cpp
   base/GlLimits.cpp
+  base/ProgramCount.cpp
   base/ContextFlags.cpp
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/OsAppearanceDarwin.mm>
   # The offscreen surface, one implementation per platform. Selected here rather
@@ -290,6 +294,7 @@ add_executable(rn-impeller
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   runtime/InspectorHost.cpp
+  runtime/DevToolsTracing.cpp
   modules/PlatformModules.cpp
   # ENG-14: the host's accessibility settings. darwin windowed builds read
   # NSWorkspace (Cocoa is linked only there); every other build answers false.
@@ -305,6 +310,8 @@ add_executable(rn-impeller
   modules/ExpoFetch.cpp
   fabric/FabricHost.cpp
   fabric/ComponentRegistry.cpp
+  fabric/LayoutAnimations.cpp
+  fabric/ExpoBlurShadowNode.cpp
   scenegraph/SceneGraph.cpp
   scenegraph/SceneGraphContextLoss.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
@@ -329,6 +336,8 @@ add_executable(rn-impeller
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
   scenegraph/ContentFilters.cpp
+  scenegraph/PrewarmTour.cpp
+  scenegraph/BackdropBlur.cpp
   scenegraph/BlendGroup.cpp
   scenegraph/EllipsizeText.cpp
   scenegraph/BorderCurve.cpp
