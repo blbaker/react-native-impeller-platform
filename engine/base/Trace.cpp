@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <map>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #if defined(__linux__)
@@ -15,6 +16,7 @@
 namespace rni::trace {
 
 std::atomic<bool> gEnabled{false};
+std::atomic<bool> gSinkOn{false};
 
 namespace {
 
@@ -46,7 +48,41 @@ int64_t NowUs() {
       .count();
 }
 
+// FP-54 span sink. Every 'B' pushes and every 'E' pops (Scope pairs them
+// whenever tracing of either kind was on at its start), so the stack stays
+// matched even when the sink turns on or off mid-span; only spans that began
+// under the CURRENT sink session are reported.
+std::atomic<SpanSink> gSink{nullptr};
+std::atomic<uint64_t> gSinkSession{0};
+struct OpenSpan {
+  const char* category;
+  const char* name;
+  std::chrono::steady_clock::time_point begin;
+  uint64_t session;  // 0 = began with no sink
+};
+thread_local std::vector<OpenSpan> tOpen;
+thread_local std::string tThreadName;
+
+void ToSink(char ph, const char* cat, const char* name) {
+  if (ph == 'B') {
+    const uint64_t session =
+        gSinkOn.load(std::memory_order_relaxed) ? gSinkSession.load() : 0;
+    tOpen.push_back({cat, name, std::chrono::steady_clock::now(), session});
+    return;
+  }
+  if (ph != 'E' || tOpen.empty()) return;
+  const OpenSpan span = tOpen.back();
+  tOpen.pop_back();
+  const SpanSink sink = gSink.load();
+  if (!sink || span.session == 0 || span.session != gSinkSession.load()) return;
+  sink(span.category, span.name,
+       tThreadName.empty() ? "thread" : tThreadName.c_str(), span.begin,
+       std::chrono::steady_clock::now());
+}
+
 void Push(char ph, const char* cat, const char* name, const char* key, int64_t v) {
+  ToSink(ph, cat, name);
+  if (!gEnabled.load(std::memory_order_relaxed)) return;
   const Event e{ph, CurrentTid(), NowUs(), cat, name, key, v};
   std::lock_guard<std::mutex> lock(gMutex);
   gEvents.push_back(e);
@@ -76,7 +112,14 @@ uint64_t EventCount() {
   return gEvents.size();
 }
 
+void SetSpanSink(SpanSink sink) {
+  if (sink) gSinkSession.fetch_add(1);
+  gSink.store(sink);
+  gSinkOn.store(sink != nullptr);
+}
+
 void SetThreadName(const char* name) {
+  tThreadName = name;
   const int tid = CurrentTid();
   {
     std::lock_guard<std::mutex> lock(gMutex);

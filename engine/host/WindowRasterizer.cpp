@@ -11,6 +11,7 @@
 
 #include "base/GpuAvailability.h"
 #include "base/Trace.h"
+#include "fabric/ImageStore.h"
 #include "host/ContextLoss.h"
 #include "host/ContextLossGl.h"
 #include "host/ExternalTextureProbe.h"
@@ -259,6 +260,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   if (hooks_.afterPresent) hooks_.afterPresent(n);
   if (item->timings) {
     item->timings->RecordPresent();
+    item->timings->SetImageCacheBytes(image::CacheBytes());  // FP-33
     timings_.Commit(std::move(item->timings));
   }
   {

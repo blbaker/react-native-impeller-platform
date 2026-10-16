@@ -19,6 +19,7 @@
 #include "RNSVGComponentDescriptors.h"
 #include <react/renderer/components/rnsvg/ComponentDescriptors.h>
 #include "fabric/WorldShadowNode.h"
+#include "fabric/ExpoBlurShadowNode.h"  // FP-41
 #endif
 
 namespace rni {
@@ -81,6 +82,9 @@ MakeComponentProviderRegistry() {
   // FP-44 <ImpellerPlatformView color>: a native child view (PlatformViewEmbedder).
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::ImpellerPlatformViewComponentDescriptor>());
+  // FP-41: expo-blur's ExpoBlurView (ExpoBlurShadowNode.h).
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::ExpoBlurViewComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
   // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --

@@ -265,6 +265,10 @@ struct SceneNode {
   bool isSwitch{false};
   // A20: <ActivityIndicator>. Colour defaults to iOS gray (#999) when unset.
   bool isSpinner{false};
+  // FP-41: expo-blur BlurView (ExpoBlurView): backdrop blur + tint (BackdropBlur.h).
+  bool isBlurView{false};
+  std::string blurTint{"default"};
+  float blurIntensity{50.0f};
   // A19: <Image> ("Image" from RCTImageView). Sources as JS sent them (uri,
   // scale, size in points); the painter picks one per frame size.
   bool isImage{false};

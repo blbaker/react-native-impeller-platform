@@ -10,6 +10,7 @@
 // still written so the record shows the wrong order.
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -42,6 +43,14 @@ class FrameTimingsRecorder {
   void RecordRasterEnd() { Record(State::kRasterEnd); }
   void RecordPresent() { Record(State::kPresent); }
 
+  // FP-33: decoded-image cache size at the present, reported per frame.
+  void SetImageCacheBytes(int64_t bytes) { imageCacheBytes_ = bytes; }
+  int64_t imageCacheBytes() const { return imageCacheBytes_; }
+
+  // FP-34: nodes the paint walk visited for this frame (gates find the frames a scene change hit).
+  void SetNodes(int n) { nodes_ = n; }
+  int nodes() const { return nodes_; }
+
   uint64_t frameNumber() const { return frameNumber_; }
   State state() const { return state_; }
   int errors() const { return errors_; }
@@ -54,6 +63,8 @@ class FrameTimingsRecorder {
   const uint64_t frameNumber_;
   State state_ = State::kUninitialized;
   int errors_ = 0;
+  int64_t imageCacheBytes_ = 0;
+  int nodes_ = 0;
   int64_t stamps_[kStampCount];
 };
 
@@ -67,6 +78,10 @@ class FrameTimings {
   // drops the recorder without a FrameTiming in the same case.
   void Discard(std::unique_ptr<FrameTimingsRecorder> frame);
 
+  // FP-34: wall time of the pipeline pre-warm tour (-1 = it did not run). Reported with the frames.
+  void SetPrewarmUs(int64_t us) { prewarmUs_.store(us, std::memory_order_relaxed); }
+  int64_t prewarmUs() const { return prewarmUs_.load(std::memory_order_relaxed); }
+
   // `frame_timings n= build_p50= ... total_p95= frame_timing_errors= discarded=`
   void PrintSummary(FILE* out) const;
   bool WriteJson(const std::string& path) const;
@@ -75,6 +90,8 @@ class FrameTimings {
   struct Rec {
     uint64_t frame;
     int64_t us[FrameTimingsRecorder::kStampCount];
+    int64_t imageCacheBytes;
+    int nodes;
   };
   std::vector<Rec> Snapshot() const;
 
@@ -82,6 +99,7 @@ class FrameTimings {
   std::vector<Rec> recs_;
   int errors_ = 0;
   int discarded_ = 0;
+  std::atomic<int64_t> prewarmUs_{-1};
 };
 
 }  // namespace rni

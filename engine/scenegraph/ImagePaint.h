@@ -7,6 +7,8 @@
 #include "scenegraph/GpuBackend.h"
 #include "scenegraph/RasterJobs.h"
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -33,6 +35,12 @@ class ImageTextures {
   // FP-32: releases every texture; the decoded pixels stay in the image store.
   size_t Clear();
 
+  // FP-33: releases the textures whose bitmap the budget or a low-memory purge evicted. Cheap
+  // when nothing was evicted since the last call. Paint thread.
+  void Sweep();
+  // Runs (any thread) when a reload of an evicted source ends, so the scene repaints.
+  void SetReloadWake(std::function<void()> wake) { reloadWake_ = std::move(wake); }
+
   // Null when the source is not decoded (yet) or no backend is wired.
   // boxW/boxH: the painted box in device pixels (picks the decode size).
   // FP-20: a miss goes through the backend's uploader (GL: a pool name filled
@@ -47,6 +55,8 @@ class ImageTextures {
     std::shared_ptr<const image::Decoded> decoded;
   };
   std::unordered_map<const image::Decoded*, Entry> entries_;
+  uint64_t sweptEpoch_{0};
+  std::function<void()> reloadWake_;
 };
 
 // RN ImageResizeMode values: 0 cover, 1 contain, 2 stretch, 3 center,

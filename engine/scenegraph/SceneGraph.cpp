@@ -1,5 +1,6 @@
 #include "scenegraph/SceneGraph.h"
 #include "scenegraph/DynamicNumber.h"
+#include "fabric/ImageStore.h"
 
 #include "scenegraph/CaretBlink.h"
 #include "scenegraph/CursorKinds.h"
@@ -31,6 +32,8 @@
 #include "scenegraph/Outline.h"
 #include "scenegraph/ScrollIndicators.h"
 #include "scenegraph/ActivityIndicator.h"
+#include "scenegraph/BackdropBlur.h"
+#include "fabric/ExpoBlurShadowNode.h"  // FP-41
 #include <react/renderer/components/image/ImageProps.h>  // A19
 #include "fabric/TextureViewShadowNode.h"  // FP-42
 #include "fabric/PlatformViewShadowNode.h"  // FP-44
@@ -839,6 +842,14 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       if (pp->color) colorToFloats(pp->color, node.pvColor);
     }
   }
+  // FP-41: expo-blur <BlurView>'s native ExpoBlurView.
+  if (node.componentName == react::ExpoBlurViewComponentName) {
+    node.isBlurView = true;
+    if (const auto* bp = dynamic_cast<const react::ExpoBlurViewProps*>(view.props.get())) {
+      node.blurTint = bp->tint;
+      node.blurIntensity = static_cast<float>(bp->intensity);
+    }
+  }
 
   // <Image>. A19: RN's ImageProps (sources, resizeMode, tintColor).
   if (node.componentName == "Image") {
@@ -860,7 +871,13 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     }
     {
       std::lock_guard<std::mutex> lock(imageDamage_->mutex);
-      if (!imageDamage_->wake) imageDamage_->wake = [this] { bumpVersion(); };
+      if (!imageDamage_->wake) {
+        imageDamage_->wake = [this] { bumpVersion(); };
+        // FP-33: a purge or a reload of an evicted source repaints through the same sink.
+        auto fire = [sink = imageDamage_] { sink->fire(); };
+        imageTextures_.SetReloadWake(fire);
+        rni::image::SetPurgeListener(fire);
+      }
     }
     if (!node.imgEvents) node.imgEvents = std::make_shared<rni::ImageEventBinding>();
     node.imgEvents->update(view, imageDamage_);
@@ -2657,6 +2674,24 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     if (node.spAnimating) spinnerAnimating_.store(true, std::memory_order_relaxed);
   }
 
+  // FP-41: expo-blur <BlurView>. Clip to the (rounded) box first, as Flutter's
+  // ClipRect bounds a BackdropFilter, so the blur never reads or writes outside it.
+  if (node.isBlurView && w > 0.0f && h > 0.0f) {
+    ImpellerDisplayListBuilderSave(builder);
+    ImpellerPath sqClip = continuous ? rni::MakeContinuousRRectPath(x, y, w, h, radii) : nullptr;
+    if (sqClip != nullptr) {
+      ImpellerDisplayListBuilderClipPath(builder, sqClip, kImpellerClipOperationIntersect);
+      ImpellerPathRelease(sqClip);
+    } else if (rounded) {
+      ImpellerDisplayListBuilderClipRoundedRect(builder, &rect, &radii,
+                                                kImpellerClipOperationIntersect);
+    } else {
+      ImpellerDisplayListBuilderClipRect(builder, &rect, kImpellerClipOperationIntersect);
+    }
+    rni::PaintBackdropBlur(builder, rect, node.blurTint, node.blurIntensity);
+    ImpellerDisplayListBuilderRestore(builder);
+  }
+
   // <Image>. A19: the decoded source, clipped to the (rounded) box.
   if (node.isImage && w > 0.0f && h > 0.0f && !node.imgSources.empty()) {
     const SceneNode::ImageSrc& src = PickImageSource(node.imgSources, w, h);
@@ -3760,6 +3795,7 @@ void SceneGraph::rebuildPaintRegistriesLocked() {
   // Rebuild the gradient registry before walking the tree: a def may be
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
+  imageTextures_.Sweep();  // FP-33
   gradients_.clear();
   svgDefs_.clear();
   for (const auto& [tag, n] : nodes_) {

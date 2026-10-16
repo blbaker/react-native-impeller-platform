@@ -13,14 +13,31 @@ namespace rni {
 
 ImageTextures::~ImageTextures() {
   for (auto& [d, e] : entries_) {
-    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture);
+    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture), image::AddLiveTextures(-1);
+  }
+}
+
+void ImageTextures::Sweep() {
+  const uint64_t epoch = image::EvictionEpoch();
+  if (epoch == sweptEpoch_) return;
+  sweptEpoch_ = epoch;
+  for (auto it = entries_.begin(); it != entries_.end();) {
+    if (image::IsResident(it->first)) {
+      ++it;
+      continue;
+    }
+    if (it->second.slot.texture) {
+      ImpellerTextureRelease(it->second.slot.texture);
+      image::AddLiveTextures(-1);
+    }
+    it = entries_.erase(it);
   }
 }
 
 size_t ImageTextures::Clear() {
   const size_t n = entries_.size();
   for (auto& [d, e] : entries_) {
-    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture);
+    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture), image::AddLiveTextures(-1);
   }
   entries_.clear();
   return n;
@@ -30,12 +47,17 @@ ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
                                    const std::string& uri, float boxW, float boxH,
                                    ImageTextureInfo* info) {
   if (!uploader) return nullptr;
+  Sweep();
   // FP-16: the cached decode for this box's size bucket (or the best other
   // size of the URI). A load in flight paints nothing yet; its completion
   // wakes the frame loop. Only a local source nobody requested (defaultSource)
   // is decoded here, synchronously, like RN iOS loads its default image.
   image::Lookup f = image::Find(uri, boxW, boxH);
-  if (!f.image && !f.failed && !f.pending) f.image = image::DecodeNow(uri, boxW, boxH);
+  if (!f.image && !f.failed && !f.pending) {
+    // FP-33: a source the budget or a purge dropped is decoded again off-thread; the wake repaints.
+    if (f.evicted) image::Reload(uri, boxW, boxH, reloadWake_);
+    else f.image = image::DecodeNow(uri, boxW, boxH);
+  }
   if (!f.image) return nullptr;
   auto it = entries_.find(f.image.get());
   // FP-14: an upload whose frame was dropped never ran; upload again.
@@ -60,6 +82,7 @@ ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
                                  UploadFlags{/*clampEdges=*/false, /*image=*/true})) {
       return nullptr;  // no storage ready (GL name pool empty): next frame
     }
+    if (e.slot.texture) image::AddLiveTextures(1);
     static const bool log = std::getenv("RNI_IMAGE_LOG") != nullptr;
     if (log && where) {
       std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f thread=%s\n",

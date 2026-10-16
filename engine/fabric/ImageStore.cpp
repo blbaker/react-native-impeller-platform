@@ -10,6 +10,7 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "ImageCache.h"
 #include "ImageInternal.h"
 #include "ImageIoPool.h"
 #include "ImageResize.h"
@@ -37,8 +38,8 @@ struct Job {
 
 std::mutex gMutex;
 std::condition_variable gIdle;
-// uri -> size bucket -> decoded. A failed LOCAL decode maps to null so the painter does not retry it.
-std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<const Decoded>>> gCache;
+// FP-33: uri -> size bucket -> decoded in a byte-budgeted LRU (Cache()). A failed LOCAL decode
+// maps to null so the painter does not retry it.
 std::unordered_map<std::string, std::shared_ptr<Job>> gPending;  // key -> the one job for it
 std::unordered_map<std::string, int> gPendingUri;
 std::unordered_map<uint64_t, std::shared_ptr<Job>> gTickets;
@@ -101,7 +102,7 @@ void Complete(const std::shared_ptr<Job>& job, const LoadResult& r, bool cache) 
   std::vector<Waiter> waiters;
   {
     std::lock_guard<std::mutex> lock(gMutex);
-    if (cache) gCache[job->uri][job->sizeKey] = r.image;
+    if (cache) Cache().Put(job->uri, job->sizeKey, r.image, job->headers);
     waiters = TakeWaiters(*job);
     ErasePending(job);
     if (gCallbacksStopped) waiters.clear();
@@ -175,11 +176,7 @@ void FetchJob(const std::shared_ptr<Job>& job) {
 }  // namespace
 
 bool IsCached(const std::string& uri) {
-  std::lock_guard<std::mutex> lock(gMutex);
-  auto u = gCache.find(uri);
-  if (u == gCache.end()) return false;
-  for (const auto& [k, d] : u->second) if (d) return true;
-  return false;
+  return Cache().HasImage(uri);
 }
 
 Lookup Find(const std::string& uri, float boxW, float boxH) {
@@ -187,27 +184,15 @@ Lookup Find(const std::string& uri, float boxW, float boxH) {
   if (bw == 0 || bh == 0) bw = bh = 0;
   Lookup l;
   std::lock_guard<std::mutex> lock(gMutex);
-  auto u = gCache.find(uri);
-  if (u != gCache.end()) {
-    auto s = u->second.find(SizeKey(bw, bh));
-    if (s != u->second.end()) {
-      l.image = s->second;
-      l.failed = !s->second;
-      return l;
-    }
-    // Another size of this URI: the smallest that covers the box, else the largest.
-    for (const auto& [k, d] : u->second) {
-      if (!d) continue;
-      const bool covers = d->width >= boxW && d->height >= boxH;
-      const bool bestCovers = l.image && l.image->width >= boxW && l.image->height >= boxH;
-      const long long area = (long long)d->width * d->height;
-      const long long best = l.image ? (long long)l.image->width * l.image->height : -1;
-      if (!l.image || (covers && (!bestCovers || area < best)) || (!covers && !bestCovers && area > best)) {
-        l.image = d;
-      }
-    }
-    if (l.image) return l;
+  std::shared_ptr<const Decoded> exact;
+  if (Cache().Get(uri, SizeKey(bw, bh), &exact)) {
+    l.image = exact;
+    l.failed = !exact;
+    return l;
   }
+  // Another size of this URI: the smallest that covers the box, else the largest.
+  if ((l.image = Cache().BestOther(uri, boxW, boxH))) return l;
+  l.evicted = Cache().Seen(uri, nullptr);
   l.pending = gPendingUri.count(uri) > 0;
   return l;
 }
@@ -220,7 +205,7 @@ std::shared_ptr<const Decoded> DecodeNow(const std::string& uri, float boxW, flo
   std::shared_ptr<const Decoded> d = ReadSourceBytes(uri, bytes) ? RunDecode(bytes.data(), bytes.size(), bw, bh, uri) : nullptr;
   gSync.fetch_add(1);
   std::lock_guard<std::mutex> lock(gMutex);
-  return gCache[uri].emplace(SizeKey(bw, bh), d).first->second;
+  return Cache().Put(uri, SizeKey(bw, bh), d, {});
 }
 
 uint64_t LoadAsync(const std::string& uri, const Headers& headers, float boxW, float boxH,
@@ -235,11 +220,7 @@ uint64_t LoadAsync(const std::string& uri, const Headers& headers, float boxW, f
   std::function<void()> begin;
   {
     std::lock_guard<std::mutex> lock(gMutex);
-    auto u = gCache.find(uri);
-    if (u != gCache.end()) {
-      auto s = u->second.find(sizeKey);
-      if (s != u->second.end()) cached = true, hit = s->second;
-    }
+    cached = Cache().Get(uri, sizeKey, &hit);
     if (!cached) {
       id = ++gNextTicket;
       auto& slot = gPending[key];
@@ -312,6 +293,7 @@ void PrintStats() {
               "canceled=%d sync=%d max_texture=%d\n",
               DecodePool().size(), DecodePool().started(), jobs, DecodeCount(), PeakLiveDecodes(), dedup,
               canceled, gSync.load(), MaxTextureSize());
+  PrintCacheStats();
 #if defined(__linux__)
   if (FILE* f = std::fopen("/proc/self/status", "r")) {
     char line[256];

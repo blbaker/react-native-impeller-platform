@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -13,7 +14,23 @@ namespace rni::trace {
 
 extern std::atomic<bool> gEnabled;
 
-inline bool Enabled() { return gEnabled.load(std::memory_order_relaxed); }
+// FP-54: on while a React Native DevTools trace records (SetSpanSink).
+extern std::atomic<bool> gSinkOn;
+
+inline bool Enabled() {
+  return gEnabled.load(std::memory_order_relaxed) ||
+         gSinkOn.load(std::memory_order_relaxed);
+}
+
+// FP-54: every finished span is also handed to `sink` (on the span's thread)
+// until SetSpanSink(nullptr). Flutter's TRACE_EVENT feeds the Dart timeline
+// that DevTools reads; ours feeds RN's PerformanceTracer the same way.
+// Counters are not forwarded.
+using SpanSink = void (*)(const char* category, const char* name,
+                          const char* threadName,
+                          std::chrono::steady_clock::time_point begin,
+                          std::chrono::steady_clock::time_point end);
+void SetSpanSink(SpanSink sink);
 
 // Start recording; Stop() writes `path` and disables. Start returns false
 // when already started.
