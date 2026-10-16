@@ -106,6 +106,8 @@ void OnFrame();
 // on every eviction so a sweep can be skipped when nothing was evicted.
 bool IsResident(const Decoded* d);
 uint64_t EvictionEpoch();
+// Low-memory purges so far (HandleLowMemory); a purge also ends the painter's keep-alive.
+int PurgeCount();
 // Runs on any thread after a purge, so the scene can repaint.
 void SetPurgeListener(std::function<void()> fn);
 // Starts the load of an evicted URI again (same headers as before); `done` runs when it ends.

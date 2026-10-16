@@ -72,7 +72,8 @@ expect_killed M4 "$BACKUP/m4.log" 'A: no frame after the restore'
 restore
 
 echo "== M5: restore frame not forced to a full repaint =="
-mutate engine/host/main.cpp 'rasterizer.partialRepaint() && !rni::gpu::ConsumeRestore();' 'rasterizer.partialRepaint();  // MUTANT M5'
+# FP-32 appended \`&& !afterLoss\` to this condition; keep it so only the restore check goes.
+mutate engine/host/main.cpp 'rasterizer.partialRepaint() && !rni::gpu::ConsumeRestore() && !afterLoss;' 'rasterizer.partialRepaint() && !afterLoss;  // MUTANT M5'
 build "$BACKUP/m5-build.log"; gate "$BACKUP/m5.log" || true
 expect_killed M5 "$BACKUP/m5.log" 'D: restore frame was a damage-clipped partial repaint'
 restore

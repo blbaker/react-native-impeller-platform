@@ -74,12 +74,13 @@ import re, sys
 log = open(sys.argv[1], errors="replace").read(); tag = sys.argv[2]
 def bad(m): print("RASTER_THREAD_FAIL: %s: %s" % (tag, m), file=sys.stderr); sys.exit(1)
 rt = re.search(r"^rn-impeller: raster_thread threaded=\d depth=\d+ main_tid=(\d+) raster_tid=(\d+)", log, re.M)
-g = re.findall(r"^rn-impeller: gpu_release gl_current=(\d) tid=(\d+)", log, re.M)
+g = re.findall(r"^rn-impeller: gpu_release gl_current=(\d)(?: backend=(\w+))? tid=(\d+)", log, re.M)
 if not rt: bad("no raster_thread line")
 if len(g) > 1: bad("%d gpu_release lines" % len(g))
-if g and g[0][0] != "1": bad("GPU objects released with NO GL context current (tid %s)" % g[0][1])
-if g and g[0][1] != rt.group(2):
-    bad("GPU objects released on tid %s, not the raster thread %s (main %s)" % (g[0][1], rt.group(2), rt.group(1)))
+# Metal has no GL context: its release line says backend=metal gl_current=0, so only the thread is checked there.
+if g and g[0][1] != "metal" and g[0][0] != "1": bad("GPU objects released with NO GL context current (tid %s)" % g[0][2])
+if g and g[0][2] != rt.group(2):
+    bad("GPU objects released on tid %s, not the raster thread %s (main %s)" % (g[0][2], rt.group(2), rt.group(1)))
 PY
 }
 
@@ -100,7 +101,7 @@ presents = int(re.findall(r"^rn-impeller: presents=(\d+)", log, re.M)[-1])
 if not (int(p.group(2)) == int(p.group(3)) == presents):
     bad("produced=%s consumed=%s presents=%d" % (p.group(2), p.group(3), presents))
 rt = re.search(r"^rn-impeller: raster_thread threaded=1 depth=2 main_tid=(\d+) raster_tid=(\d+)", log, re.M)
-g = re.findall(r"^rn-impeller: gpu_release gl_current=(\d) tid=(\d+)", log, re.M)
+g = re.findall(r"^rn-impeller: gpu_release gl_current=(\d)(?: backend=(\w+))? tid=(\d+)", log, re.M)
 if len(g) != 1: bad("expected one gpu_release line, got %d" % len(g))
 PY
 }

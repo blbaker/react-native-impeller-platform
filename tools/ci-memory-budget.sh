@@ -17,6 +17,10 @@
 # RNI_BUDGETS_FUNCTIONAL_ONLY=1 (tools/ci-sanitize.sh, sanitizer builds only): every arm and every cache
 # byte count still asserted; only the rss PLATEAU (an RSS budget ASan's quarantine and shadow memory
 # inflate) is skipped. The unbounded control must still peak >= 60 MB above the bounded run (FP-57).
+#   live     (FP-56) 8 visible images (1.1 MB decoded) under a 0.5 MB budget: the budget evicts bitmaps
+#            that are on screen, and the painter keeps their textures (Flutter _liveImages keepAlive),
+#            so the reload loop stops: reloads <= 40 (5 per image; a bitmap evicted before its first
+#            paint still reloads, measured 12). Before FP-56 it re-decoded every frame (903 reloads).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -144,4 +148,16 @@ purge_arm clear 0
 [ "$REL" -ge 8 ] && [ "$UPS" -ge 8 ] || fail "clear: reloads=$REL uploads_after=$UPS, expected all 8 visible images to reload"
 purge_tail clear
 
-echo "MEMORY_BUDGET_GATE_PASS (peak=${PEAK} default_peak=${DPEAK} evictions=${EVI} rss250=${R250}KB rss500=${R500}KB unbounded=${RBIG}KB purge_after=${AFTER})"
+echo "== live: visible images over the budget are kept alive, not reloaded =="
+run live 8 -- --image-cache-mb 0.5
+LDEC="$(sv live image_io decodes)"; LREL="$(sv live "image_cache bytes" reloads)"
+LEVI="$(sv live "image_cache bytes" evictions)"; LTEX="$(sv live "image_cache bytes" textures_live)"
+need live "$LDEC"; need live "$LREL"; need live "$LEVI"; need live "$LTEX"
+[ "$LEVI" -ge 4 ] || fail "live: evictions=$LEVI, the 0.5 MB budget did not evict the visible bitmaps (arm proves nothing)"
+[ "$LREL" -le 40 ] && [ "$LDEC" -le 48 ] \
+  || fail "live: reloads=$LREL decodes=$LDEC for 8 visible images: on-screen images evicted by the budget reload in a loop"
+[ "$LTEX" -eq 8 ] || fail "live: textures_live=$LTEX, expected the 8 visible images"
+T="$(tiles live 0)"
+[ "$T" = "tiles_bad=0 of 8" ] || fail "live: $T painted the wrong colour"
+
+echo "MEMORY_BUDGET_GATE_PASS (peak=${PEAK} default_peak=${DPEAK} evictions=${EVI} rss250=${R250}KB rss500=${R500}KB unbounded=${RBIG}KB purge_after=${AFTER} live_evictions=${LEVI} live_reloads=${LREL})"

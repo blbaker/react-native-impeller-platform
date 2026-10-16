@@ -43,12 +43,14 @@ expect_killed() {  # name log ERE
 }
 
 echo "== M1: raster draws the previous FrameItem (one-frame lag) =="
+# The lag goes into the item itself: since FP-18 the windowed partial-repaint path draws
+# frame.displayList, not the list handed to draw(), so lagging only that argument is invisible.
 mutate "$FI" '    ok = draw(item.displayList);' \
 '    static ImpellerDisplayList prevDl = nullptr;  // MUTANT M1
-    ok = draw(prevDl ? prevDl : item.displayList);
-    if (prevDl) ImpellerDisplayListRelease(prevDl);
-    ImpellerDisplayListRetain(item.displayList);
-    prevDl = item.displayList;'
+    ImpellerDisplayList cur = item.displayList;
+    if (prevDl) item.displayList = prevDl; else ImpellerDisplayListRetain(cur);
+    prevDl = cur;
+    ok = draw(item.displayList);'
 build "$BACKUP/m1-build.log"; gate "$BACKUP/m1.log" || true
 expect_killed M1 "$BACKUP/m1.log" 'RECORD_RASTER FAIL P pixels differ: ntx'
 restore

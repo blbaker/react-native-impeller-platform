@@ -47,3 +47,4 @@ tools/ci-platform-view.sh     # FP-44 platform views: X11 child window tracks sc
 tools/ci-prewarm.sh  # FP-34 pre-warm tour: coverage counters, hidden, first-use cost vs off control, tour < 150 ms (about 20 s)
 tools/ci-unit.sh  # FP-50 rni-scenegraph-tests via CTest (>= 30 cases, < 5 s) + --dump-draw-ops stable dump (about 5 s)
 tools/ci-image-event-lifetime.sh  # FP-57: onLoadStart vs teardown setEnabled (TSan + RNI_BIN), ~40 s
+tools/ci-golden.sh  # FP-51 per-backend goldens: 10 cases vs tools/golden/linux-gles, tolerance policy (~3 s)

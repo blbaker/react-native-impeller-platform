@@ -12,10 +12,14 @@ cd "$ROOT"
 
 MAIN="engine/host/main.cpp"
 FT="engine/host/FrameTimings.cpp"
+FI="engine/host/FrameItem.cpp"  # FP-13 moved the raster stamps here
+WR="engine/host/WindowRasterizer.cpp"  # FP-15 moved the windowed present stamp here
 BACKUP="$(mktemp -d)"
 cp "$MAIN" "$BACKUP/main.cpp"
 cp "$FT" "$BACKUP/FrameTimings.cpp"
-restore() { cp "$BACKUP/main.cpp" "$MAIN"; cp "$BACKUP/FrameTimings.cpp" "$FT"; }
+cp "$FI" "$BACKUP/FrameItem.cpp"
+cp "$WR" "$BACKUP/WindowRasterizer.cpp"
+restore() { cp "$BACKUP/main.cpp" "$MAIN"; cp "$BACKUP/FrameTimings.cpp" "$FT"; cp "$BACKUP/FrameItem.cpp" "$FI"; cp "$BACKUP/WindowRasterizer.cpp" "$WR"; }
 trap 'restore; echo "(engine source restored; rebuild with tools/engine-build.sh)" >&2' EXIT
 
 build() { bash tools/engine-build.sh linux x64 > "$1" 2>&1 || { tail -20 "$1" >&2; echo "MUTATE_FAIL: build failed" >&2; exit 1; }; }
@@ -41,20 +45,23 @@ expect_killed() {  # name log ERE
 }
 
 echo "== M1: no raster_start on idle-skip frames =="
-mutate "$MAIN" '    frame->RecordRasterStart();
-    if (dl) {' '    if (!idleSkip) frame->RecordRasterStart();  // MUTANT M1
-    if (dl) {'
+# RasterFrame (raster thread) cannot see --idle-skip, so the mutant passes it through the environment.
+mutate "$MAIN" '    else if (a == "--idle-skip") { idleSkip = true; idleSkipSet = true; }' \
+  '    else if (a == "--idle-skip") { idleSkip = true; idleSkipSet = true; setenv("RNI_MUTANT_IDLE", "1", 1); }  // MUTANT M1'
+mutate "$FI" '#include <cstdio>' '#include <cstdio>
+#include <cstdlib>  // MUTANT M1'
+mutate "$FI" '  if (item.timings) item.timings->RecordRasterStart();' \
+  '  if (item.timings && !getenv("RNI_MUTANT_IDLE")) item.timings->RecordRasterStart();  // MUTANT M1'
 build "$BACKUP/m1-build.log"; gate "$BACKUP/m1.log" || true
 expect_killed M1 "$BACKUP/m1.log" 'FT_FAIL: idle: frame_timing_errors=[1-9]'
 restore
 
 echo "== M2: present stamped before raster_end =="
-mutate "$MAIN" '    frame->RecordRasterEnd();
-    if (grabArmed) {' '    frame->RecordPresent();  // MUTANT M2
-    frame->RecordRasterEnd();
-    if (grabArmed) {'
-mutate "$MAIN" '    surface.present();
-    frame->RecordPresent();' '    surface.present();'
+mutate "$FI" '  if (item.timings) item.timings->RecordRasterEnd();' \
+'  if (item.timings) item.timings->RecordPresent();  // MUTANT M2
+  if (item.timings) item.timings->RecordRasterEnd();'
+mutate "$WR" '    item->timings->RecordPresent();
+    item->timings->SetImageCacheBytes' '    item->timings->SetImageCacheBytes'
 build "$BACKUP/m2-build.log"; gate "$BACKUP/m2.log" || true
 expect_killed M2 "$BACKUP/m2.log" 'FT_FAIL: windowed: frame_timing_errors=[1-9]'
 restore
