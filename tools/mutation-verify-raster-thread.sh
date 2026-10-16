@@ -64,9 +64,11 @@ expect_killed M2 "$BACKUP/m2.log" '^A: the queued frame presented [0-9.]+ ms aft
 restore
 
 echo "== M3: teardown destroys the context before joining the raster thread =="
-mutate "$WR" '    if (started_) surface_.releaseGpu();
+mutate "$WR" '      surface_.releaseGpu();
+    }
   });
-  raster_.Join();' '  });
+  raster_.Join();' '    }
+  });
   if (started_) surface_.releaseGpu();  // MUTANT M3: on main, before the join
   raster_.Join();'
 build "$BACKUP/m3-build.log"; gate "$BACKUP/m3.log" || true

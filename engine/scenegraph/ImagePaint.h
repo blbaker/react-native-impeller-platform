@@ -37,7 +37,12 @@ class ImageTextures {
 
   // FP-33: releases the textures whose bitmap the budget or a low-memory purge evicted. Cheap
   // when nothing was evicted since the last call. Paint thread.
+  // FP-56: a texture painted this frame or the last one outlives a BUDGET eviction (Flutter
+  // image_cache.dart _liveImages: a live image is returned as "keepAlive", never reloaded);
+  // a purge still drops it, as ImageCache.clear() drops _liveImages.
   void Sweep();
+  // Once per painted frame, before the walk: ages the keep-alive set, then sweeps.
+  void BeginFrame();
   // Runs (any thread) when a reload of an evicted source ends, so the scene repaints.
   void SetReloadWake(std::function<void()> wake) { reloadWake_ = std::move(wake); }
 
@@ -53,9 +58,16 @@ class ImageTextures {
   struct Entry {
     TextureSlot slot;
     std::shared_ptr<const image::Decoded> decoded;
+    std::string uri;
+    uint64_t lastUse{0};  // frame_ of the last Get that returned it
   };
+  void Release(std::unordered_map<const image::Decoded*, Entry>::iterator it);
   std::unordered_map<const image::Decoded*, Entry> entries_;
+  std::unordered_map<std::string, const image::Decoded*> live_;  // uri -> its newest entry
   uint64_t sweptEpoch_{0};
+  uint64_t frame_{0};
+  int sweptPurges_{0};
+  size_t keptAlive_{0};  // entries kept after their bitmap was evicted
   std::function<void()> reloadWake_;
 };
 

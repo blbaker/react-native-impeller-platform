@@ -79,7 +79,9 @@ mutate "$ENG" '        gScreenshotAfterFrames < 0 || frameIndex >= gScreenshotAf
   '        true;  // MUTANT M2: the frame-wait never waits'
 build "$BACKUP/build-m2.log"
 gate "$BACKUP/m2.log"
-expect_killed M2 "$BACKUP/m2.log" 'SCROLL_GATE_FAIL: (two notches down is a 80pt offset|every sampled row is identical)'
+# The never-waiting capture fires on frame 0, the same frame as ci-scroll's --screenshot-first; that
+# frame does one readback (the first-frame file), so the timed file is never written (seen in FP-56).
+expect_killed M2 "$BACKUP/m2.log" 'SCROLL_GATE_FAIL: (two notches down is a 80pt offset|every sampled row is identical|no post-scroll screenshot)'
 # fail fast: the never-waiting wait must not turn into a ceiling-length hang
 [ "$GATE_SEC" -le $(( C_SEC + 60 )) ] \
   || { echo "MUTATE_FAIL: M2 failed only after ${GATE_SEC}s (clean run ${C_SEC}s): a hang, not a fast failure" >&2; exit 1; }

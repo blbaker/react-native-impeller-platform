@@ -3823,6 +3823,7 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   if (!cullActive_) damage_.BeginWalk();  // FP-18
   pvBeginWalkLocked();  // FP-44
   damageSpread_ = 0;
+  imageTextures_.BeginFrame();  // FP-56: once per frame walk (slice/snapshot walks only sweep)
   rebuildPaintRegistriesLocked();
   svgUseDepth_ = 0;
   spinnerAnimating_.store(false, std::memory_order_relaxed);

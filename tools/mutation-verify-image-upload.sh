@@ -2,9 +2,10 @@
 # MUTATION TEST for tools/ci-image-upload.sh (FP-17). Each mutant edits ENGINE
 # SOURCE, rebuilds, and must turn the gate red for its own reason.
 #
-#   M1  upload on the raster thread again: the painter ignores the IO thread's
-#       finished texture and queues the FP-14 raster-side upload
-#       -> A: raster_p99 over 1.2 x the preloaded control
+#   M1  upload on the raster thread again: the IO upload thread never starts, so
+#       every image takes the FP-14 raster-side upload (the pre-FP-17 path)
+#       -> A: arrive reps report io_upload uploads=0
+#          (the per-rep counter check runs before the raster_p99 vs 1.2 x control check)
 #   M2  hand off before the fence: the IO thread publishes the name and
 #       completes the load as soon as the storage exists, before the pixels are
 #       transferred and fenced -> B: presents show the poison storage
@@ -44,10 +45,13 @@ expect_killed() {  # name log ERE
 }
 
 echo "== M1: upload on the raster thread again =="
-mutate "$IP" 'if (const uint32_t ioName = io::Take(d.get()); ioName != 0) {' \
-'if (const uint32_t ioName = 0 * io::Take(d.get()); ioName != 0) {  // MUTANT M1'
+# FP-56: the old M1 (discard io::Take's name) leaked the IO texture and, with FP-33's evict/reload,
+# re-uploaded it every frame: rn-impeller reached 21 GB and the OOM killer took the session.
+mutate "$IO" '  if (!Enabled() || !RNI_IO_GL) return false;' \
+'  if (true) return false;  // MUTANT M1: no IO thread'
 build "$BACKUP/m1-build.log"; gate "$BACKUP/m1.log" || true
-expect_killed M1 "$BACKUP/m1.log" 'A: raster_p99 [0-9]+ us > 1.2 x control [0-9]+ us: upload time is in the raster frame'
+# The per-rep IO counter check runs before the p99 comparison, so it is the arm that reports this mutant.
+expect_killed M1 "$BACKUP/m1.log" '(A: raster_p99 [0-9]+ us > 1.2 x control [0-9]+ us: upload time is in the raster frame|arrive[0-9]: io_upload uploads=0, want)'
 restore
 
 echo "== M2: hand off before the fence =="

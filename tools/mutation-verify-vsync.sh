@@ -41,7 +41,8 @@ expect_killed() {  # name log ERE
 }
 
 echo "== M1: swap interval 0 + no software clock (free-running) =="
-mutate "$SRC" '  const int interval = source_ == Source::kFree || source_ == Source::kSoftware ? 0 : 1;' \
+# FP-15 made the constructor read options.source into a local `src`.
+mutate "$SRC" '  const int interval = src == Source::kFree || src == Source::kSoftware ? 0 : 1;' \
   '  const int interval = 0;  // MUTANT M1'
 mutate "$SRC" '    source_ = Source::kSoftware;' '    source_ = Source::kFree;  // MUTANT M1'
 build "$BACKUP/m1-build.log"; gate "$BACKUP/m1.log" || true

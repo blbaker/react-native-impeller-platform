@@ -45,3 +45,4 @@ tools/ci-external-texture.sh  # FP-42 external textures: 30 fps producer under c
 tools/ci-snapshot.sh          # FP-43 view snapshots: captureRef == on-screen crop within 2 levels, upright, scale 1/2, ss4, headless (~25 s)
 tools/ci-platform-view.sh     # FP-44 platform views: X11 child window tracks scroll/translate/clip per present, RN overlay above it, 3 arms (~30 s)
 tools/ci-prewarm.sh  # FP-34 pre-warm tour: coverage counters, hidden, first-use cost vs off control, tour < 150 ms (about 20 s)
+tools/ci-golden.sh  # FP-51 per-backend goldens: 10 cases vs tools/golden/linux-gles, tolerance policy (~3 s)
