@@ -64,6 +64,7 @@
 // Header-only and platform-free on purpose: the backing-scale decision has to
 // be testable (--test-pointscale) on hosts that have no window at all.
 #include "host/PointScale.h"
+#include "scenegraph/DrawOpLog.h"
 #include "scenegraph/CaretBlink.h"
 #include "scenegraph/CursorKinds.h"
 #include "impeller.h"
@@ -191,6 +192,8 @@ void Usage() {
           "                   [--screenshot-after-frames N] [--quit-on-term]\n"
           "                     (windowed; FP-06 frame-anchored capture, clean\n"
           "                     exit on SIGTERM/SIGINT)\n"
+          "                   [--dump-draw-ops <file>]  text log of every Impeller builder call\n"
+          "                     the painter makes, one section per frame (FP-50)\n"
           "                   [--prewarm on|off]  pipeline pre-warm tour before frame 1 (default on)\n"
           "                   [--frame-timings-out <file.json>]  one record per\n"
           "                     presented frame (FP-01)\n"
@@ -2384,6 +2387,8 @@ int main(int argc, char** argv) {
         return 2;
       }
       gPartialRepaint = v == "on";
+    } else if (a == "--dump-draw-ops") {  // FP-50
+      rni::drawop::SetDumpPath(next("--dump-draw-ops"));
     } else if (a == "--prewarm") {  // FP-34
       const std::string v = next("--prewarm");
       if (v != "on" && v != "off") {
