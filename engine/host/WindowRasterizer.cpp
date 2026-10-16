@@ -11,6 +11,8 @@
 
 #include "base/GpuAvailability.h"
 #include "base/Trace.h"
+#include "host/ContextLoss.h"
+#include "host/ContextLossGl.h"
 #include "host/FrameScheduler.h"
 #include "host/FrameTimings.h"
 #include "host/GlfwSurface.h"
@@ -149,6 +151,11 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   // FP-31 (rasterizer.cc DrawToSurfaces + SyncSwitch): everything below is GPU
   // work. While the GPU is unavailable (window iconified, app in background)
   // the frame is dropped like kGpuUnavailable: no draw, no upload, no present.
+  if (ctxloss::Lost()) {  // FP-32: the context is dead; main rebuilds it
+    ctxloss::NoteDropped();
+    retireDropped();
+    return;
+  }
   gpu::Section gpuSection;
   if (!gpuSection.available()) {
     gpu::Note(gpu::Counter::kSkippedFrame);
@@ -189,6 +196,11 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
       std::fflush(stdout);
     }
   }
+  if (ctxloss::WantsCapture(n)) {  // FP-32 test hook: ref + frames after each recovery
+    std::vector<Px> px;
+    gpu::Note(gpu::Counter::kSnapshot);
+    if (surface_.readPixels(&px)) ctxloss::OnPresent(px, surface_.gpuWidth(), surface_.gpuHeight(), n);
+  }
   if (hooks_.beforePresent) hooks_.beforePresent(n);
   gpu::Note(gpu::Counter::kPresent);
   {
@@ -215,6 +227,15 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   // Counted at the present: refresh_paints and presents= come from here.
   presents_.store(n, std::memory_order_release);
   gpu::NotePresent(n, !item->damage.partial);
+  ctxloss::NotePresent(n);
+  {  // FP-32: a lost context shows up as a failed swap or a robust reset status
+    const char* lost = surface_.takeSwapLost() ? "egl_context_lost" : nullptr;
+    if (lost == nullptr) {
+      if (const unsigned st = surface_.pollResetStatus()) lost = ctxlossgl::ResetReason(st);
+    }
+    if (lost == nullptr && ctxloss::ForceAtPresent(n)) lost = "test_hook";
+    if (lost != nullptr) ctxloss::Report(lost, n, item->frameNumber);
+  }
   if (resizeSync_) resizeSync_->DidPresent(item->width, item->height);  // performCommit
   if (log_) {
     std::printf("rn-impeller: raster_present n=%d frame=%llu t_us=%lld tid=%lld\n", n,
@@ -254,6 +275,17 @@ void WindowRasterizer::DelayFrame(uint64_t frameNumber, int ms) {
   std::lock_guard<std::mutex> lock(mu_);
   delayFrame_ = (int64_t)frameNumber;
   delayMs_ = ms;
+}
+
+bool WindowRasterizer::RebuildGpu(std::string* error) {
+  bool ok = false;
+  raster_.PostSync([&] {
+    if (!started_) return;
+    partial_.Release();  // FP-18 GL objects belong to the dead context
+    ok = surface_.rebuildGpu(raster_.threaded(), error);
+    if (ok) partialEnabled_.store(partial_.Init(partialRequested_), std::memory_order_release);
+  });
+  return ok;
 }
 
 void WindowRasterizer::Shutdown() {

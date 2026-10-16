@@ -483,6 +483,12 @@ class SceneGraph {
   // pool RECORD wraps textures from, filled here), so call it with the context
   // current (the raster side). Set the backend first.
   void setRenderContext(ImpellerContext context);
+  // FP-32: every GPU texture died with a lost context. Releases the cached
+  // ones (images, <world> rasters and sprite atlases, per-<Svg> and root
+  // supersample offscreens) under the scene lock; their CPU sources (image
+  // store, WorldRasterStore, the SVG tree) stay, so the next RECORD re-uploads
+  // and re-renders them. Main thread, before setRenderContext(new context).
+  void dropGpuResources();
   // FP-20: what `context` is (`--backend`) and whose rules the painter follows
   // (differs only under RNI_TEST_BACKEND_POLICY). Before setRenderContext.
   void setGpuBackend(GpuBackend context, GpuBackend policy) {

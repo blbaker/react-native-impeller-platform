@@ -20,8 +20,10 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "host/ContextLossGl.h"
 #include "host/Pixel.h"
 #include "impeller.h"
 
@@ -61,6 +63,17 @@ class GlfwSurface {
   // GL thread. Release the wrap and the Impeller context, then make no context
   // current, so the window (and its GL context) can die on main.
   void releaseGpu();
+  // FP-32 (Rasterizer::Teardown + Setup), raster thread: the IO context, the
+  // Impeller surface and context and the EGL context are destroyed, then a new
+  // EGL context (same config) and everything on it are built. False when the
+  // platform cannot (Metal, Windows) or a step failed (`error`).
+  bool rebuildGpu(bool rasterThread, std::string* error);
+  // FP-32, main thread: a new typography context replaces the bound one.
+  void rebuildTypography();
+  // FP-32, raster thread, after present(): the swap failed with EGL_CONTEXT_LOST.
+  bool takeSwapLost() { return std::exchange(swapLost_, false); }
+  // FP-32, raster thread: non-zero GL reset status of a robust context.
+  unsigned pollResetStatus() const;
   int gpuWidth() const { return gpuWidth_; }
   int gpuHeight() const { return gpuHeight_; }
 
@@ -515,6 +528,7 @@ class GlfwSurface {
  private:
   std::string title_ = "React Native (Impeller)";
   void installRecordHooks(bool rasterThread);  // FP-14
+  void captureEglWindow();  // FP-32 (GlfwSurfaceRebuild.cpp)
   int gpuWidth_{0};   // FP-15: the size the fbo-0 wrap was built for (GL thread)
   int gpuHeight_{0};
 
@@ -696,6 +710,12 @@ class GlfwSurface {
   ImpellerContext context_{nullptr};
   ImpellerSurface surface_{nullptr};
   ImpellerTypographyContext typography_{nullptr};
+  // FP-32: the window's EGL objects (linux: GLFW's; darwin ANGLE: ours) and
+  // whether the context in them is a rebuilt one (GLFW no longer owns it).
+  ctxlossgl::EglWindow egl_;
+  bool rebuilt_{false};
+  bool swapLost_{false};
+  int swapInterval_{-1};  // re-applied to a rebuilt context
 };
 
 }  // namespace rni

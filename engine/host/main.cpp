@@ -56,6 +56,8 @@
 #if RNI_WITH_WINDOW
 #include "host/GlfwSurface.h"
 #include "host/WindowRasterizer.h"
+#include "host/ContextLoss.h"
+#include "host/ContextRecovery.h"
 #include <chrono>
 #include <thread>
 #endif
@@ -843,6 +845,11 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
                               folly::dynamic::object("app_state", background ? "background" : "active"));
   };
   surface.setIconifyHandler([&](bool iconified) { setLifecycle(iconified, "iconify"); });
+  // FP-32: a loss reported on the raster thread asks for the frame that rebuilds.
+  rni::ctxloss::SetWake([&scheduler]() { scheduler.RequestFrame("context_lost"); });
+  struct CtxLossWakeStop {  // before the scheduler dies (the raster drain can still report)
+    ~CtxLossWakeStop() { rni::ctxloss::SetWake(nullptr); }
+  } ctxLossWakeStop;
 #if defined(__APPLE__)
   linkScheduler.store(&scheduler, std::memory_order_release);
   // Stop the link before the scheduler it feeds is destroyed.
@@ -935,6 +942,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       frameTimings.Discard(std::move(frame));
       return -1;
     }
+    // FP-32: rebuild after a context loss before anything records against it.
+    if (rni::ctxloss::Lost() && !rni::RecoverContext(rasterizer, surface, sceneGraph)) {
+      frameTimings.Discard(std::move(frame));
+      scheduler.RequestFrame("context_lost");
+      return -1;
+    }
     auto slot = rasterizer.AcquireSlot(rni::testsync::ScaledMs(1000));
     if (!slot) {
       frameTimings.Discard(std::move(frame));
@@ -943,7 +956,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     }
     rni::gpu::Note(rni::gpu::Counter::kRecord);
     // The first frame after a restore is a full repaint (no damage clip).
-    const bool allowPartial = rasterizer.partialRepaint() && !rni::gpu::ConsumeRestore();
+    const bool afterLoss = rni::ctxloss::ConsumeFullRepaint();  // FP-32: new buffer, no history
+    const bool allowPartial =
+        rasterizer.partialRepaint() && !rni::gpu::ConsumeRestore() && !afterLoss;
     auto recorded = rni::RecordFrame(sceneGraph, pointScale, surface.width(),
                                      surface.height(), std::move(frame), nullptr,
                                      allowPartial);
@@ -2053,6 +2068,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::poisonprobe::PrintSummary();  // FP-17 test hook
   resizeSync.PrintSummary();  // FP-30
   rni::gpu::PrintSummary();  // FP-31
+  rni::ctxloss::PrintSummary();  // FP-32
   FinishFrameTimings(frameTimings);
   FinishTrace();
   rni::glvalidation::Finish();

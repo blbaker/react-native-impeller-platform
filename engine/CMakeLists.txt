@@ -255,6 +255,11 @@ add_executable(rn-impeller
   host/PoisonProbe.cpp
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeSync.cpp>
+  # FP-32: GPU context loss -> teardown + rebuild (windowed EGL).
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextLoss.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextLossGl.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextRecovery.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceRebuild.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeProbe.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
@@ -301,6 +306,7 @@ add_executable(rn-impeller
   fabric/FabricHost.cpp
   fabric/ComponentRegistry.cpp
   scenegraph/SceneGraph.cpp
+  scenegraph/SceneGraphContextLoss.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/scenegraph/SceneGraphGlWin.cpp>

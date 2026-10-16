@@ -17,6 +17,15 @@ ImageTextures::~ImageTextures() {
   }
 }
 
+size_t ImageTextures::Clear() {
+  const size_t n = entries_.size();
+  for (auto& [d, e] : entries_) {
+    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture);
+  }
+  entries_.clear();
+  return n;
+}
+
 ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
                                    const std::string& uri, float boxW, float boxH,
                                    ImageTextureInfo* info) {

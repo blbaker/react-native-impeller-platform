@@ -8,6 +8,7 @@
 
 #if !defined(_WIN32)
 #include <EGL/egl.h>
+#include <EGL/eglext.h>
 #endif
 
 namespace rni::ioegl {
@@ -55,6 +56,15 @@ bool StartFromCurrent() {
   const EGLint ctxAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, 0x31B0 /*EGL_CONTEXT_OPENGL_DEBUG*/, dbg,
                              EGL_NONE};
   gCtx = eglCreateContext(gDpy, cfg, share, ctxAttrs);
+  if (gCtx == EGL_NO_CONTEXT && eglGetError() == EGL_BAD_MATCH) {
+    // FP-32: a share group's contexts must agree on the reset strategy, and a
+    // context rebuilt after a loss is LOSE_CONTEXT_ON_RESET.
+    const EGLint robustAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, 0x31B0 /*EGL_CONTEXT_OPENGL_DEBUG*/,
+                                  dbg, EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT, EGL_TRUE,
+                                  EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
+                                  EGL_LOSE_CONTEXT_ON_RESET_EXT, EGL_NONE};
+    gCtx = eglCreateContext(gDpy, cfg, share, robustAttrs);
+  }
   if (gCtx == EGL_NO_CONTEXT) return Fail("create-context");
   EGLint surfType = 0;
   eglGetConfigAttrib(gDpy, cfg, EGL_SURFACE_TYPE, &surfType);

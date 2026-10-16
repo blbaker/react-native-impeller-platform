@@ -87,6 +87,11 @@ class WindowRasterizer {
   // Drains queued items (they present), releases the GPU objects ON the raster
   // thread, then joins it. Main; idempotent.
   void Shutdown();
+  // FP-32 (Rasterizer::Teardown + Setup), main thread: on the raster thread,
+  // after every frame queued before it (dropped while the loss is pending):
+  // partial-repaint GL objects, the surface's GPU objects and EGL context are
+  // rebuilt. Main then rebuilds what RECORD caches (ContextRecovery.h).
+  bool RebuildGpu(std::string* error);
   // `raster_thread threaded= depth= ... draw_failed=` + the pipeline line.
   void PrintSummary() const;
 

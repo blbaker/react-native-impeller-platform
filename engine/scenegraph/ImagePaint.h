@@ -30,6 +30,8 @@ class ImageTextures {
   ImageTextures(const ImageTextures&) = delete;
   ImageTextures& operator=(const ImageTextures&) = delete;
   ~ImageTextures();
+  // FP-32: releases every texture; the decoded pixels stay in the image store.
+  size_t Clear();
 
   // Null when the source is not decoded (yet) or no backend is wired.
   // boxW/boxH: the painted box in device pixels (picks the decode size).

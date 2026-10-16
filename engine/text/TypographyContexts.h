@@ -29,6 +29,11 @@ ImpellerTypographyContext ForThisThread();
 void Bind(ImpellerTypographyContext ctx);
 void Unbind(ImpellerTypographyContext ctx);
 
+// FP-32: after a GPU context loss every thread's OWN context is rebuilt on its
+// next ForThisThread() call (on that thread: contexts are single-thread). The
+// bound (paint) context is replaced by its surface with Unbind + Bind.
+void Invalidate();
+
 // Appends a font every context registers; returns its index. Any thread.
 size_t AddFont(const std::string& path, std::shared_ptr<const std::vector<uint8_t>> bytes);
 

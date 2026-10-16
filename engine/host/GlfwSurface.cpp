@@ -859,6 +859,7 @@ bool GlfwSurface::initGpu(bool rasterThread, std::string* error) {
   if (!surface_) return fail("ImpellerSurfaceCreateWrappedFBONew returned null");
   installRecordHooks(rasterThread);  // FP-14
   rni::ioegl::StartFromCurrent();  // FP-17: IO upload context in this share group
+  captureEglWindow();  // FP-32: swap-loss detection + rebuild
 
   std::printf("rn-impeller: GL_RENDERER=%s\n", (const char*)glGetString(GL_RENDERER));
   // ⛔ REPORT WHAT GL GRANTED, NOT WHAT WE ASKED FOR. GLFW_SAMPLES is a HINT:
@@ -982,6 +983,14 @@ void GlfwSurface::releaseGpu() {
 #if defined(__APPLE__)
   if (display_ != EGL_NO_DISPLAY) {
     eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+  }
+#elif !defined(_WIN32)
+  if (rebuilt_ && egl_.context != nullptr) {  // FP-32: ours, not GLFW's
+    eglMakeCurrent((EGLDisplay)egl_.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglDestroyContext((EGLDisplay)egl_.display, (EGLContext)egl_.context);
+    egl_.context = nullptr;
+  } else if (window_) {
+    glfwMakeContextCurrent(nullptr);
   }
 #else
   if (window_) glfwMakeContextCurrent(nullptr);
@@ -1449,9 +1458,16 @@ bool GlfwSurface::shouldClose() const {
 }
 
 void GlfwSurface::setSwapInterval(int interval) {
+  swapInterval_ = interval;  // FP-32: a rebuilt context starts at the EGL default
 #if defined(__APPLE__)
   if (metal_) return metal_->SetDisplaySync(interval != 0);
   eglSwapInterval(display_, interval);
+#elif !defined(_WIN32)
+  if (rebuilt_) {
+    eglSwapInterval((EGLDisplay)egl_.display, interval);
+  } else {
+    glfwSwapInterval(interval);
+  }
 #else
   glfwSwapInterval(interval);
 #endif
@@ -1479,6 +1495,13 @@ uint32_t GlfwSurface::displayId() const {
 void GlfwSurface::present() {
 #if defined(__APPLE__)
   if (metal_) return metal_->Present();
+#endif
+#if !defined(_WIN32)
+  // FP-32: eglSwapBuffers directly (all glfwSwapBuffers does) so a lost
+  // context is seen: only the failing call reports EGL_CONTEXT_LOST.
+  if (egl_.display != nullptr) return rni::ctxlossgl::Swap(egl_, &swapLost_);
+#endif
+#if defined(__APPLE__)
   // glfwSwapBuffers is a NO-OP for a GLFW_NO_API window — GLFW has no context
   // to swap. The swap belongs to the EGL surface we created.
   eglSwapBuffers(display_, eglSurface_);
@@ -1521,6 +1544,12 @@ void GlfwSurface::installRecordHooks(bool rasterThread) {
     return true;
   };
   h.acquire = [this] {
+#if !defined(_WIN32)
+    if (rebuilt_) {  // FP-32: GLFW's own context is gone
+      return eglMakeCurrent((EGLDisplay)egl_.display, (EGLSurface)egl_.surface,
+                            (EGLSurface)egl_.surface, (EGLContext)egl_.context) == EGL_TRUE;
+    }
+#endif
     glfwMakeContextCurrent(window_);
     return glfwGetCurrentContext() == window_;
   };
