@@ -4,6 +4,7 @@
 #include <mutex>
 #include "fabric/FabricHost.h"
 #include "fabric/ComponentRegistry.h"
+#include "fabric/ImageStore.h"
 
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
 #include <react/renderer/components/iostextinput/TextInputComponentDescriptor.h>
@@ -529,6 +530,7 @@ std::vector<std::string> FabricHost::knownComponentNames() {
 FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
                        ImpellerTypographyContext typography, bool logMutations,
                        std::shared_ptr<DisplayMetrics> displayMetrics) {
+  rni::image::StartCallbacks();
   runtimeScheduler_ = instance.getRuntimeScheduler();
   sceneGraph_ = sceneGraph;
   logMutations_ = logMutations;
@@ -605,6 +607,9 @@ FabricHost::~FabricHost() {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
+  // FP-06: no image completion may dispatch onLoad into an emitter the empty-tree
+  // commit below is unmounting (TSan: image-io dispatchEvent vs setEnabled on main).
+  rni::image::StopCallbacks();
   stopSurface();
   // In-flight rendering-update lambdas captured a raw delegate pointer, and
   // the Scheduler only invalidates them behind a feature flag — drop the

@@ -26,7 +26,7 @@ WORK="$(mktemp -d)"
 cleanup() { [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"; }
 trap cleanup EXIT
 
-WIN=(); [ "$(uname -s)" = Linux ] && WIN=(xvfb-run -a -s "-screen 0 1280x1024x24")
+WIN=(); [ "$(uname -s)" = Linux ] && WIN=(xvfb-run -a -f "$WORK/xvfb.auth" -s "-screen 0 1280x1024x24")
 run() {  # arm args...
   local arm="$1" rc=0; shift
   ( cd "$(dirname "$BIN")" && timeout 300 "$@" --bundle "$BUNDLE" --width 400 --height 300 \

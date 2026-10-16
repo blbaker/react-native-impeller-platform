@@ -8,7 +8,7 @@
 #   M3  M2 plus a lying report (prints the request, not the context) -> coverage: pixels judge it
 set -euo pipefail
 cd "$(dirname "$0")/.."
-FILES=(engine/host/HeadlessSurface.cpp engine/base/ContextFlags.cpp)
+FILES=(engine/host/HeadlessSurfaceGl.cpp engine/base/ContextFlags.cpp)
 BAK="$(mktemp -d)"
 for i in "${!FILES[@]}"; do cp "${FILES[$i]}" "$BAK/$i"; done
 restore() { for i in "${!FILES[@]}"; do cp "$BAK/$i" "${FILES[$i]}"; done; }
@@ -52,7 +52,7 @@ cmp -s "$BAK/sdk-clean/lib/libimpeller.so" engine/third_party/impeller-sdk-custo
 expect_killed M1 "$BAK/m1.log" "readback: on context reports .*want sdf_aa=on"
 
 echo "== M2: engine never calls ImpellerContextSetDefaultFlags =="
-mutate engine/host/HeadlessSurface.cpp "  rni::contextflags::ApplyBeforeCreate();  // FP-22
+mutate engine/host/HeadlessSurfaceGl.cpp "  rni::contextflags::ApplyBeforeCreate();  // FP-22
 " ""
 build; gate "$BAK/m2.log"; expect_killed M2 "$BAK/m2.log" "readback: on context reports .*want sdf_aa=on"
 restore

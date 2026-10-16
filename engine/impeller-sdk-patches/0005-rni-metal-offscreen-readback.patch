@@ -1,0 +1,291 @@
+diff --git a/engine/src/flutter/impeller/toolkit/interop/backend/metal/surface_mtl.h b/engine/src/flutter/impeller/toolkit/interop/backend/metal/surface_mtl.h
+index 2178038..d47cf79 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/backend/metal/surface_mtl.h
++++ b/engine/src/flutter/impeller/toolkit/interop/backend/metal/surface_mtl.h
+@@ -17,6 +17,12 @@ class SurfaceMTL final : public Surface {
+ 
+   ~SurfaceMTL();
+ 
++  // RNI patch 0005: an offscreen MTLTexture as the render target (the
++  // FlutterMetalTexture path of gpu_surface_metal_impeller.mm). Null if the
++  // texture is not a 2D render target in the context's color format.
++  static std::shared_ptr<impeller::Surface> WrapTexture(Context& context,
++                                                        void* metal_texture);
++
+   SurfaceMTL(const SurfaceMTL&) = delete;
+ 
+   SurfaceMTL& operator=(const SurfaceMTL&) = delete;
+diff --git a/engine/src/flutter/impeller/toolkit/interop/backend/metal/surface_mtl.mm b/engine/src/flutter/impeller/toolkit/interop/backend/metal/surface_mtl.mm
+index 9a08f0d..6b5315d 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/backend/metal/surface_mtl.mm
++++ b/engine/src/flutter/impeller/toolkit/interop/backend/metal/surface_mtl.mm
+@@ -4,6 +4,8 @@
+ 
+ #include "impeller/toolkit/interop/backend/metal/surface_mtl.h"
+ 
++#include "impeller/base/validation.h"
++#include "impeller/renderer/backend/metal/formats_mtl.h"
+ #include "impeller/renderer/backend/metal/surface_mtl.h"
+ #include "impeller/toolkit/interop/backend/metal/context_mtl.h"
+ 
+@@ -23,4 +25,23 @@ SurfaceMTL::SurfaceMTL(Context& context,
+ 
+ SurfaceMTL::~SurfaceMTL() = default;
+ 
++std::shared_ptr<impeller::Surface> SurfaceMTL::WrapTexture(
++    Context& context,
++    void* metal_texture) {
++  id<MTLTexture> texture = (__bridge id<MTLTexture>)metal_texture;
++  const auto format =
++      context.GetContext()->GetCapabilities()->GetDefaultColorFormat();
++  if (texture == nil || texture.textureType != MTLTextureType2D ||
++      texture.pixelFormat != ToMTLPixelFormat(format) ||
++      (texture.usage & MTLTextureUsageRenderTarget) == 0) {
++    VALIDATION_LOG << "Texture is not a 2D render target in the context's "
++                      "default color format.";
++    return nullptr;
++  }
++  return impeller::SurfaceMTL::MakeFromTexture(
++      context.GetContext(), texture,
++      reinterpret_cast<interop::ContextMTL*>(&context)->GetSwapchainTransients(),
++      std::nullopt, nil);
++}
++
+ }  // namespace impeller::interop
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.cc b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+index 9b0016b..6d837d8 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+@@ -793,6 +793,26 @@ ImpellerSurface ImpellerSurfaceCreateWrappedMetalDrawableNew(
+ #endif  // IMPELLER_ENABLE_METAL
+ }
+ 
++IMPELLER_EXTERN_C
++ImpellerSurface ImpellerSurfaceCreateWrappedMetalTextureNew(
++    ImpellerContext context,
++    void* metal_texture) {
++#if IMPELLER_ENABLE_METAL
++  if (!GetPeer(context)->IsMetal()) {
++    VALIDATION_LOG << "Context is not Metal.";
++    return nullptr;
++  }
++  auto surface = SurfaceMTL::WrapTexture(*GetPeer(context), metal_texture);
++  if (!surface) {
++    return nullptr;
++  }
++  return Create<SurfaceMTL>(*GetPeer(context), std::move(surface)).Leak();
++#else   // IMPELLER_ENABLE_METAL
++  VALIDATION_LOG << "Metal unavailable.";
++  return nullptr;
++#endif  // IMPELLER_ENABLE_METAL
++}
++
+ IMPELLER_EXTERN_C void ImpellerSurfaceRetain(ImpellerSurface surface) {
+   ObjectBase::SafeRetain(surface);
+ }
+@@ -824,6 +844,20 @@ bool ImpellerSurfaceGetSize(ImpellerSurface surface, ImpellerISize* out_size) {
+   return true;
+ }
+ 
++IMPELLER_EXTERN_C
++bool ImpellerSurfaceReadPixels(ImpellerSurface surface,
++                               void* dst,
++                               uint64_t dst_size,
++                               ImpellerReadbackLayout* out_layout) {
++  bool bgra = false;
++  if (!GetPeer(surface)->ReadPixels(dst, dst_size, bgra)) {
++    return false;
++  }
++  *out_layout =
++      bgra ? kImpellerReadbackLayoutBGRA8888 : kImpellerReadbackLayoutRGBA8888;
++  return true;
++}
++
+ IMPELLER_EXTERN_C
+ void ImpellerDisplayListBuilderDrawTexture(ImpellerDisplayListBuilder builder,
+                                            ImpellerTexture texture,
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.h b/engine/src/flutter/impeller/toolkit/interop/impeller.h
+index b4363ae..137a03c 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.h
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.h
+@@ -939,6 +939,33 @@ ImpellerSurfaceCreateWrappedMetalDrawableNew(
+     ImpellerContext IMPELLER_NONNULL context,
+     void* IMPELLER_NONNULL metal_drawable);
+ 
++// RNI patch 0005: offscreen Metal surfaces and surface readback.
++#define IMPELLER_RNI_SURFACE_READBACK 1
++
++//------------------------------------------------------------------------------
++/// @brief      Create a surface by wrapping a Metal texture (an offscreen
++///             render target, patch 0005). The texture must be a 2D texture
++///             on the context's device, in the context's default color format
++///             (BGRA8 unorm), with render-target usage. Impeller renders into
++///             its 4x MSAA transients and resolves into the texture, exactly
++///             as for a drawable (SurfaceMTL::MakeFromTexture). The caller
++///             owns the texture and must keep it alive for the surface's life.
++///
++/// @param[in]  context        The Metal context.
++/// @param[in]  metal_texture  The id<MTLTexture>, bridged to a pointer.
++///
++/// @return     The surface if one could be wrapped, NULL otherwise.
++///
++IMPELLER_EXPORT IMPELLER_NODISCARD ImpellerSurface IMPELLER_NULLABLE
++ImpellerSurfaceCreateWrappedMetalTextureNew(
++    ImpellerContext IMPELLER_NONNULL context,
++    void* IMPELLER_NONNULL metal_texture);
++
++typedef enum ImpellerReadbackLayout {
++  kImpellerReadbackLayoutRGBA8888,
++  kImpellerReadbackLayoutBGRA8888,
++} ImpellerReadbackLayout;
++
+ //------------------------------------------------------------------------------
+ /// @brief      Retain a strong reference to the object. The object can be NULL
+ ///             in which case this method is a no-op.
+@@ -997,6 +1024,30 @@ IMPELLER_EXPORT
+ bool ImpellerSurfaceGetSize(ImpellerSurface IMPELLER_NONNULL surface,
+                             ImpellerISize* IMPELLER_NONNULL out_size);
+ 
++//------------------------------------------------------------------------------
++/// @brief      Read the surface's render target texture back to host memory
++///             (patch 0005). Encodes a texture-to-buffer blit on the context's
++///             queue, so it is ordered after every draw already submitted to
++///             the surface, and blocks until that command buffer completes.
++///             Rows are tightly packed (width * 4 bytes), top-left origin, in
++///             the texture's own byte order (reported in `out_layout`).
++///             Needs a real texture behind the render target (Metal drawables
++///             and wrapped Metal textures); wrapped GL framebuffers fail.
++///
++/// @param[in]  surface     The surface.
++/// @param[out] dst         Destination, at least width * height * 4 bytes.
++/// @param[in]  dst_size    Size of `dst` in bytes.
++/// @param[out] out_layout  The byte order written to `dst`.
++///
++/// @return     True if the pixels were read back.
++///
++IMPELLER_EXPORT
++bool ImpellerSurfaceReadPixels(ImpellerSurface IMPELLER_NONNULL surface,
++                               void* IMPELLER_NONNULL dst,
++                               uint64_t dst_size,
++                               ImpellerReadbackLayout* IMPELLER_NONNULL
++                                   out_layout);
++
+ //------------------------------------------------------------------------------
+ // Path
+ //------------------------------------------------------------------------------
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.hpp b/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
+index 4c92e5b..317f936 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.hpp
+@@ -214,9 +214,11 @@ struct Proc {
+   PROC(ImpellerPathRetain)                                        \
+   PROC(ImpellerSurfaceCreateWrappedFBONew)                        \
+   PROC(ImpellerSurfaceCreateWrappedMetalDrawableNew)              \
++  PROC(ImpellerSurfaceCreateWrappedMetalTextureNew)               \
+   PROC(ImpellerSurfaceDrawDisplayList)                            \
+   PROC(ImpellerSurfaceGetSize)                                    \
+   PROC(ImpellerSurfacePresent)                                    \
++  PROC(ImpellerSurfaceReadPixels)                                 \
+   PROC(ImpellerSurfaceRelease)                                    \
+   PROC(ImpellerSurfaceRetain)                                     \
+   PROC(ImpellerTextureCreateWithContentsNew)                      \
+diff --git a/engine/src/flutter/impeller/toolkit/interop/surface.cc b/engine/src/flutter/impeller/toolkit/interop/surface.cc
+index fc7bcd0..57bfdd7 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/surface.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/surface.cc
+@@ -4,7 +4,11 @@
+ 
+ #include "impeller/toolkit/interop/surface.h"
+ 
++#include <cstring>
++
++#include "flutter/fml/synchronization/count_down_latch.h"
+ #include "impeller/base/validation.h"
++#include "impeller/core/device_buffer.h"
+ #include "impeller/display_list/aiks_context.h"
+ #include "impeller/display_list/dl_dispatcher.h"
+ #include "impeller/toolkit/interop/formats.h"
+@@ -48,6 +52,69 @@ bool Surface::GetSize(ISize& out_size) const {
+   return true;
+ }
+ 
++// Models DoConvertImageToRasterImpeller
++// (flutter/lib/ui/painting/image_encoding_impeller.cc): a blit into a
++// host-visible readback buffer on the context's queue, read once the command
++// buffer completes. Synchronous here: the caller wants the bytes now.
++bool Surface::ReadPixels(void* dst, uint64_t dst_size, bool& out_bgra) const {
++  if (!IsValid() || dst == nullptr) {
++    return false;
++  }
++  auto texture = surface_->GetRenderTarget().GetRenderTargetTexture();
++  if (!texture) {
++    VALIDATION_LOG << "Surface has no render target texture to read back.";
++    return false;
++  }
++  const auto& desc = texture->GetTextureDescriptor();
++  if (desc.format != PixelFormat::kB8G8R8A8UNormInt &&
++      desc.format != PixelFormat::kR8G8B8A8UNormInt) {
++    VALIDATION_LOG << "Readback supports 8-bit RGBA / BGRA targets only.";
++    return false;
++  }
++  const size_t bytes = desc.GetByteSizeOfBaseMipLevel();
++  if (dst_size < bytes) {
++    VALIDATION_LOG << "Readback destination is too small.";
++    return false;
++  }
++  auto context = context_->GetContext();
++  DeviceBufferDescriptor buffer_desc;
++  buffer_desc.storage_mode = StorageMode::kHostVisible;
++  buffer_desc.readback = true;
++  buffer_desc.size = bytes;
++  auto buffer = context->GetResourceAllocator()->CreateBuffer(buffer_desc);
++  auto command_buffer = context->CreateCommandBuffer();
++  if (!buffer || !command_buffer) {
++    return false;
++  }
++  command_buffer->SetLabel("RNI Surface Readback Command Buffer");
++  auto pass = command_buffer->CreateBlitPass();
++  if (!pass || !pass->AddCopy(texture, buffer) || !pass->EncodeCommands()) {
++    return false;
++  }
++  struct Done {
++    fml::CountDownLatch latch{1};
++    CommandBuffer::Status status = CommandBuffer::Status::kError;
++  };
++  auto done = std::make_shared<Done>();
++  if (!context->GetCommandQueue()
++           ->Submit({command_buffer},
++                    [done](CommandBuffer::Status status) {
++                      done->status = status;
++                      done->latch.CountDown();
++                    })
++           .ok()) {
++    return false;
++  }
++  done->latch.Wait();  // RNI: the blit must complete before the copy below.
++  if (done->status != CommandBuffer::Status::kCompleted) {
++    return false;
++  }
++  buffer->Invalidate();
++  std::memcpy(dst, buffer->OnGetContents(), bytes);
++  out_bgra = desc.format == PixelFormat::kB8G8R8A8UNormInt;
++  return true;
++}
++
+ bool Surface::Present() const {
+   if (!IsValid()) {
+     return false;
+diff --git a/engine/src/flutter/impeller/toolkit/interop/surface.h b/engine/src/flutter/impeller/toolkit/interop/surface.h
+index 2a8bbb6..94a4f2b 100644
+--- a/engine/src/flutter/impeller/toolkit/interop/surface.h
++++ b/engine/src/flutter/impeller/toolkit/interop/surface.h
+@@ -33,6 +33,9 @@ class Surface
+   // RNI patch 0004.
+   bool GetSize(ISize& out_size) const;
+ 
++  // RNI patch 0005.
++  bool ReadPixels(void* dst, uint64_t dst_size, bool& out_bgra) const;
++
+  protected:
+   explicit Surface(Context& context,
+                    std::shared_ptr<impeller::Surface> surface);

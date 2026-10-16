@@ -7,7 +7,9 @@
 #   2. proves the binary is instrumented (__tsan_init, prints sanitizers=thread)
 #   3. runs the animated / text / image / native-transform fixtures windowed (xvfb) AND
 #      headless, plus the FP-04 stress fixture (text churn every 4 ms + a native-driver
-#      loop), the FP-12 typography fixture, and the ci-text / ci-native-transform / ci-image-net / ci-image-io gates on the TSan binary
+#      loop), the FP-12 typography fixture, and the ci-text / ci-native-transform / ci-image-net /
+#      ci-image-io (FP-16) / ci-raster-thread (FP-15) gates on the TSan binary, and the FP-17
+#      image-upload fixture (IO upload thread) windowed and headless
 #   4. tools/tsan_check.py: any report outside tools/sanitize/tsan_known.txt FAILS; each
 #      known entry (a race a later pass owns) must still be seen
 # libimpeller.so / libhermesvm.so are prebuilt and uninstrumented: engine/base/TsanAnnotate.h
@@ -23,6 +25,9 @@ SERVER_PID="" CHURN_PID=""
 cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; [ -n "$CHURN_PID" ] && kill "$CHURN_PID" 2>/dev/null; [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "kept $WORK" || rm -rf "$WORK"; }
 trap cleanup EXIT
 fail() { echo "TSAN_FAIL: $*"; exit 1; }
+# FP-06: the instrumented binary is 2-5x slower; every gate scales its wait ceilings (never its
+# measured intervals) by this, and so does the engine (base/TestSync.h).
+export RNI_TIME_SCALE="${RNI_TIME_SCALE:-4}"
 
 echo "== 1. build engine/build-tsan (RNI_SANITIZE=thread)"
 cmake -S engine -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -62,7 +67,7 @@ run() {
               --probe-banner off --supersample-rnsvg 0 --frames "$frames" "$@")
   if [ "$mode" = window ]; then
     ( cd "$(dirname "$BIN")" && TSAN_OPTIONS="$(topts "$dir")" timeout -k 10 600 \
-        xvfb-run -a -s "-screen 0 1280x1024x24" "$BIN" --window --scale 1 "${args[@]}" ) > "$dir/run.log" 2>&1
+        xvfb-run -a -f "$WORK/xvfb.auth" -s "-screen 0 1280x1024x24" "$BIN" --window --scale 1 "${args[@]}" ) > "$dir/run.log" 2>&1
   else
     ( cd "$(dirname "$BIN")" && TSAN_OPTIONS="$(topts "$dir")" timeout -k 10 600 \
         "$BIN" --headless "${args[@]}" --screenshot "$dir/frame.ppm" ) > "$dir/run.log" 2>&1
@@ -88,6 +93,8 @@ gate() {
   echo "ok $name runs=$(find "$dir/stamps" -type f | wc -l) ($(tail -1 "$dir/gate.log" | cut -c1-90))"
 }
 
+# --build-only: stop after the instrumented build (tools/ci-load-proof.sh builds before its hog).
+if [ "${1:-}" = --build-only ]; then echo "TSAN_BUILT"; exit 0; fi
 echo "== 3. fixtures on the TSan binary"
 S=fp04-tsan/prebuilt/fp04-tsan.bundle
 NT=native-transform/prebuilt/native-transform.bundle
@@ -160,10 +167,21 @@ if want image-window || want image-headless; then
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
   [ -s "$WORK/requests.log" ] || fail "image runs made no HTTP requests"
 fi
+if want fp17-window || want fp17-headless; then
+  # FP-17: decode pool -> IO upload thread -> load completion -> painter Take, then teardown.
+  mkdir -p "$WORK/fp17img"
+  python3 tools/image_upload_gate.py gen "$WORK/fp17img" 12 300 || fail "fp17 images not generated"
+  FQ="fp17://run?dir=$WORK/fp17img&count=12&startMs=200&intervalMs=40&box=300"
+  run fp17-window   window   fp17-image-upload/prebuilt/fp17-image-upload.bundle Fp17ImageUpload 240 \
+    --initial-url "$FQ" --vsync software
+  run fp17-headless headless fp17-image-upload/prebuilt/fp17-image-upload.bundle Fp17ImageUpload 30 \
+    --initial-url "$FQ"
+fi
 gate tools/ci-text.sh
 gate tools/ci-native-transform.sh
 gate tools/ci-image-net.sh
 gate tools/ci-image-io.sh   # FP-16: IO pool, cancel, dedup
+gate tools/ci-raster-thread.sh  # FP-15: RECORD on main, RASTER on the raster thread
 [ "${#RUNS[@]}" -gt 0 ] || fail "no runs selected (TSAN_RUNS=${TSAN_RUNS:-})"
 
 echo "== 4. reports"

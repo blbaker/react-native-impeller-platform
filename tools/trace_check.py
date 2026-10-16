@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Validate a Chrome trace written by rn-impeller --trace-out (FP-02).
 
-usage: trace_check.py FILE [--frames N] [--min-frames N] [--expect NAME@THREAD[:MIN]]...
+usage: trace_check.py FILE [--frames N] [--min-frames N] [--raster-thread] [--expect NAME@THREAD[:MIN]]...
+
+--raster-thread (FP-15, windowed): the RASTER spans (Raster, Draw, Present,
+RasterJobs, Offscreen) must sit on the "raster" thread and are counted there.
 
 Checks, in order: valid JSON, every span name sits on its expected thread
 (affinity), begin/end balanced per thread, frame spans contain >= 3 distinct
@@ -13,10 +16,12 @@ from collections import Counter, defaultdict
 
 FRAME_CHILDREN = ["PaintWalk", "DisplayListBuild", "Draw", "Present"]
 # Spans that may only ever appear on the named thread.
-HOME = {"Frame": "main", "PaintWalk": "main", "DisplayListBuild": "main", "Draw": "main",
+HOME = {"Frame": "main", "Record": "main", "Raster": "main", "PaintWalk": "main", "DisplayListBuild": "main", "Draw": "main",
         "Present": "main", "NativeAnimatedPump": "main", "NativeAnimatedTick": "main",
         "JsCommit": "js", "MountTransaction": "js", "TextMeasure": "js",
-        "ImageFetch": "image-io", "ImageDecode": "image-io", "ImageUpload": "main"}
+        "ImageFetch": "image-io", "ImageDecode": "image-io", "ImageUpload": "main", "IoUpload": "io",
+        "RasterJobs": "main", "Offscreen": "main", "TextureUpload": "main"}
+RASTER_SPANS = ["Raster", "Draw", "Present", "RasterJobs", "Offscreen"]
 
 
 def fail(msg):
@@ -34,6 +39,8 @@ def main():
         if k == "--frames": exact = int(a.pop(0))
         elif k == "--min-frames": minimum = int(a.pop(0))
         elif k == "--expect": expects.append(a.pop(0))
+        elif k == "--raster-thread":
+            for n in RASTER_SPANS: HOME[n] = "raster"
         else: fail("bad arg " + k)
     try:
         doc = json.load(open(path))
@@ -76,9 +83,9 @@ def main():
     if exact is not None or minimum is not None:
         want = exact if exact is not None else minimum
         for n in ["Frame"] + FRAME_CHILDREN:
-            got = per["main:" + n]
+            got = per[HOME[n] + ":" + n]
             if (exact is not None and got != exact) or got < want:
-                fail("%s count on main = %d, expected %s%d" % (n, got, "" if exact is not None else ">= ", want))
+                fail("%s count on %s = %d, expected %s%d" % (n, HOME[n], got, "" if exact is not None else ">= ", want))
     for x in expects:
         spec, _, mn = x.partition(":")
         name, _, thread = spec.partition("@")

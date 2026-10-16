@@ -7,7 +7,7 @@
 #   C  tracing on, headless 300 frames: valid JSON, balanced, spans on the right threads
 #   D  off-mode overhead = spans/frame (C) x ns/span (B) / frame time (A) < 1%
 #   E  tracing on, windowed 60 frames (xvfb on Linux)
-#   F  image-net fixture: ImageFetch/ImageDecode on image-io, ImageUpload on main
+#   F  image-net fixture: ImageFetch/ImageDecode on image-io, IoUpload on io (FP-17; was ImageUpload on main)
 #   G  line-height fixture: TextMeasure on js
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,7 +26,7 @@ for b in "$ROT" "$IMG" "$LH"; do [ -s "$b" ] || fail "missing committed bundle $
 WORK="$(mktemp -d)"; SRV=""
 cleanup() { [ -n "$SRV" ] && kill "$SRV" 2> /dev/null; [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"; }
 trap cleanup EXIT
-WIN=(); [ "$(uname -s)" = Linux ] && WIN=(xvfb-run -a -s "-screen 0 1280x1024x24")
+WIN=(); [ "$(uname -s)" = Linux ] && WIN=(xvfb-run -a -f "$WORK/xvfb.auth" -s "-screen 0 1280x1024x24")
 run() {  # arm args...
   local arm="$1" rc=0; shift
   ( cd "$(dirname "$BIN")" && timeout 300 "$@" ) > "$WORK/$arm.log" 2>&1 || rc=$?
@@ -55,7 +55,8 @@ echo "   $NS ns per disabled span"
 echo "== C: tracing on, 300 headless frames =="
 run on "${HL[@]}" --bundle "$ROT" --app-name NativeRotateProbe --frames 300 --trace-out "$WORK/on.json"
 grep -qE '^rn-impeller: trace enabled=0 events=[1-9][0-9]* written=1' "$WORK/on.log" || fail "arm C wrote no trace"
-OUT="$(python3 tools/trace_check.py "$WORK/on.json" --frames 300 --expect NativeAnimatedTick@main:1 --expect NativeAnimatedPump@main:300)" || fail "$OUT"
+# FP-13: the final capture paint is a traced frame too, so --frames 300 = 301 frames.
+OUT="$(python3 tools/trace_check.py "$WORK/on.json" --frames 301 --expect NativeAnimatedTick@main:1 --expect NativeAnimatedPump@main:300)" || fail "$OUT"
 echo "   $OUT"
 SPF=$(echo "$OUT" | sed -n 's/.*spans_per_frame=\([0-9.]*\).*/\1/p')
 
@@ -71,7 +72,8 @@ PY
 echo "== E: tracing on, windowed 60 frames =="
 run win "${WIN[@]}" "$BIN" --window --scale 1 --width 400 --height 300 --supersample-rnsvg 0 \
   --bundle "$ROT" --app-name NativeRotateProbe --frames 60 --trace-out "$WORK/win.json"
-check "$WORK/win.json" --min-frames 60 --expect NativeAnimatedTick@main:1
+# FP-15: windowed RASTER (Raster/Draw/Present) runs on the raster thread.
+check "$WORK/win.json" --min-frames 60 --raster-thread --expect NativeAnimatedTick@main:1 --expect Record@main:60
 
 echo "== F: image spans =="
 cat > "$WORK/srv.py" <<'PY'
@@ -93,10 +95,10 @@ for _ in $(seq 50); do
 done
 run img "$BIN" --headless --probe-banner off --bundle "$IMG" --app-name probe --width 440 --height 130 \
   --scale 1 --supersample-rnsvg 0 --trace-out "$WORK/img.json"
-check "$WORK/img.json" --expect ImageFetch@image-io:1 --expect ImageDecode@image-io:1 --expect ImageUpload@main:1
+check "$WORK/img.json" --expect ImageFetch@image-io:1 --expect ImageDecode@image-io:1 --expect IoUpload@io:1
 
 echo "== G: text measure span =="
 run txt "${HL[@]}" --bundle "$LH" --app-name Eng23LineHeight --frames 3 --trace-out "$WORK/txt.json"
-check "$WORK/txt.json" --frames 3 --expect TextMeasure@js:1 --expect MountTransaction@js:1 --expect JsCommit@js:1
+check "$WORK/txt.json" --frames 4 --expect TextMeasure@js:1 --expect MountTransaction@js:1 --expect JsCommit@js:1
 
 echo "TRACE_PASS off+bench+headless+windowed+image+text"

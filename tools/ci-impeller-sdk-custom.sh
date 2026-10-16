@@ -43,6 +43,9 @@ ImpellerParagraphBuilderAddPlaceholder ImpellerParagraphGetPlaceholderRects"
 # FP-22 patch 0003: required once the patch is committed.
 FLAG_SYMS="ImpellerContextSetDefaultFlags ImpellerContextGetDefaultFlags ImpellerContextGetFlags"
 [ -f engine/impeller-sdk-patches/0003-rni-context-flags.patch ] && NEW_SYMS="$NEW_SYMS $FLAG_SYMS"
+# FP-23 patch 0005: offscreen Metal surface + readback (exported on every platform; Metal-only at runtime).
+[ -f engine/impeller-sdk-patches/0005-rni-metal-offscreen-readback.patch ] \
+  && NEW_SYMS="$NEW_SYMS ImpellerSurfaceCreateWrappedMetalTextureNew ImpellerSurfaceReadPixels"
 STOCK_H=engine/third_party/impeller-sdk/include/impeller.h
 
 check_header() {  # dir

@@ -1,8 +1,10 @@
 #include "base/ContextFlags.h"
 #include "base/GlLimits.h"
+#include "host/IoContextEgl.h"
 #include "base/GlValidation.h"
 #include "fabric/ImageStore.h"
 #include "host/HeadlessSurface.h"
+#include "host/RecordNoGl.h"
 #include "text/TypographyContexts.h"
 
 #include <EGL/egl.h>
@@ -25,17 +27,25 @@ void* ProcAddr(const char* name, void*) { return (void*)eglGetProcAddress(name);
 }  // namespace
 
 HeadlessSurface::~HeadlessSurface() {
+  rni::ioegl::Stop();  // FP-17
+  rni::recordgl::SetContextHooks({});
   if (typography_) {
     rni::typography::Unbind(typography_);
     ImpellerTypographyContextRelease(typography_);
   }
   if (surface_) ImpellerSurfaceRelease(surface_);
   if (context_) ImpellerContextRelease(context_);
+#if RNI_HEADLESS_METAL
+  releaseMetal();  // the texture outlives the surface that wraps it
+#endif
 }
 
 bool HeadlessSurface::init(int width, int height, std::string* error) {
   width_ = width;
   height_ = height;
+#if RNI_HEADLESS_METAL
+  if (metalRequested_) return initMetal(error);  // FP-23
+#endif
 
   auto fail = [&](const char* msg) {
     if (error) *error = msg;
@@ -213,10 +223,26 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   rni::contextflags::Report(context_);
   if (!context_) return fail("ImpellerContextCreateOpenGLESNew returned null");
 
+  rni::ioegl::StartFromCurrent();  // FP-17: IO upload context in this share group
   typography_ = ImpellerTypographyContextNew();
   if (!typography_) return fail("ImpellerTypographyContextNew returned null");
   // FP-12: the paint thread's context; other threads (measure on JS) get their own.
   rni::typography::Bind(typography_);
+#if !defined(__ANDROID__)
+  {  // FP-14: RNI_ASSERT_NO_GL_IN_RECORD releases the context around RECORD
+    EGLDisplay dpy = (EGLDisplay)display_;
+    EGLContext ctx = (EGLContext)eglContext_;
+    rni::recordgl::ContextHooks h;
+    h.release = [dpy] {
+      return eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) == EGL_TRUE;
+    };
+    h.acquire = [dpy, ctx] {
+      return eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx) == EGL_TRUE;
+    };
+    h.isCurrent = [] { return eglGetCurrentContext() != EGL_NO_CONTEXT; };
+    rni::recordgl::SetContextHooks(std::move(h));
+  }
+#endif
 
   if (!fboComplete || forceFboFail) {
     // Degraded: no drawable. surface_ stays null; the caller falls back to a
@@ -244,12 +270,18 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
 bool HeadlessSurface::drawDisplayList(ImpellerDisplayList dl) {
   if (!surface_) return false;  // degraded run: no drawable
   if (!ImpellerSurfaceDrawDisplayList(surface_, dl)) return false;
+#if RNI_HEADLESS_METAL
+  if (metalTexture_) return true;  // readPixelsMetal waits on Impeller's queue
+#endif
   glFinish();
   return true;
 }
 
 bool HeadlessSurface::readPixels(std::vector<Px>* out) {
   if (!surface_) return false;  // degraded run: nothing was drawn
+#if RNI_HEADLESS_METAL
+  if (metalTexture_) return readPixelsMetal(out);
+#endif
   std::vector<Px> raw((size_t)width_ * height_);
   glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
   glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());

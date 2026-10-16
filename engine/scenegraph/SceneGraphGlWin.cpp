@@ -61,6 +61,10 @@ bool LoadOnce() {
   ok &= Resolve(m, &gGl.TexParameteri, "glTexParameteri", &missing);
   ok &= Resolve(m, &gGl.TexSubImage2D, "glTexSubImage2D", &missing);
   ok &= Resolve(m, &gGl.Viewport, "glViewport", &missing);
+  ok &= Resolve(m, &gGl.FenceSync, "glFenceSync", &missing);
+  ok &= Resolve(m, &gGl.ClientWaitSync, "glClientWaitSync", &missing);
+  ok &= Resolve(m, &gGl.DeleteSync, "glDeleteSync", &missing);
+  ok &= Resolve(m, &gGl.Flush, "glFlush", &missing);
   if (!ok) {
     fprintf(stderr,
             "rn-impeller: supersample_gl=0 (%s unresolved in libGLESv2.dll); offscreen off, "

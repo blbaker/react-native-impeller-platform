@@ -245,23 +245,48 @@ add_executable(rn-impeller
   host/OsAppearance.cpp
   host/FrameTimings.cpp
   host/FrameScheduler.cpp
+  host/BackendSelect.cpp
+  host/FrameItem.cpp
+  host/RecordNoGl.cpp
   host/AnimRowProbe.cpp
+  host/UniformProbe.cpp
+  host/RasterThread.cpp
+  host/IoContextEgl.cpp
+  host/PoisonProbe.cpp
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeSync.cpp>
+  # FP-32: GPU context loss -> teardown + rebuild (windowed EGL).
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextLoss.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextLossGl.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextRecovery.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceRebuild.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeProbe.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
+  base/TestSync.cpp
+  base/GpuAvailability.cpp
   base/GlLimits.cpp
   base/ContextFlags.cpp
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/OsAppearanceDarwin.mm>
   # The offscreen surface, one implementation per platform. Selected here rather
   # than with #ifdefs inside one file: the two share no context-acquisition code
   # at all (Mesa surfaceless EGL vs ANGLE-over-D3D11 loaded by LoadLibrary).
-  $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurface.cpp>
+  $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceGl.cpp>
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/host/WinGLSurface.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurface.cpp>
   # The one Objective-C TU: NSWindow -> layer-backed NSView, which is what
   # ANGLE/Metal accepts as a native window. APPLE-only by generator expression
   # so no other platform ever tries to compile Cocoa.
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwCocoaView.mm>
+  # FP-21: native Metal window backend (CAMetalLayer + ImpellerContextCreateMetalNew).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/MetalSurface.mm>
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceMetal.cpp>
+  # FP-27: CVDisplayLink vsync source (FlutterDisplayLink.mm).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/DisplayLinkDarwin.cpp>
+  # FP-23: headless darwin on Metal (offscreen MTLTexture, SDK patch 0005).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   runtime/InspectorHost.cpp
@@ -281,6 +306,7 @@ add_executable(rn-impeller
   fabric/FabricHost.cpp
   fabric/ComponentRegistry.cpp
   scenegraph/SceneGraph.cpp
+  scenegraph/SceneGraphContextLoss.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/scenegraph/SceneGraphGlWin.cpp>
@@ -293,6 +319,12 @@ add_executable(rn-impeller
   scenegraph/ActivityIndicator.cpp
   scenegraph/Modal.cpp
   scenegraph/ImagePaint.cpp
+  scenegraph/RasterJobs.cpp
+  scenegraph/GpuBackend.cpp
+  scenegraph/TextureUploaderGl.cpp
+  scenegraph/SupersampleBackendGl.cpp
+  scenegraph/DamageTracker.cpp
+  scenegraph/IoUploaderGl.cpp
   scenegraph/ImageEvents.cpp
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
@@ -334,7 +366,7 @@ if(WIN32 OR APPLE)
   # ⛔ macOS NEEDS THESE FOR THE SAME REASON WINDOWS DOES, AND IT IS EASY TO
   # ASSUME OTHERWISE. Apple ships OpenGL headers, so <OpenGL/gl.h> exists and a
   # reader concludes "macOS has GL, it's fine". It has DESKTOP GL 2.1 and no
-  # EGL whatsoever — HeadlessSurface.cpp includes <EGL/egl.h> and the darwin
+  # EGL whatsoever — HeadlessSurfaceGl.cpp includes <EGL/egl.h> and the darwin
   # build died on exactly that after compiling 337 of 355 objects.
   #
   # They are headers ONLY. Nothing links against EGL/GLESv2 on either platform —
@@ -421,7 +453,12 @@ elseif(RNI_WITH_WINDOW)
       "-framework Cocoa"
       "-framework IOKit"
       "-framework CoreVideo"
-      "-framework QuartzCore")
+      "-framework QuartzCore"
+      "-framework Metal")
+    # MetalSurface.mm holds strong ObjC members in a C++ struct: ARC only.
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/host/MetalSurface.mm"
+      "${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm"
+      PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   else()
     set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
     target_link_libraries(rn-impeller PRIVATE

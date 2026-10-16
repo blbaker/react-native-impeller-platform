@@ -7,26 +7,29 @@
 #include <cstdlib>
 
 #include "fabric/ImageStore.h"
+#include "scenegraph/IoUploader.h"
 
 namespace rni {
 
-namespace {
-
-void ReleaseDecoded(void* userData) {
-  delete static_cast<std::shared_ptr<const image::Decoded>*>(userData);
-}
-
-}  // namespace
-
 ImageTextures::~ImageTextures() {
   for (auto& [d, e] : entries_) {
-    if (e.texture) ImpellerTextureRelease(e.texture);
+    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture);
   }
 }
 
-ImpellerTexture ImageTextures::Get(ImpellerContext context, const std::string& uri, float boxW,
-                                   float boxH, ImageTextureInfo* info) {
-  if (!context) return nullptr;
+size_t ImageTextures::Clear() {
+  const size_t n = entries_.size();
+  for (auto& [d, e] : entries_) {
+    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture);
+  }
+  entries_.clear();
+  return n;
+}
+
+ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
+                                   const std::string& uri, float boxW, float boxH,
+                                   ImageTextureInfo* info) {
+  if (!uploader) return nullptr;
   // FP-16: the cached decode for this box's size bucket (or the best other
   // size of the URI). A load in flight paints nothing yet; its completion
   // wakes the frame loop. Only a local source nobody requested (defaultSource)
@@ -35,21 +38,33 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, const std::string& u
   if (!f.image && !f.failed && !f.pending) f.image = image::DecodeNow(uri, boxW, boxH);
   if (!f.image) return nullptr;
   auto it = entries_.find(f.image.get());
+  // FP-14: an upload whose frame was dropped never ran; upload again.
+  if (it != entries_.end() && JobFailed(it->second.slot.job)) {
+    if (it->second.slot.texture) ImpellerTextureRelease(it->second.slot.texture);
+    entries_.erase(it);
+    it = entries_.end();
+  }
   if (it == entries_.end()) {
     const auto& d = f.image;
     Entry e;
     e.decoded = d;
-    ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {d->width, d->height}, 1};
-    // The mapping keeps the decoded pixels alive until Impeller has uploaded them.
-    ImpellerMapping mapping = {d->rgba.data(), (uint64_t)d->rgba.size(), &ReleaseDecoded};
-    {
-      TRACE_EVENT0("image", "ImageUpload");
-      e.texture = ImpellerTextureCreateWithContentsNew(
-          context, &desc, &mapping, new std::shared_ptr<const image::Decoded>(d));
+    const char* where = uploader->deferred() ? "raster" : "record";
+    // FP-17: the IO thread already uploaded it; wrapping its storage makes no GPU call.
+    if (const uint32_t ioName = io::Take(d.get()); ioName != 0) {
+      where = nullptr;  // IoUploader logged it
+      e.slot.texture = uploader->AdoptIo(ioName, d->width, d->height);
+      if (e.slot.texture == nullptr) return nullptr;
+      e.slot.w = d->width;
+      e.slot.h = d->height;
+    } else if (!uploader->Upload(e.slot, jobs, d->width, d->height, d->rgba.data(), d,
+                                 UploadFlags{/*clampEdges=*/false, /*image=*/true})) {
+      return nullptr;  // no storage ready (GL name pool empty): next frame
     }
     static const bool log = std::getenv("RNI_IMAGE_LOG") != nullptr;
-    if (log) std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f\n", d->width,
-                         d->height, d->srcWidth, d->srcHeight, boxW, boxH);
+    if (log && where) {
+      std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f thread=%s\n",
+                  d->width, d->height, d->srcWidth, d->srcHeight, boxW, boxH, where);
+    }
     it = entries_.emplace(d.get(), std::move(e)).first;
   }
   const image::Decoded& d = *it->second.decoded;
@@ -57,7 +72,7 @@ ImpellerTexture ImageTextures::Get(ImpellerContext context, const std::string& u
   info->texHeight = d.height;
   info->srcWidth = d.srcWidth;
   info->srcHeight = d.srcHeight;
-  return it->second.texture;
+  return it->second.slot.texture;
 }
 
 void PaintImage(ImpellerDisplayListBuilder builder, ImpellerTexture texture,
