@@ -177,6 +177,12 @@ if want fp17-window || want fp17-headless; then
   run fp17-headless headless fp17-image-upload/prebuilt/fp17-image-upload.bundle Fp17ImageUpload 30 \
     --initial-url "$FQ"
 fi
+# FP-42: producer thread marks frames (registry + scene wake) while main resolves and paints
+# them and JS registers / unregisters through the TurboModule.
+FX=fp42-external-texture/prebuilt/fp42-external-texture.bundle
+run fp42-window     window   "$FX" ExternalTexture 0 --idle-run-sec 3 \
+  --initial-url "fp42://run?fps=60&unregisterMs=1517"
+run fp42-headless   headless "$FX" ExternalTexture 40 --initial-url "fp42://run?fps=60&unregisterMs=300"
 gate tools/ci-text.sh
 gate tools/ci-native-transform.sh
 gate tools/ci-image-net.sh

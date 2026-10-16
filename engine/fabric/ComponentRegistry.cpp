@@ -13,6 +13,7 @@
 #include "ActivityIndicatorShadowNode.h"
 #include "ModalHostShadowNode.h"
 #include "SwitchShadowNode.h"
+#include "TextureViewShadowNode.h"
 #if RNI_WITH_RNSVG
 #include "RNSVGComponentDescriptors.h"
 #include <react/renderer/components/rnsvg/ComponentDescriptors.h>
@@ -73,6 +74,9 @@ MakeComponentProviderRegistry() {
   // ImageManager (fabric/platform/impeller/.../ImageManager.cpp).
   providerRegistry->add(
       react::concreteComponentDescriptorProvider<react::ImageComponentDescriptor>());
+  // FP-42 <ImpellerTextureView textureId>: paints a TextureRegistry frame.
+  providerRegistry->add(
+      react::concreteComponentDescriptorProvider<react::ImpellerTextureViewComponentDescriptor>());
 #if RNI_WITH_RNSVG
   // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
   // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --

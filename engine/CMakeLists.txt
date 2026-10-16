@@ -253,6 +253,7 @@ add_executable(rn-impeller
   host/RasterThread.cpp
   host/IoContextEgl.cpp
   host/PoisonProbe.cpp
+  host/ExternalTextureProbe.cpp  # FP-42 test hook
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeSync.cpp>
   # FP-32: GPU context loss -> teardown + rebuild (windowed EGL).
@@ -307,6 +308,9 @@ add_executable(rn-impeller
   fabric/ComponentRegistry.cpp
   scenegraph/SceneGraph.cpp
   scenegraph/SceneGraphContextLoss.cpp
+  # FP-42: external textures (Flutter TextureRegistry + TextureLayer).
+  scenegraph/TextureRegistry.cpp
+  scenegraph/ExternalTexturePaint.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/scenegraph/SceneGraphGlWin.cpp>

@@ -32,6 +32,7 @@
 #include "scenegraph/ScrollIndicators.h"
 #include "scenegraph/ActivityIndicator.h"
 #include <react/renderer/components/image/ImageProps.h>  // A19
+#include "fabric/TextureViewShadowNode.h"  // FP-42
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
 #include "scenegraph/EllipsizeText.h"
@@ -397,6 +398,9 @@ SceneGraph::~SceneGraph() {
   for (auto& [tag, entry] : worldTextureCache_) {
     if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
   }
+  // FP-42: no producer may wake a dead scene; then the same ownership rule.
+  if (textureRegistry_) textureRegistry_->SetFrameListener(nullptr);
+  releaseExternalTextures();
   // ENG-10 sprite atlas -- same ownership rule.
   for (auto& [id, entry] : spriteTextureCache_) {
     if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
@@ -816,6 +820,14 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.spAnimating = ap->animating;
       node.spHidesWhenStopped = ap->hidesWhenStopped;
       if (ap->color) colorToFloats(ap->color, node.spColor);
+    }
+  }
+
+  // FP-42 <ImpellerTextureView textureId>.
+  if (node.componentName == "ImpellerTextureView") {
+    node.isExternalTexture = true;
+    if (const auto* tp = dynamic_cast<const react::ImpellerTextureViewProps*>(view.props.get())) {
+      node.externalTextureId = tp->textureId;
     }
   }
 
@@ -1335,7 +1347,9 @@ void SceneGraph::recordDamage(ImpellerDisplayListBuilder builder, const SceneNod
   }
   // Glyph ink (italics, descenders, a tight lineHeight) can leave the frame.
   if (node.isParagraph || node.isTextInput) outset = std::max(outset, std::max(8.0f, font));
-  const bool spinning = node.isSpinner && node.spAnimating;
+  // FP-42: a texture's frames change with no commit; TextureLayer::Diff marks
+  // its bounds dirty every frame, so it is volatile like a spinner.
+  const bool spinning = (node.isSpinner && node.spAnimating) || node.isExternalTexture;
   const bool caret = node.isTextInput && node.tag == tiFocused_;
   damage_.Record(builder, node.tag, node.parent, ImpellerRect{x, y, w, h}, outset, unbounded,
                  node.overflowHidden, spinning || caret);
@@ -2658,6 +2672,10 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerDisplayListBuilderRestore(builder);
     }
   }
+
+  // FP-42: inside this node's transform / opacity and every ancestor clip
+  // (TextureLayer is a leaf under the mutator stack). Leaf opacity = paint alpha.
+  if (node.isExternalTexture) paintExternalTexture(builder, node, x, y, w, h, OwnAlpha(node));
 
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
   // field is focused, else its controlled value), or the placeholder when the

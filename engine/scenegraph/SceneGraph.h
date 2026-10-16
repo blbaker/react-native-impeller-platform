@@ -30,6 +30,7 @@
 #include "scenegraph/DamageTracker.h"
 #include "scenegraph/ImageEvents.h"
 #include "scenegraph/ImagePaint.h"
+#include "scenegraph/TextureRegistry.h"
 #include "scenegraph/GpuBackend.h"
 #include "scenegraph/RasterJobs.h"
 #include "scenegraph/Shadows.h"
@@ -454,6 +455,9 @@ struct SceneNode {
   // unset RNSVGImage `name`/uri: silent, not a crash).
   bool isWorldRaster{false};
   std::string worldRasterName;
+  // FP-42 <ImpellerTextureView textureId>: paints TextureRegistry's latest frame.
+  bool isExternalTexture{false};
+  int64_t externalTextureId{0};
 
 
   std::vector<facebook::react::Tag> children;
@@ -521,6 +525,11 @@ class SceneGraph {
   void setWorldRasterStore(std::shared_ptr<WorldRasterStore> store) {
     worldRasterStore_ = std::move(store);
   }
+  // FP-42. Register/unregister/MarkFrameAvailable wake a frame (bumpRevision).
+  void setTextureRegistry(std::shared_ptr<TextureRegistry> registry);
+  // FP-42: "id:seq:marks,..." for each texture the last full paint drew
+  // (seq 0 = registered, no frame). Read by RecordFrame into the FrameItem.
+  std::string takeExternalTextureNote();
   // ENG-10. Sprite quads the <world> painter actually issued as GPU
   // DrawTextureRect calls during the LAST paint(). Reset per paint(). The gate
   // asserts this equals the drawSprites list length -- proof the quads went
@@ -906,6 +915,11 @@ class SceneGraph {
   // "unset image source" convention the rest of this file uses.
   bool paintWorldNode(ImpellerDisplayListBuilder builder, const SceneNode& node,
                       float x, float y, float w, float h);
+  // FP-42 (flow/layers/texture_layer.cc Paint): the registry's latest frame
+  // into (x,y,w,h), inside the node's transform/opacity and its ancestors' clips.
+  void paintExternalTexture(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                            float x, float y, float w, float h, float alpha);
+  void releaseExternalTextures();  // caller holds mutex_
   // <world> ENG-10. Paints the store's drawSprites list for node.worldRasterName
   // OVER the world buffer, back-to-front, one DrawTextureRect per sprite from
   // the textureId-keyed atlas cache. Returns false when there is no list.
@@ -1020,6 +1034,10 @@ class SceneGraph {
     uint64_t uploadedVersion{0};
   };
   std::unordered_map<facebook::react::Tag, WorldTextureEntry> worldTextureCache_;
+  // FP-42: uploaded external-texture frames by node tag (uploadedVersion = frame seq).
+  std::shared_ptr<TextureRegistry> textureRegistry_;
+  std::unordered_map<facebook::react::Tag, WorldTextureEntry> extTextureCache_;
+  std::string extTextureNote_;
   // <world> ENG-10. Sprite-atlas GPU textures keyed by textureId (NOT by node
   // tag -- one peep texture is shared by every sprite and every <world> that
   // references it). Uploaded once per registerSprite version; drawSprites

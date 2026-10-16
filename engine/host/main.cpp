@@ -81,6 +81,7 @@
 #endif
 #include "host/AnimRowProbe.h"
 #include "host/UniformProbe.h"
+#include "host/ExternalTextureProbe.h"
 #include "host/PoisonProbe.h"
 #include "base/GpuAvailability.h"
 #include "host/ResizeProbe.h"
@@ -263,6 +264,7 @@ int ListModules() {
   rni::SceneGraph sceneGraph(surface.typography());
   // ENG-09 — wire the world raster store so --list-modules boots identically.
   sceneGraph.setWorldRasterStore(host.worldRasterStore());
+  sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          /*logMutations*/ false, host.displayMetrics());
 
@@ -690,6 +692,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // ENG-09 — the <world> painter reads pixel buffers the WorldRaster
   // TurboModule writes; give the SceneGraph the same store the host owns.
   sceneGraph.setWorldRasterStore(host.worldRasterStore());
+  sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
   host.displayMetrics()->set((float)pxWidth / pointScale,
                              (float)pxHeight / pointScale, pointScale);
   host.appearance()->set(colorScheme);
@@ -2075,6 +2078,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::image::PrintStats();  // FP-16
   rni::io::PrintStats();  // FP-17
   rni::PrintGpuTextureTotals();  // FP-20
+  host.textureRegistry()->PrintSummary();  // FP-42
+  rni::exttexprobe::PrintSummary();  // FP-42 test hook
   rni::typography::PrintSummary();  // FP-12
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
@@ -3104,6 +3109,7 @@ int main(int argc, char** argv) {
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
     // ENG-09 — wire the world raster store, same as the primary path.
     sceneGraph.setWorldRasterStore(host.worldRasterStore());
+    sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
     // Dimensions/PixelRatio read this. RN code branches on PixelRatio.get()
     // for asset selection (@2x/@3x) and hairline widths, so reporting 1 while

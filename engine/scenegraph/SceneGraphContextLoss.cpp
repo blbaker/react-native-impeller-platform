@@ -20,6 +20,7 @@ void SceneGraph::dropGpuResources() {
     if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
   }
   worldTextureCache_.clear();  // uploadedVersion goes with it: the store re-uploads
+  releaseExternalTextures();   // FP-42: the next paint re-uploads the latest frame
   const size_t sprites = spriteTextureCache_.size();
   for (auto& [id, entry] : spriteTextureCache_) {
     if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);

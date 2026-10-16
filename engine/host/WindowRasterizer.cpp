@@ -13,6 +13,7 @@
 #include "base/Trace.h"
 #include "host/ContextLoss.h"
 #include "host/ContextLossGl.h"
+#include "host/ExternalTextureProbe.h"
 #include "host/FrameScheduler.h"
 #include "host/FrameTimings.h"
 #include "host/GlfwSurface.h"
@@ -200,6 +201,14 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
     std::vector<Px> px;
     gpu::Note(gpu::Counter::kSnapshot);
     if (surface_.readPixels(&px)) ctxloss::OnPresent(px, surface_.gpuWidth(), surface_.gpuHeight(), n);
+  }
+  if (exttexprobe::Enabled()) {  // FP-42 test hook: the texture's pixels in this frame
+    std::vector<Px> px;
+    gpu::Note(gpu::Counter::kSnapshot);
+    if (surface_.readPixels(&px)) {
+      exttexprobe::OnPresent(px, surface_.gpuWidth(), surface_.gpuHeight(), n, item->frameNumber,
+                             item->extTextures);
+    }
   }
   if (hooks_.beforePresent) hooks_.beforePresent(n);
   gpu::Note(gpu::Counter::kPresent);

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 #include "host/FrameTimings.h"
 #include "host/Pipeline.h"
@@ -46,6 +47,7 @@ struct FrameItem {
   uint64_t frameNumber = 0;  // == timings->frameNumber()
   std::unique_ptr<FrameTimingsRecorder> timings;
   std::unique_ptr<RasterJobs> jobs;  // FP-14: null without a GL context
+  std::string extTextures;  // FP-42: SceneGraph::takeExternalTextureNote() of this walk
   int64_t vsyncUs = 0;  // FP-15: the scheduler tick this frame began on (0 = none)
   int64_t targetUs = 0;  // FP-27: the vblank that tick targets (displaylink)
   // FP-18: damage against the previous walk. When damage.partial, displayList

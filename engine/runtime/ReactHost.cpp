@@ -312,6 +312,10 @@ ReactHost::ReactHost(bool withInspector) {
   modules_->add("WorldRaster", [s = worldRasterStore_](auto inv) {
     return std::make_shared<rni::WorldRasterModule>(inv, s);
   });
+  // FP-42. External texture registry (test producers from JS).
+  modules_->add("ImpellerTextureRegistry", [r = textureRegistry_](auto inv) {
+    return std::make_shared<rni::TextureRegistryModule>(inv, r);
+  });
 
   // item 5. System clipboard. See ClipboardBridge.h for the thread-safety
   // design (GLFW's clipboard functions are main-thread only; this module
