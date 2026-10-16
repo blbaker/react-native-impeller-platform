@@ -44,6 +44,11 @@ class GlNamePool {
 ImpellerTexture WrapNewGlName(ImpellerContext ctx, GlNamePool& pool, int w, int h,
                               uint32_t* name);
 
+// FP-34, RASTER (GL context current). Draws `dl` into a throwaway 1x1 RGBA8 target with depth and
+// stencil, the same wrap the supersample offscreen uses. False when GL is compiled out or the
+// framebuffer is incomplete.
+bool GlPrewarmDraw(ImpellerContext ctx, ImpellerDisplayList dl);
+
 std::unique_ptr<SupersampleBackend> MakeGlSupersample(ImpellerContext ctx,
                                                       std::shared_ptr<GlNamePool> pool);
 

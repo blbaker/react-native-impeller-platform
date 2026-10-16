@@ -246,6 +246,7 @@ add_executable(rn-impeller
   host/FrameTimings.cpp
   host/FrameScheduler.cpp
   host/BackendSelect.cpp
+  host/Prewarm.cpp
   host/FrameItem.cpp
   host/RecordNoGl.cpp
   host/AnimRowProbe.cpp
@@ -270,6 +271,7 @@ add_executable(rn-impeller
   base/TestSync.cpp
   base/GpuAvailability.cpp
   base/GlLimits.cpp
+  base/ProgramCount.cpp
   base/ContextFlags.cpp
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/OsAppearanceDarwin.mm>
   # The offscreen surface, one implementation per platform. Selected here rather
@@ -334,6 +336,7 @@ add_executable(rn-impeller
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
   scenegraph/ContentFilters.cpp
+  scenegraph/PrewarmTour.cpp
   scenegraph/BackdropBlur.cpp
   scenegraph/BlendGroup.cpp
   scenegraph/EllipsizeText.cpp

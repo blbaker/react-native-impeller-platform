@@ -184,7 +184,18 @@ std::unique_ptr<SupersampleBackend> MakeGlSupersample(ImpellerContext ctx,
                                                       std::shared_ptr<GlNamePool> pool) {
   return std::make_unique<GlSupersample>(ctx, std::move(pool));
 }
+
+bool GlPrewarmDraw(ImpellerContext ctx, ImpellerDisplayList dl) {
+  TRACE_EVENT0("raster", "PrewarmTour");
+  GLuint color = AllocColor(0, 1, 1);
+  const bool ok = DrawToColor(ctx, dl, color, 1, 1, /*depthStencil=*/true);
+  glDeleteTextures(1, &color);
+  return ok;
+}
 #else
+bool GlPrewarmDraw(ImpellerContext, ImpellerDisplayList) { return false; }
+
+
 std::unique_ptr<SupersampleBackend> MakeGlSupersample(ImpellerContext,
                                                       std::shared_ptr<GlNamePool>) {
   return nullptr;

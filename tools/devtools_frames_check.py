@@ -103,10 +103,11 @@ for e in begins + draws:
                 (e["ts"] - (lo if e["ts"] < lo else hi)) / 1000.0))
 
 # d: host spans
+# FP-15 moved the present to the raster thread: Frame spans stay on main, Present spans are on raster.
 spans = [e for e in events if e.get("name") == "TimeStamp"
-         and e.get("args", {}).get("data", {}).get("track") == "rn-impeller main"]
+         and e.get("args", {}).get("data", {}).get("track") in ("rn-impeller main", "rn-impeller raster")]
 names = sorted({e["args"]["data"]["name"] for e in spans})
-print("   host spans on rn-impeller main: %d (%s)" % (len(spans), ",".join(names)[:120]))
+print("   host spans on rn-impeller main+raster: %d (%s)" % (len(spans), ",".join(names)[:120]))
 for want in ("Frame", "Present"):
     n = sum(1 for e in spans if e["args"]["data"]["name"] == want)
     if n < window:

@@ -98,6 +98,8 @@
 #include "base/TestSync.h"
 #include "base/ContextFlags.h"
 #include "fabric/ImageStore.h"
+#include "host/Prewarm.h"
+#include "base/ProgramCount.h"
 #include "host/MemoryPressure.h"
 #include "host/OsAppearance.h"
 #include "modules/NetworkingModule.h"
@@ -189,6 +191,7 @@ void Usage() {
           "                   [--screenshot-after-frames N] [--quit-on-term]\n"
           "                     (windowed; FP-06 frame-anchored capture, clean\n"
           "                     exit on SIGTERM/SIGINT)\n"
+          "                   [--prewarm on|off]  pipeline pre-warm tour before frame 1 (default on)\n"
           "                   [--frame-timings-out <file.json>]  one record per\n"
           "                     presented frame (FP-01)\n"
           "                   [--trace-out <file.json>]  Chrome/Perfetto trace of\n"
@@ -495,6 +498,7 @@ static bool gRasterThread = true;
 // FP-18: --partial-repaint on|off (windowed: clip RECORD to the damage when it
 // passes Flutter's 0.7 rule and keep the previous frame outside it).
 static bool gPartialRepaint = true;
+static bool gPrewarm = true;  // FP-34 --prewarm on|off
 // FP-20: --backend gles|metal|vulkan (only gles runs yet) and the test hook
 // RNI_TEST_BACKEND_POLICY=metal|vulkan (headless GL context, other backend's rules).
 static rni::GpuBackend gGpuBackend = rni::GpuBackend::kGles;
@@ -681,6 +685,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   sceneGraph.setGpuBackend(gGpuBackend, gGpuPolicy);  // FP-20
   rasterizer.thread().PostSync([&] { sceneGraph.setRenderContext(surface.context()); });
   sceneGraph.printGpuBackend();
+  // FP-34: the pipeline pre-warm tour, before the first frame (fonts are registered above).
+  if (gPrewarm) {
+    rni::RunPrewarmTour(surface, rasterizer.thread(), gGpuBackend, frameTimings);
+  } else {
+    printf("rn-impeller: prewarm skipped=off\n");
+    rni::programcount::SetPhase(rni::programcount::Phase::kFrames);
+  }
   sceneGraph.setSupersample(supersampleRnsvg);
   // ENG item 2b — the root supersample offscreen is sized N x this. Device
   // pixels (surface.width()/height()), re-set on resize below.
@@ -2073,6 +2084,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
   // FP-01: presents counted at surface.present(), independent of the recorder.
   printf("rn-impeller: presents=%d\n", rasterizer.presents());
+  rni::programcount::PrintSummary();  // FP-34
   scheduler.PrintSummary();
   {  // FP-54: frames handed to React Native DevTools (0 unless a trace recorded)
     const rni::devtools::Stats dt = rni::devtools::GetStats();
@@ -2372,6 +2384,13 @@ int main(int argc, char** argv) {
         return 2;
       }
       gPartialRepaint = v == "on";
+    } else if (a == "--prewarm") {  // FP-34
+      const std::string v = next("--prewarm");
+      if (v != "on" && v != "off") {
+        fprintf(stderr, "rn-impeller: FATAL: --prewarm wants on|off (got '%s')\n", v.c_str());
+        return 2;
+      }
+      gPrewarm = v == "on";
     } else if (a == "--raster-thread") {
       const std::string v = next("--raster-thread");
       if (v != "on" && v != "off") {

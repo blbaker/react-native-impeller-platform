@@ -72,7 +72,7 @@ void FrameTimingsRecorder::Record(State next) {
 
 void FrameTimings::Commit(std::unique_ptr<FrameTimingsRecorder> frame) {
   if (!frame) return;
-  Rec r{frame->frameNumber(), {}, frame->imageCacheBytes()};
+  Rec r{frame->frameNumber(), {}, frame->imageCacheBytes(), frame->nodes()};
   for (int i = 0; i < FrameTimingsRecorder::kStampCount; ++i) {
     r.us[i] = frame->stampUs((FrameTimingsRecorder::State)(i + 1));
   }
@@ -123,12 +123,12 @@ void FrameTimings::PrintSummary(FILE* out) const {
           "rn-impeller: frame_timings n=%zu build_p50=%lld build_p95=%lld "
           "build_p99=%lld raster_p50=%lld raster_p95=%lld raster_p99=%lld "
           "total_p95=%lld frame_timing_errors=%d discarded=%d "
-          "image_cache_bytes_max=%lld image_cache_bytes_last=%lld\n",
+          "image_cache_bytes_max=%lld image_cache_bytes_last=%lld prewarm_us=%lld\n",
           recs.size(), (long long)Pct(build, 50), (long long)Pct(build, 95),
           (long long)Pct(build, 99), (long long)Pct(raster, 50),
           (long long)Pct(raster, 95), (long long)Pct(raster, 99),
           (long long)Pct(total, 95), errors, discarded, (long long)cacheMax,
-          (long long)(recs.empty() ? 0 : recs.back().imageCacheBytes));
+          (long long)(recs.empty() ? 0 : recs.back().imageCacheBytes), (long long)prewarmUs());
   fflush(out);
 }
 
@@ -144,9 +144,10 @@ bool FrameTimings::WriteJson(const std::string& path) const {
       if (recs[i].us[k] < 0) fprintf(f, ",\"%s\":null", kKeys[k]);
       else fprintf(f, ",\"%s\":%lld", kKeys[k], (long long)recs[i].us[k]);
     }
-    fprintf(f, ",\"image_cache_bytes\":%lld}", (long long)recs[i].imageCacheBytes);
+    fprintf(f, ",\"image_cache_bytes\":%lld,\"nodes\":%d}", (long long)recs[i].imageCacheBytes,
+            recs[i].nodes);
   }
-  fprintf(f, "\n]}\n");
+  fprintf(f, "\n],\"prewarm_us\":%lld}\n", (long long)prewarmUs());
   return fclose(f) == 0;
 }
 

@@ -2,68 +2,68 @@
   "fixtures": {
     "native-rotate": {
       "baseline": {
-        "raster_p95_us": 1138,
-        "raster_p99_us": 1836,
-        "record_p95_us": 36,
-        "record_p99_us": 59,
-        "startup_ms": 242,
-        "total_p95_us": 1289,
-        "total_p99_us": 6549
+        "raster_p95_us": 1368,
+        "raster_p99_us": 2029,
+        "record_p95_us": 39,
+        "record_p99_us": 66,
+        "startup_ms": 283,
+        "total_p95_us": 4128,
+        "total_p99_us": 15926
       },
-      "control_ms": 14.51,
+      "control_ms": 14.13,
       "runs": 5,
       "spread": {
-        "raster_p95_us": 307,
-        "raster_p99_us": 2022,
-        "record_p95_us": 23,
-        "record_p99_us": 64,
-        "startup_ms": 45,
-        "total_p95_us": 371,
-        "total_p99_us": 607
+        "raster_p95_us": 83,
+        "raster_p99_us": 213,
+        "record_p95_us": 4,
+        "record_p99_us": 8,
+        "startup_ms": 5,
+        "total_p95_us": 223,
+        "total_p99_us": 890
       }
     },
     "sdf-aa": {
       "baseline": {
-        "raster_p95_us": 1341,
-        "raster_p99_us": 1659,
+        "raster_p95_us": 807,
+        "raster_p99_us": 1003,
         "record_p95_us": 26,
-        "record_p99_us": 55,
-        "startup_ms": 216,
-        "total_p95_us": 1514,
-        "total_p99_us": 8941
+        "record_p99_us": 43,
+        "startup_ms": 253,
+        "total_p95_us": 2561,
+        "total_p99_us": 14758
       },
-      "control_ms": 14.53,
+      "control_ms": 13.86,
       "runs": 5,
       "spread": {
-        "raster_p95_us": 216,
-        "raster_p99_us": 663,
-        "record_p95_us": 14,
-        "record_p99_us": 35,
-        "startup_ms": 43,
-        "total_p95_us": 225,
-        "total_p99_us": 1670
+        "raster_p95_us": 33,
+        "raster_p99_us": 113,
+        "record_p95_us": 5,
+        "record_p99_us": 3,
+        "startup_ms": 14,
+        "total_p95_us": 217,
+        "total_p99_us": 893
       }
     },
     "style-g2": {
       "baseline": {
-        "raster_p95_us": 6472,
-        "raster_p99_us": 10135,
-        "record_p95_us": 4906,
-        "record_p99_us": 6185,
-        "startup_ms": 323,
-        "total_p95_us": 11928,
-        "total_p99_us": 33603
+        "raster_p95_us": 758,
+        "raster_p99_us": 1050,
+        "record_p95_us": 3508,
+        "record_p99_us": 5051,
+        "startup_ms": 378,
+        "total_p95_us": 4403,
+        "total_p99_us": 28711
       },
-      "control_ms": 14.76,
+      "control_ms": 13.67,
       "runs": 5,
       "spread": {
-        "raster_p95_us": 11395,
-        "raster_p99_us": 15204,
-        "record_p95_us": 6077,
-        "record_p99_us": 6852,
-        "startup_ms": 437,
-        "total_p95_us": 18502,
-        "total_p99_us": 52108
+        "raster_p95_us": 115,
+        "raster_p99_us": 363,
+        "record_p95_us": 285,
+        "record_p99_us": 474,
+        "startup_ms": 20,
+        "total_p95_us": 490,
+        "total_p99_us": 779
       }
     }
   },

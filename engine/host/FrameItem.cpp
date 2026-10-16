@@ -38,6 +38,7 @@ std::unique_ptr<FrameItem> RecordFrame(SceneGraph& scene, float pointScale,
     TRACE_EVENT0("paint", "PaintWalk");
     item->painted = scene.paint(builder, pointScale, item->jobs.get(), &damage, culled);
   }
+  if (timings) timings->SetNodes(item->painted);  // FP-34
   if (extras) extras(builder);
   {
     TRACE_EVENT0("paint", "DisplayListBuild");
