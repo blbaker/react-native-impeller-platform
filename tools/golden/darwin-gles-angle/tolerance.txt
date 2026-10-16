@@ -1,0 +1,2 @@
+# measured spinner-tile noise (animated by wall clock): 272-336 off px of 2.52M, so 0.0133% worst; limit set ~4x
+style-grid|0.05|2
