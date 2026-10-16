@@ -81,6 +81,7 @@ RenderBackend MakeRenderBackend(GpuBackend context, GpuBackend policy, ImpellerC
   // Metal / Vulkan get 4x MSAA from the surface wrap: no supersample hook.
   b.supersample = useGl ? std::move(gl.supersample) : nullptr;
   b.afterRaster = std::move(gl.afterRaster);
+  b.snapshot = std::move(gl.snapshot);  // GL context only (FP-43)
   return b;
 }
 

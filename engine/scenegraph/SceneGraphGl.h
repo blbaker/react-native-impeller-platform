@@ -44,6 +44,11 @@ struct Table {
   PFNGLCLIENTWAITSYNCPROC ClientWaitSync = nullptr;
   PFNGLDELETESYNCPROC DeleteSync = nullptr;
   PFNGLFLUSHPROC Flush = nullptr;
+  // FP-43 snapshot readback
+  PFNGLREADPIXELSPROC ReadPixels = nullptr;
+  PFNGLPIXELSTOREIPROC PixelStorei = nullptr;
+  PFNGLCLEARCOLORPROC ClearColor = nullptr;
+  PFNGLCLEARPROC Clear = nullptr;
 };
 extern Table gGl;
 
@@ -78,6 +83,10 @@ bool Load();
 #define glClientWaitSync ::rni::scenegraph_gl::gGl.ClientWaitSync
 #define glDeleteSync ::rni::scenegraph_gl::gGl.DeleteSync
 #define glFlush ::rni::scenegraph_gl::gGl.Flush
+#define glReadPixels ::rni::scenegraph_gl::gGl.ReadPixels
+#define glPixelStorei ::rni::scenegraph_gl::gGl.PixelStorei
+#define glClearColor ::rni::scenegraph_gl::gGl.ClearColor
+#define glClear ::rni::scenegraph_gl::gGl.Clear
 
 namespace rni::scenegraph_gl {
 inline bool Ready() { return Load(); }

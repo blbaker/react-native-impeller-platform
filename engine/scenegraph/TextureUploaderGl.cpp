@@ -159,6 +159,7 @@ GlParts MakeGlParts(ImpellerContext ctx) {
   parts.uploader = std::make_unique<GlNameUploader>(ctx, pool);
   parts.supersample = MakeGlSupersample(ctx, pool);
   parts.afterRaster = [pool] { pool->Refill(); };
+  parts.snapshot = MakeGlSnapshotReadback(ctx);  // FP-43
   return parts;
 }
 #else

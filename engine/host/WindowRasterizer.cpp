@@ -14,6 +14,8 @@
 #include "fabric/ImageStore.h"
 #include "host/ContextLoss.h"
 #include "host/ContextLossGl.h"
+#include "host/ExternalTextureProbe.h"
+#include "host/PlatformViewEmbedder.h"
 #include "host/FrameScheduler.h"
 #include "host/FrameTimings.h"
 #include "host/GlfwSurface.h"
@@ -202,6 +204,17 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
     gpu::Note(gpu::Counter::kSnapshot);
     if (surface_.readPixels(&px)) ctxloss::OnPresent(px, surface_.gpuWidth(), surface_.gpuHeight(), n);
   }
+  if (exttexprobe::Enabled()) {  // FP-42 test hook: the texture's pixels in this frame
+    std::vector<Px> px;
+    gpu::Note(gpu::Counter::kSnapshot);
+    if (surface_.readPixels(&px)) {
+      exttexprobe::OnPresent(px, surface_.gpuWidth(), surface_.gpuHeight(), n, item->frameNumber,
+                             item->extTextures);
+    }
+  }
+  // FP-44 (SubmitFlutterView): this frame's views placed + overlays drawn,
+  // then the background presents.
+  if (embedder_) embedder_->SubmitFrame(item->platformViews, n, item->frameNumber);
   if (hooks_.beforePresent) hooks_.beforePresent(n);
   gpu::Note(gpu::Counter::kPresent);
   {
@@ -243,6 +256,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
                 (unsigned long long)item->frameNumber, (long long)NowUs(), ThreadTag());
     std::fflush(stdout);
   }
+  if (embedder_) embedder_->DidPresent(n);
   if (hooks_.afterPresent) hooks_.afterPresent(n);
   if (item->timings) {
     item->timings->RecordPresent();
@@ -302,6 +316,7 @@ void WindowRasterizer::Shutdown() {
     }) == PipelineConsumeResult::kMoreAvailable) {
     }
     if (started_) {
+      if (embedder_) embedder_->Teardown();  // FP-44: overlay EGL surfaces first
       partial_.PrintSummary();
       partial_.Release();  // FP-18: its GL objects die with the context
       surface_.releaseGpu();

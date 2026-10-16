@@ -20,10 +20,17 @@ int SceneGraph::paint(ImpellerDisplayListBuilder builder, float pointScaleFactor
   {
     std::lock_guard<std::mutex> lock(mutex_);
     painted = paintLocked(builder, pointScaleFactor, &shows, jobs);
+    if (pvFrame_) pvRecordOverlaysLocked(pointScaleFactor);  // FP-44
     // FP-18: under the walk's lock, so no mark lands between walk and diff.
     FrameDamage unused;
     damage_.EndWalk(damage ? damage : &unused,
                     [this](int tag) { return nodes_.count(tag) > 0; });
+    // FP-44: rasterizer.cc disables partial repaint while platform views are
+    // composited ("partial repaint with platform view present" is unsupported).
+    if (pvFrame_ && damage && damage->partial) {
+      damage->partial = false;
+      damage->reason = "platform_views";
+    }
     if (culled && damage && damage->partial && damage->w > 0 && damage->h > 0) {
       // Per-frame outputs of the walk stay the full walk's.
       const int fullPainted = painted_, fullSprites = spritesDrawn_;
