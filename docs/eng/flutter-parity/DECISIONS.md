@@ -112,3 +112,7 @@ reverse it. The PR description links here; keep it current.
   Metal drawable wrap is fixed 4x MSAA (swapchain_transients_mtl.mm), 3 intermediate levels vs 15 for a 4x4 supersample;
   chevron edge error vs an N=16 reference is 6.69 (Metal N=0) vs 2.71 (ANGLE N=4). Flutter ships exactly this 4x MSAA on
   macOS, so it is the parity target; supersampling on Metal would need an offscreen surface (patch 0004, FP-23).
+15. **19:15: ASan suite out of merge verification until FP-57.** The ASan merge gate added at 12:55 held both lanes
+    from 15:02 to 19:09 on gates that cannot pass under ASan (perf/RSS budgets, an LD_PRELOAD shim). It also surfaced
+    one intermittent report that may be a real bug (ImageEventEmitter::onLoadStart from applyMutations). Merges run
+    the plain gates again. Lane B's FP-57 makes the suite ASan-clean, fixes the report, and turns it back on.
