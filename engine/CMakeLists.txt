@@ -372,7 +372,8 @@ add_executable(rn-impeller
 set(RNI_DRAWOP_HOOKED
   SceneGraph.cpp Shadows.cpp BackgroundLayers.cpp BorderRounded.cpp Outline.cpp ScrollIndicators.cpp
   ActivityIndicator.cpp Modal.cpp ImagePaint.cpp DamageTracker.cpp ContentFilters.cpp BackdropBlur.cpp
-  BlendGroup.cpp BorderCurve.cpp BorderDashRounded.cpp)
+  BlendGroup.cpp BorderCurve.cpp BorderDashRounded.cpp ExternalTexturePaint.cpp PlatformViewRecord.cpp
+  SnapshotRecord.cpp)
 set(RNI_DRAWOP_HOOKED_PATHS "${CMAKE_SOURCE_DIR}/svg/SvgPath.cpp" "${CMAKE_SOURCE_DIR}/svg/SvgDash.cpp")
 foreach(_f IN LISTS RNI_DRAWOP_HOOKED)
   list(APPEND RNI_DRAWOP_HOOKED_PATHS "${CMAKE_SOURCE_DIR}/scenegraph/${_f}")

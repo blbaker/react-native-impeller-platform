@@ -43,6 +43,13 @@ if(NOT WIN32 AND NOT ANDROID)
     scenegraph/DrawOpLog.cpp
     scenegraph/DrawOpHooks.cpp
     scenegraph/DrawOpHooksObjects.cpp
+    scenegraph/TextureRegistry.cpp  # FP-42/43/44 (lane A), linked by SceneGraph.cpp
+    scenegraph/ExternalTexturePaint.cpp
+    scenegraph/PlatformViewRecord.cpp
+    scenegraph/SnapshotController.cpp
+    scenegraph/SnapshotRecord.cpp
+    scenegraph/ImageEncode.cpp
+    scenegraph/SnapshotReadbackGl.cpp
     text/ImpellerTextLayoutManager.cpp
     text/FontRegistry.cpp
     text/TypographyContexts.cpp
@@ -51,7 +58,8 @@ if(NOT WIN32 AND NOT ANDROID)
     base/Trace.cpp
     base/ProgramCount.cpp
     base/GlLimits.cpp
-    base/GpuAvailability.cpp)
+    base/GpuAvailability.cpp
+    base/TestSync.cpp)  # FP-57: ImageEvents.cpp test probe
   target_include_directories(rni-scenegraph-tests PRIVATE ${CMAKE_SOURCE_DIR} "${IMPELLER_SDK}/include"
     "${RN_ROOT}/React" "${RN_ROOT}/React/FBReactNativeSpec")
   rni_compile_flags(rni-scenegraph-tests EXCEPTIONS RTTI NO_DEPRECATED FORCE_INCLUDE cstdint)
