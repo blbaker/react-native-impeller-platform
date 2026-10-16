@@ -1,11 +1,4 @@
-# AGENTS.md (staged, see docs/OPEN-SOURCE-READINESS.md)
-#
-# Hermes's write_file/patch tools refuse to create or edit a file named
-# AGENTS.md or CLAUDE.md anywhere in a repo ("protected agent-instruction
-# file", no override available to the agent). That block is doing its job:
-# it stops an agent from rewriting its own instructions, so this content is
-# staged here instead. Baker: copy this file to the repo root as AGENTS.md
-# (git mv or cp, drop this header) once you've reviewed it.
+# AGENTS.md
 
 Instructions for AI coding agents working in this repo. `CLAUDE.md` points
 here.

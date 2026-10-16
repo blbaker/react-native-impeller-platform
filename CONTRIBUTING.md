@@ -6,7 +6,7 @@ pre-release, so expect some rough edges.
 
 ## Before you start
 
-Read [AGENTS.md](docs/AGENTS.md.proposed) and
+Read [AGENTS.md](AGENTS.md) and
 [docs/engineering-standards.md](docs/engineering-standards.md). They apply
 whether you're a person or an AI agent making the change. AGENTS.md has the
 setup and command reference, the standards doc has the rules changes are held
@@ -118,10 +118,7 @@ workflow file changes.
 ## Using an AI agent
 
 If you're using Claude Code, Codex, or a similar coding agent, point it at
-`AGENTS.md` first (`CLAUDE.md` at the repo root just points there; as of
-this writing both are staged at [docs/AGENTS.md.proposed](docs/AGENTS.md.proposed)
-and [docs/CLAUDE.md.proposed](docs/CLAUDE.md.proposed) pending a maintainer
-copying them to the repo root -- see docs/OPEN-SOURCE-READINESS.md).
+[`AGENTS.md`](AGENTS.md) first ([`CLAUDE.md`](CLAUDE.md) at the repo root just points there).
 It has the build commands, the repo layout, and the standing rules, most
 importantly, that an agent should never push to `main`, merge a PR,
 force-push, or touch the publish guard in `.github/workflows/release.yml`.
