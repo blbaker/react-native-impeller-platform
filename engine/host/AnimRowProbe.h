@@ -6,6 +6,8 @@
 // is fixture red (r > 128, g < 96, b < 96), or -1 when the row has none. The
 // gate maps x0 back onto the analytic Animated.timing curve, so the lag it
 // reports is read from pixels that reached the window, not from a prop value.
+// RNI_TEST_ANIM_PIXEL=x,y also prints `anim_px present= r= g= b=` for that
+// pixel (FP-40 opacity arms).
 // Unset: Enabled() is false and the loop does no readback.
 #pragma once
 
@@ -21,7 +23,8 @@ int Row();
 inline bool Enabled() { return Row() >= 0; }
 
 // px is top-left ordered, width*height. Prints one anim_row line.
+// frame is the recorded frame's number (main prints `anim_frame frame=` when it records it).
 void OnPresent(const std::vector<Px>& px, int width, int height, int present,
-               uint64_t clock);
+               uint64_t clock, uint64_t frame);
 
 }  // namespace rni::animrow

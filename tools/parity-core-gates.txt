@@ -25,3 +25,26 @@ tools/ci-gl-validation.sh     # FP-05 zero KHR_debug errors
 tools/ci-native-anim-jsstall.sh  # FP-10 native animation survives JS stalls
 tools/ci-vsync.sh             # FP-11 vsync pacing, one frame per vsync, idle = 0 presents
 tools/ci-typography-threads.sh  # FP-12 measure == paint, one typography context per thread (TSan)
+tools/ci-memory-budget.sh  # FP-33 image cache budget, LRU, low-memory purge (about 5 s)
+tools/ci-layout-animation.sh  # FP-40 LayoutAnimation update/create/delete curves (about 40 s)
+tools/ci-backdrop.sh  # FP-41 expo-blur backdrop blur, tint, outside unchanged, ss 0/4, ScrollView (about 2 s)
+tools/ci-perf.sh  # FP-53 frame-time budgets, median of 5 runs x3 fixtures (about 45 s)
+tools/ci-devtools-frames.sh  # FP-54 DevTools trace: frames == presents while recording, none outside, RN clock (about 55 s)
+tools/ci-record-raster.sh     # FP-13 record/raster split: pixels == pre-pass, phases stamped
+tools/ci-record-no-gl.sh      # FP-14 RECORD makes no GL call (shim counts 0, no context current), pixels == FP-13
+tools/ci-raster-thread.sh     # FP-15 raster thread: stall still presents, 0 torn frames, 20 clean quits
+tools/ci-partial-repaint.sh    # FP-18 partial repaint: <= 5% per spinner frame, pixel-identical to full, 0.7 rule
+tools/ci-backend-agnostic.sh  # FP-20 no GL above the backend, pixels == pre-pass, metal/vulkan policy: 0 GL names, no supersample
+tools/ci-metal.sh             # FP-21 Metal: refused off darwin, gles default (darwin arms run via parity-mac.sh)
+tools/ci-metal-headless.sh    # FP-23 headless Metal: refused off darwin, headless gles default (darwin arms via parity-mac.sh)
+tools/ci-metal-pacing.sh  # FP-27: linux ~3 s (displaylink refusal); darwin ~1 min via parity-mac
+tools/ci-resize-geometry.sh   # FP-30 resize sync: no stale-size present, 1 s wait cap (~20 s)
+tools/ci-gpu-availability.sh  # FP-31 GPU availability switch: zero draw/present/upload while unavailable, full repaint on restore (~45 s)
+tools/ci-context-loss.sh     # FP-32 context loss: 10 forced losses, every box correct on the 1st present after each, ASan arm (~15 s + incremental ASan build)
+tools/ci-external-texture.sh  # FP-42 external textures: 30 fps producer under clip+rotate+opacity, right frame per present, unregister repaints (~16 s)
+tools/ci-snapshot.sh          # FP-43 view snapshots: captureRef == on-screen crop within 2 levels, upright, scale 1/2, ss4, headless (~25 s)
+tools/ci-platform-view.sh     # FP-44 platform views: X11 child window tracks scroll/translate/clip per present, RN overlay above it, 3 arms (~30 s)
+tools/ci-prewarm.sh  # FP-34 pre-warm tour: coverage counters, hidden, first-use cost vs off control, tour < 150 ms (about 20 s)
+tools/ci-unit.sh  # FP-50 rni-scenegraph-tests via CTest (>= 30 cases, < 5 s) + --dump-draw-ops stable dump (about 5 s)
+tools/ci-image-event-lifetime.sh  # FP-57: onLoadStart vs teardown setEnabled (TSan + RNI_BIN), ~40 s
+tools/ci-golden.sh  # FP-51 per-backend goldens: 10 cases vs tools/golden/linux-gles, tolerance policy (~3 s)

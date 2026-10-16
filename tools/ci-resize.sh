@@ -65,6 +65,7 @@ CI_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 . "$CI_TOOLS/ci-triple.sh"
+. "$CI_TOOLS/lib/wait-for.sh"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
 FIXTURE="$ROOT/fixtures/p3-conformance"
 
@@ -119,7 +120,8 @@ BUNDLE="$APP/impeller/build/index.impeller.bundle"
 [ -s "$BUNDLE" ] || fail "no bundle produced"
 
 STALL_N=10
-STALL_MS=1200
+# FP-06: the window the refresh callback has to paint in; a slow binary on a busy box gets more.
+STALL_MS="$(rni_scaled 1200 | cut -d. -f1)"
 
 echo "== 3. assert 1/3: a resize requested at frame $STALL_N repaints DURING the stall =="
 POS_LOG="$WORK/positive.log"

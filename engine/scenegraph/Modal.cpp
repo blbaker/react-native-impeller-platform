@@ -12,12 +12,42 @@ namespace rni {
 
 namespace react = facebook::react;
 
-int SceneGraph::paint(ImpellerDisplayListBuilder builder, float pointScaleFactor) {
+int SceneGraph::paint(ImpellerDisplayListBuilder builder, float pointScaleFactor,
+                      RasterJobs* jobs, FrameDamage* damage,
+                      ImpellerDisplayListBuilder culled) {
   std::vector<react::EventEmitter::Shared> shows;
   int painted;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    painted = paintLocked(builder, pointScaleFactor, &shows);
+    painted = paintLocked(builder, pointScaleFactor, &shows, jobs);
+    if (pvFrame_) pvRecordOverlaysLocked(pointScaleFactor);  // FP-44
+    // FP-18: under the walk's lock, so no mark lands between walk and diff.
+    FrameDamage unused;
+    damage_.EndWalk(damage ? damage : &unused,
+                    [this](int tag) { return nodes_.count(tag) > 0; });
+    // FP-44: rasterizer.cc disables partial repaint while platform views are
+    // composited ("partial repaint with platform view present" is unsupported).
+    if (pvFrame_ && damage && damage->partial) {
+      damage->partial = false;
+      damage->reason = "platform_views";
+    }
+    if (culled && damage && damage->partial && damage->w > 0 && damage->h > 0) {
+      // Per-frame outputs of the walk stay the full walk's.
+      const int fullPainted = painted_, fullSprites = spritesDrawn_;
+      const bool spinning = spinnerAnimating_.load(std::memory_order_relaxed);
+      cullActive_ = true;
+      cullBox_.l = (float)damage->x;
+      cullBox_.t = (float)damage->y;
+      cullBox_.r = (float)(damage->x + damage->w);
+      cullBox_.b = (float)(damage->y + damage->h);
+      cullBox_.empty = false;
+      std::vector<react::EventEmitter::Shared> again;
+      paintLocked(culled, pointScaleFactor, &again, jobs);
+      cullActive_ = false;
+      painted_ = fullPainted;
+      spritesDrawn_ = fullSprites;
+      spinnerAnimating_.store(spinning, std::memory_order_relaxed);
+    }
   }
   // onShow once the modal has been painted; dispatched outside mutex_.
   for (const auto& e : shows) {

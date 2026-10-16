@@ -13,6 +13,7 @@ packages-engine/*/bin/
 engine/build/
 engine/build-asan/
 engine/build-tsan/
+engine/build-fuzz/
 engine/rn/node_modules/
 engine/third_party/hermes/
 engine/third_party/hermes-build/

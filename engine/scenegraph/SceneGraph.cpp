@@ -1,4 +1,6 @@
 #include "scenegraph/SceneGraph.h"
+#include "scenegraph/DynamicNumber.h"
+#include "fabric/ImageStore.h"
 
 #include "scenegraph/CaretBlink.h"
 #include "scenegraph/CursorKinds.h"
@@ -30,7 +32,11 @@
 #include "scenegraph/Outline.h"
 #include "scenegraph/ScrollIndicators.h"
 #include "scenegraph/ActivityIndicator.h"
+#include "scenegraph/BackdropBlur.h"
+#include "fabric/ExpoBlurShadowNode.h"  // FP-41
 #include <react/renderer/components/image/ImageProps.h>  // A19
+#include "fabric/TextureViewShadowNode.h"  // FP-42
+#include "fabric/PlatformViewShadowNode.h"  // FP-44
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
 #include "scenegraph/EllipsizeText.h"
@@ -44,23 +50,15 @@
 #include "text/TextTransform.h"
 #include "text/TypographyContexts.h"
 
-// ENG item 2 — supersample offscreen render. Direct GL entry points link on
-// Linux (EGL GLESv2) and macOS (ANGLE dylibs). On Windows they are resolved at
-// first use from ANGLE's libGLESv2.dll (SceneGraphGl.h), and every offscreen
-// hook also checks scenegraph_gl::Ready(), so an unresolved table paints in
-// place. Android is Vulkan: no GL, the offscreen stays compiled out there.
-#if !defined(__ANDROID__)
-#define RNI_SUPERSAMPLE_GL 1
-#include "scenegraph/SceneGraphGl.h"
+// FP-20: no GL here. Textures and the supersample offscreen go through the
+// RenderBackend (scenegraph/GpuBackend.h); the GL pieces live in
+// TextureUploaderGl.cpp / SupersampleBackendGl.cpp.
+// <world> ENG-09/10 GPU textures have never run on Windows; they stay compiled
+// out there until gated on that backend.
+#if !defined(_WIN32)
+#define RNI_WORLD_GPU 1
 #else
-#define RNI_SUPERSAMPLE_GL 0
-#endif
-// <world> ENG-09/10 GPU textures share those entry points but have never run on
-// Windows; they stay compiled out there until gated on that backend.
-#if RNI_SUPERSAMPLE_GL && !defined(_WIN32)
-#define RNI_WORLD_GL 1
-#else
-#define RNI_WORLD_GL 0
+#define RNI_WORLD_GPU 0
 #endif
 
 #include <algorithm>
@@ -148,7 +146,7 @@ bool svgFillFromDynamic(const folly::dynamic& v, float out[4]) {
   // reached. Read numerics by VALUE, never by storage class.
   auto* type = v.get_ptr("type");
   if (type == nullptr || !type->isNumber()) return false;
-  if (type->asDouble() != 0.0) return false;  // gradient ref / currentColor: not tier 1
+  if (NumberOf(*type) != 0.0) return false;  // gradient ref / currentColor: not tier 1
   auto* payload = v.get_ptr("payload");
   if (payload == nullptr) return false;  // "none"
   // ⛔ THE PAYLOAD DOES NOT FIT IN A SIGNED INT, AND folly SAYS SO BY TYPE.
@@ -169,7 +167,7 @@ bool svgFillFromDynamic(const folly::dynamic& v, float out[4]) {
   // Semi-transparent fills (alpha < 0x80) DO land in int range, so a test
   // using only those would have passed while every solid colour failed.
   if (!payload->isNumber()) return false;  // unresolved brush
-  const auto argb = static_cast<uint32_t>(static_cast<int64_t>(payload->asDouble()));
+  const auto argb = static_cast<uint32_t>(ClampTo<int64_t>(NumberOf(*payload)));
   out[3] = (float)((argb >> 24) & 0xFF) / 255.0f;
   out[0] = (float)((argb >> 16) & 0xFF) / 255.0f;
   out[1] = (float)((argb >> 8) & 0xFF) / 255.0f;
@@ -199,7 +197,7 @@ bool svgBrushFromDynamic(const folly::dynamic& v, float out[4], bool* isRef,
   if (!v.isObject()) return false;
   auto* type = v.get_ptr("type");
   if (type == nullptr || !type->isNumber()) return false;
-  const int t = (int)type->asDouble();
+  const int t = ClampTo<int>(NumberOf(*type));
   if (t == 1) {
     // url(#id) -- the gradient/pattern lives elsewhere in the tree.
     auto* br = v.get_ptr("brushRef");
@@ -242,7 +240,7 @@ std::vector<float> svgDashFromDynamic(const folly::dynamic& v) {
   std::vector<float> raw;
   auto one = [&](const folly::dynamic& e) -> bool {
     if (e.isNumber()) {
-      raw.push_back((float)e.asDouble());
+      raw.push_back((float)NumberOf(e));
       return true;
     }
     if (e.isString()) return svgDashLength(e.asString(), &raw);
@@ -273,7 +271,7 @@ void readSvgPaintProps(SceneNode& node, const P* pp) {
   // strokeWidth is folly::dynamic: a number OR a length string ("2", "2px").
   node.svgStrokeWidth = 1.0f;
   if (pp->strokeWidth.isNumber()) {
-    node.svgStrokeWidth = (float)pp->strokeWidth.asDouble();
+    node.svgStrokeWidth = (float)NumberOf(pp->strokeWidth);
   } else if (pp->strokeWidth.isString()) {
     try {
       node.svgStrokeWidth = std::stof(pp->strokeWidth.asString());
@@ -294,7 +292,7 @@ void readSvgPaintProps(SceneNode& node, const P* pp) {
 // Shape geometry props are folly::dynamic because rnsvg accepts a number or a
 // length string. Same by-value rule as everywhere else in this file.
 float svgLength(const folly::dynamic& v, float fallback = 0.0f) {
-  if (v.isNumber()) return (float)v.asDouble();
+  if (v.isNumber()) return (float)NumberOf(v);
   if (v.isString()) {
     try {
       return std::stof(v.asString());
@@ -371,7 +369,11 @@ bool ParseTransformOps(const folly::dynamic& value, react::Transform& out) {
   static const react::ContextContainer kNoContext;
   const react::PropsParserContext context{-1, kNoContext};
   out = react::Transform{};
-  react::fromRawValue(context, react::RawValue(value), out);
+  try {
+    react::fromRawValue(context, react::RawValue(value), out);
+  } catch (const std::exception&) {  // RN's converters throw on a mistyped entry
+    return false;
+  }
   return value.empty() || !out.operations.empty();
 }
 
@@ -389,6 +391,7 @@ SceneGraph::~SceneGraph() {
     std::lock_guard<std::mutex> lock(imageDamage_->mutex);
     imageDamage_->wake = nullptr;
   }
+  if (snapshots_) snapshots_->SetWake(nullptr);  // FP-43: the controller outlives us
   // Release every cached offscreen texture. Ownership of each was transferred
   // to Impeller when it was adopted from the GL handle, so Impeller frees the
   // underlying GL texture on the last Release — we must not glDeleteTextures it.
@@ -396,17 +399,39 @@ SceneGraph::~SceneGraph() {
     if (entry.texture) ImpellerTextureRelease(entry.texture);
   }
   // <world> ENG-09. Same ownership rule as svgCache_ above -- release the
-  // adopted texture, never glDeleteTextures the GL handle it wraps.
+  // texture, never the backend storage it wraps.
   for (auto& [tag, entry] : worldTextureCache_) {
-    if (entry.texture) ImpellerTextureRelease(entry.texture);
+    if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
   }
+  // FP-42: no producer may wake a dead scene; then the same ownership rule.
+  if (textureRegistry_) textureRegistry_->SetFrameListener(nullptr);
+  releaseExternalTextures();
   // ENG-10 sprite atlas -- same ownership rule.
   for (auto& [id, entry] : spriteTextureCache_) {
-    if (entry.texture) ImpellerTextureRelease(entry.texture);
+    if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
   }
   // ENG item 2b — the double-buffered whole-tree offscreen, if a root
   // supersample ran on the final frame and nothing consumed the successor.
   if (treeTexture_) ImpellerTextureRelease(treeTexture_);
+}
+
+void SceneGraph::setRenderContext(ImpellerContext context) {
+  renderContext_ = context;
+  // FP-20: GL generates the names RECORD wraps here, where the context is current.
+  gpu_ = MakeRenderBackend(gpuContext_, gpuPolicy_, context);
+}
+
+void SceneGraph::printGpuBackend() const {
+  std::printf("rn-impeller: gpu_backend context=%s policy=%s uploader=%s supersample=%s\n",
+              GpuBackendName(gpu_.context), GpuBackendName(gpu_.policy),
+              gpu_.uploader ? gpu_.uploader->name() : "none",
+              gpu_.supersample ? gpu_.supersample->name() : "none");
+  std::fflush(stdout);
+}
+
+std::unique_ptr<RasterJobs> SceneGraph::makeRasterJobs() {
+  if (renderContext_ == nullptr) return nullptr;
+  return std::make_unique<RasterJobs>(gpu_.afterRaster);
 }
 
 void SceneGraph::updateFromShadowView(SceneNode& node,
@@ -803,6 +828,29 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     }
   }
 
+  // FP-42 <ImpellerTextureView textureId>.
+  if (node.componentName == "ImpellerTextureView") {
+    node.isExternalTexture = true;
+    if (const auto* tp = dynamic_cast<const react::ImpellerTextureViewProps*>(view.props.get())) {
+      node.externalTextureId = tp->textureId;
+    }
+  }
+  // FP-44 <ImpellerPlatformView color>.
+  if (node.componentName == "ImpellerPlatformView") {
+    node.isPlatformView = true;
+    if (const auto* pp = dynamic_cast<const react::ImpellerPlatformViewProps*>(view.props.get())) {
+      if (pp->color) colorToFloats(pp->color, node.pvColor);
+    }
+  }
+  // FP-41: expo-blur <BlurView>'s native ExpoBlurView.
+  if (node.componentName == react::ExpoBlurViewComponentName) {
+    node.isBlurView = true;
+    if (const auto* bp = dynamic_cast<const react::ExpoBlurViewProps*>(view.props.get())) {
+      node.blurTint = bp->tint;
+      node.blurIntensity = static_cast<float>(bp->intensity);
+    }
+  }
+
   // <Image>. A19: RN's ImageProps (sources, resizeMode, tintColor).
   if (node.componentName == "Image") {
     node.isImage = true;
@@ -823,7 +871,13 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     }
     {
       std::lock_guard<std::mutex> lock(imageDamage_->mutex);
-      if (!imageDamage_->wake) imageDamage_->wake = [this] { bumpVersion(); };
+      if (!imageDamage_->wake) {
+        imageDamage_->wake = [this] { bumpVersion(); };
+        // FP-33: a purge or a reload of an evicted source repaints through the same sink.
+        auto fire = [sink = imageDamage_] { sink->fire(); };
+        imageTextures_.SetReloadWake(fire);
+        rni::image::SetPurgeListener(fire);
+      }
     }
     if (!node.imgEvents) node.imgEvents = std::make_shared<rni::ImageEventBinding>();
     node.imgEvents->update(view, imageDamage_);
@@ -1168,6 +1222,7 @@ void SceneGraph::applyMutations(
   for (const auto& m : mutations) {
     switch (m.type) {
       case react::ShadowViewMutation::Create: {
+        damage_.MarkTag(m.newChildShadowView.tag);  // FP-18
         SceneNode node;
         updateFromShadowView(node, m.newChildShadowView);
         nodes_[node.tag] = std::move(node);
@@ -1179,6 +1234,7 @@ void SceneGraph::applyMutations(
         break;
       }
       case react::ShadowViewMutation::Delete: {
+        damage_.MarkTag(m.oldChildShadowView.tag);  // FP-18: its old bounds
         nodes_.erase(m.oldChildShadowView.tag);
         if (log) {
           std::printf("[fabric] DELETE tag=%d\n", m.oldChildShadowView.tag);
@@ -1187,6 +1243,7 @@ void SceneGraph::applyMutations(
       }
       case react::ShadowViewMutation::Insert: {
         auto childTag = m.newChildShadowView.tag;
+        damage_.MarkTag(childTag);  // FP-18
         if (auto it = nodes_.find(childTag); it != nodes_.end()) {
           updateFromShadowView(it->second, m.newChildShadowView);
           it->second.parent = m.parentTag;
@@ -1213,6 +1270,7 @@ void SceneGraph::applyMutations(
       }
       case react::ShadowViewMutation::Remove: {
         auto childTag = m.oldChildShadowView.tag;
+        damage_.MarkTag(childTag);  // FP-18
         if (auto p = nodes_.find(m.parentTag); p != nodes_.end()) {
           auto& kids = p->second.children;
           kids.erase(std::remove(kids.begin(), kids.end(), childTag), kids.end());
@@ -1232,6 +1290,7 @@ void SceneGraph::applyMutations(
         // With a plain find(), the root is never inserted, `roots_` stays
         // empty, paint() walks nothing, and every child mounts correctly into
         // a tree with no entry point. Symptom: scene_nodes>0, painted_nodes=0.
+        damage_.MarkTag(tag);  // FP-18
         auto& node = nodes_[tag];
         updateFromShadowView(node, m.newChildShadowView);
         if (log) {
@@ -1272,11 +1331,17 @@ void SceneGraph::applyMutations(
   // wake a commit here would not paint until the next unrelated input. Called
   // while mutex_ is still held: bumpVersion takes only wakeMutex_, never mutex_,
   // so there is no lock-order inversion.
-  bumpVersion();
+  // FP-18: every touched tag is marked above, so this is a bounded change.
+  bumpRevision();
 }
 
 // ── Idle-frame damage signal + wake (P12-01) ────────────────────────────────
 void SceneGraph::bumpVersion() {
+  damage_.MarkFull("untagged");  // FP-18: no node to bound it by
+  bumpRevision();
+}
+
+void SceneGraph::bumpRevision() {
   version_.fetch_add(1, std::memory_order_release);
   std::function<void()> wake;
   {
@@ -1284,6 +1349,37 @@ void SceneGraph::bumpVersion() {
     wake = damageWake_;  // copy under the wake lock; never call it while held
   }
   if (wake) wake();
+}
+
+// FP-18: one visit of `node` for DamageTracker. Effects whose pixels leave the
+// node's box (shadows, filters, images, SVG content) are recorded unbounded.
+void SceneGraph::recordDamage(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                              float x, float y, float w, float h, bool unbounded) {
+  // FP-43: a snapshot is not this frame's damage; FP-44: nor an overlay slice.
+  if (cullActive_ || snapshotWalk_ || pvSliceWalk_) return;
+  bool textShadow = false;
+  float font = node.fontSize;
+  for (const auto& r : node.runs) {
+    textShadow = textShadow || r.hasShadow;
+    font = std::max(font, r.fontSize);
+  }
+  unbounded = unbounded || damageSpread_ > 0 || shadowPassNode_ != nullptr ||
+              !node.shadows.empty() || node.elevation > 0.0f || node.hasLayerShadow ||
+              node.blurSigma > 0.0f || !node.dropShadows.empty() || node.isImage ||
+              node.isSwitch || textShadow;
+  float outset = 2.0f;  // hairline strokes centred on the frame edge
+  if (focusedView_ != 0 && focusedView_ == node.tag) outset = 4.0f;  // item 11 ring
+  if (node.outlineWidth > 0.0f) {
+    outset = std::max(outset, node.outlineWidth + std::max(0.0f, node.outlineOffset));
+  }
+  // Glyph ink (italics, descenders, a tight lineHeight) can leave the frame.
+  if (node.isParagraph || node.isTextInput) outset = std::max(outset, std::max(8.0f, font));
+  // FP-42: a texture's frames change with no commit; TextureLayer::Diff marks
+  // its bounds dirty every frame, so it is volatile like a spinner.
+  const bool spinning = (node.isSpinner && node.spAnimating) || node.isExternalTexture;
+  const bool caret = node.isTextInput && node.tag == tiFocused_;
+  damage_.Record(builder, node.tag, node.parent, ImpellerRect{x, y, w, h}, outset, unbounded,
+                 node.overflowHidden, spinning || caret);
 }
 
 void SceneGraph::setDamageWake(std::function<void()> wake) {
@@ -1330,7 +1426,7 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
       // picks int64 for a whole 0 or 1 and double for everything between, so
       // an isDouble() guard drops exactly the endpoints of every 0->1 ramp.
       if (!value.isNumber()) continue;
-      node.opacity = (float)value.asDouble();
+      node.opacity = (float)NumberOf(value);
       ++directPropUpdates_;
       continue;
     }
@@ -1357,7 +1453,7 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
       bool ok = true;
       for (size_t i = 0; i < 16 && ok; ++i) {
         if (!value[i].isNumber()) { ok = false; break; }
-        m[i] = (float)value[i].asDouble();
+        m[i] = (float)NumberOf(value[i]);
       }
       // ⛔ STAGE THEN COMMIT. Writing straight into node.transform and bailing
       // partway through a malformed array would leave the node holding half a
@@ -1374,7 +1470,10 @@ bool SceneGraph::updateViewProps(facebook::react::Tag tag,
   // it is scene damage: bump + wake so the idle-skip loop presents this tick
   // instead of freezing the animation on the last painted frame. Bumped only on
   // a real apply, so a call that matched no known key does not falsely wake.
-  if (directPropUpdates_ != before) bumpVersion();
+  if (directPropUpdates_ != before) {
+    damage_.MarkTag(tag);  // FP-18: NativeAnimated moved this node
+    bumpRevision();
+  }
   return true;
 }
 
@@ -1986,6 +2085,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
 
   // A22: a modal paints in its own pass after the app root (Modal.cpp).
   if (node.isModal && node.tag != modalWalk_) return;
+  // FP-18 culled walk: nothing of this subtree reaches the damage.
+  if (cullActive_ && !damage_.MayPaintInside(node.tag, cullBox_)) return;
 
   ++painted_;
 
@@ -2001,16 +2102,18 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   // still paint -- which is why registering Symbol WITHOUT this early return
   // would have changed nothing about the bug.
   if (node.isSvgDefinition) return;
-#if RNI_SUPERSAMPLE_GL
+  // FP-18: the paths that return before the transform below are not boxed.
+  const bool damageEarlyOut = node.backfaceHidden || node.isWorldRaster || node.isSvgRoot;
+  if (damageEarlyOut) recordDamage(builder, node, x, y, w, h, /*unbounded=*/true);
   // ENG item 2 — SUPERSAMPLE HOOK. An <Svg> root subtree, when supersampling is
-  // enabled AND a render context is wired, is rendered into an N x offscreen and
+  // enabled AND the backend has a supersample offscreen (GL only, FP-20: Metal
+  // and Vulkan get MSAA from the surface), is rendered into an N x offscreen and
   // composited back with a linear downsample instead of painted in place. N=1
   // is a legitimate value (offscreen round-trip, no AA) — it is the mutant
   // control the gate proves does NOT anti-alias. A failure inside the helper
   // returns false and we fall through to the in-place walk below, so a broken
   // offscreen degrades to a correct-but-aliased icon, never a blank one.
-  if (node.isSvgRoot && supersample_ >= 1 && renderContext_ != nullptr &&
-      rni::scenegraph_gl::Ready()) {
+  if (node.isSvgRoot && supersample_ >= 1 && gpu_.supersample != nullptr) {
     if (paintSvgRootSupersampled(builder, node, x, y, w, h)) {
       // ⛔ COUNT THE SUBTREE CACHE-INDEPENDENTLY. The offscreen render (which is
       // the only thing that walks the children, and only on a cache MISS) does
@@ -2023,18 +2126,16 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       return;
     }
   }
-#endif
-#if RNI_WORLD_GL
+#if RNI_WORLD_GPU
   // <world> ENG-09. Same shape as the SVG supersample hook just above: a
   // dedicated node kind short-circuits the ordinary paint (background/
-  // border/text/children) walk. Gated on renderContext_ for the SAME reason
-  // the SVG hook is -- glTexImage2D/ImpellerTextureCreateWithOpenGLTextureHandleNew
-  // need the surface's GL sharegroup, so a host that never wired a render
-  // context (or a <world> whose store has nothing published yet) falls
+  // border/text/children) walk. Gated on the backend's uploader (FP-20), which
+  // exists once a host wired a render context; a host that never did (or a
+  // <world> whose store has nothing published yet) falls
   // through to the plain in-place walk below, which paints this leaf's
   // background/border and nothing else -- never a crash, never a blank
   // surprise beyond "no image".
-  if (node.isWorldRaster && renderContext_ != nullptr) {
+  if (node.isWorldRaster && gpu_.uploader != nullptr) {
     if (paintWorldNode(builder, node, x, y, w, h)) {
       // ENG-10: the drawSprites list composites OVER the world buffer, on the
       // GPU, inside this same single <world> node (no per-sprite nodes).
@@ -2071,6 +2172,19 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     ImpellerDisplayListBuilderTransform(builder, &m);
     ImpellerDisplayListBuilderTransform(builder, &post);
   }
+  // FP-18: the node's box through every transform above it, its own included.
+  if (!damageEarlyOut) recordDamage(builder, node, x, y, w, h, /*unbounded=*/false);
+  // FP-44: RN pixels painted after a platform view that land on it (view_slicer.cc).
+  if (pvFrame_ && pvMainWalk()) pvNoteDrawLocked(builder, node, x, y, w, h);
+  // Effects that spread a descendant's change past its own box.
+  const bool damageSpreads = node.blurSigma > 0.0f || !node.dropShadows.empty() ||
+                             node.hasLayerShadow || node.isSvgRoot;
+  struct SpreadScope {
+    int& depth;
+    bool on;
+    ~SpreadScope() { if (on) --depth; }
+  } spreadScope{damageSpread_, damageSpreads};
+  if (damageSpreads) ++damageSpread_;
 
   // parity item 8: group opacity (see UsesOpacityLayer). Opened AFTER the
   // transform so the layer is in the node's transformed space, and closed
@@ -2246,6 +2360,10 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
 
   // A7: continuous corners fill and clip as the squircle path; borders stay circular.
   const bool continuous = rounded && node.borderContinuous;
+  // FP-44 overlay slice walk: outside the slice the node's OWN pixels go to a
+  // sink; its transform, layers and clips (real builder) still apply.
+  const ImpellerDisplayListBuilder sliceBuilder = builder;
+  if (pvSliceWalk_ && !pvSliceActive_) builder = pvSink_;
   auto drawBoxWith = [&](ImpellerPaint p) {
     ImpellerPath sq = rni::MakeContinuousRRectPath(x, y, w, h, radii);
     if (sq == nullptr) return false;
@@ -2306,11 +2424,11 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                       node.outlineStyle, impellerColor(node.outlineColor, OwnAlpha(node)));
   }
 
-#if RNI_WORLD_GL
+#if RNI_WORLD_GPU
   // ENG-10: a <world> with a sprite list but NO setPixels buffer still
   // composites its sprites, over its own background painted just above. (With
   // a buffer, the early return in the <world> hook already drew them.)
-  if (node.isWorldRaster && renderContext_ != nullptr) {
+  if (node.isWorldRaster && gpu_.uploader != nullptr) {
     paintWorldSprites(builder, node, x, y, w, h);
   }
 #endif
@@ -2556,17 +2674,35 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     if (node.spAnimating) spinnerAnimating_.store(true, std::memory_order_relaxed);
   }
 
+  // FP-41: expo-blur <BlurView>. Clip to the (rounded) box first, as Flutter's
+  // ClipRect bounds a BackdropFilter, so the blur never reads or writes outside it.
+  if (node.isBlurView && w > 0.0f && h > 0.0f) {
+    ImpellerDisplayListBuilderSave(builder);
+    ImpellerPath sqClip = continuous ? rni::MakeContinuousRRectPath(x, y, w, h, radii) : nullptr;
+    if (sqClip != nullptr) {
+      ImpellerDisplayListBuilderClipPath(builder, sqClip, kImpellerClipOperationIntersect);
+      ImpellerPathRelease(sqClip);
+    } else if (rounded) {
+      ImpellerDisplayListBuilderClipRoundedRect(builder, &rect, &radii,
+                                                kImpellerClipOperationIntersect);
+    } else {
+      ImpellerDisplayListBuilderClipRect(builder, &rect, kImpellerClipOperationIntersect);
+    }
+    rni::PaintBackdropBlur(builder, rect, node.blurTint, node.blurIntensity);
+    ImpellerDisplayListBuilderRestore(builder);
+  }
+
   // <Image>. A19: the decoded source, clipped to the (rounded) box.
   if (node.isImage && w > 0.0f && h > 0.0f && !node.imgSources.empty()) {
     const SceneNode::ImageSrc& src = PickImageSource(node.imgSources, w, h);
     rni::ImageTextureInfo ti;
     const float boxW = w * pointScale_, boxH = h * pointScale_;  // FP-16: decode size
-    ImpellerTexture tex = imageTextures_.Get(renderContext_, src.uri, boxW, boxH, &ti);
+    ImpellerTexture tex = imageTextures_.Get(gpu_.uploader.get(), jobs_, src.uri, boxW, boxH, &ti);
     // Natural size: the source's declared size if JS sent one, else pixels / scale.
     float scale = src.scale > 0.0f ? src.scale : 1.0f;
     if (src.width > 0.0f) scale = (float)ti.srcWidth / src.width;
     if (tex == nullptr && !node.imgDefaultUri.empty()) {
-      tex = imageTextures_.Get(renderContext_, node.imgDefaultUri, boxW, boxH, &ti);
+      tex = imageTextures_.Get(gpu_.uploader.get(), jobs_, node.imgDefaultUri, boxW, boxH, &ti);
       scale = 1.0f;
     }
     if (tex != nullptr) {
@@ -2587,6 +2723,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       ImpellerDisplayListBuilderRestore(builder);
     }
   }
+
+  // FP-42: inside this node's transform / opacity and every ancestor clip
+  // (TextureLayer is a leaf under the mutator stack). Leaf opacity = paint alpha.
+  if (node.isExternalTexture) paintExternalTexture(builder, node, x, y, w, h, OwnAlpha(node));
+  // FP-44: the native view's box and mutators (a hole when the host embeds it).
+  if (node.isPlatformView) pvNoteViewLocked(builder, node, x, y, w, h, OwnAlpha(node));
 
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
   // field is focused, else its controlled value), or the placeholder when the
@@ -2791,10 +2933,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
 
   ImpellerPaintRelease(paint);
+  builder = sliceBuilder;  // FP-44
 
   // Children are positioned relative to this node's frame origin.
   const bool clip = node.overflowHidden;
   if (clip) {
+    pvPushClipLocked(builder, x, y, w, h);  // FP-44 kClipRect mutator
     ImpellerDisplayListBuilderSave(builder);
     // Style audit item 13: a rounded box clips its children to the ROUNDED
     // outline (iOS masksToBounds + cornerRadius), not to its square frame.
@@ -2900,6 +3044,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
   if (clip) {
     ImpellerDisplayListBuilderRestore(builder);
+    pvPopClipLocked();
   }
   // Paired with the viewBox save above. AFTER the child walk, for the same
   // reason the SVG-matrix restore is: the mapping exists to transform the
@@ -2980,189 +3125,40 @@ std::string SceneGraph::svgSubtreeCacheKey(const SceneNode& node, int pxW,
   return key;
 }
 
-#if RNI_SUPERSAMPLE_GL
-// ENG item 2 — render the <Svg> subtree into a fresh pxW x pxH offscreen FBO and
-// adopt its colour texture. The heavy lifting (GL FBO dance, re-entry guard,
-// coordinate mapping) lives here so both the initial N x rasterise and any
-// intermediate size go through one code path.
-ImpellerTexture SceneGraph::renderSvgSubtreeToTexture(const SceneNode& node,
-                                                      float x, float y, float w,
-                                                      float h, int pxW,
-                                                      int pxH) {
-  GLint prevFbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-  GLint prevViewport[4] = {0, 0, 0, 0};
-  glGetIntegerv(GL_VIEWPORT, prevViewport);
-
-  GLuint colorTex = 0, fbo = 0, depthStencil = 0;
-  glGenTextures(1, &colorTex);
-  glBindTexture(GL_TEXTURE_2D, colorTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, pxW, pxH, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         colorTex, 0);
-  // ⛔ DEPTH+STENCIL OR EVERY CONCAVE FILL PAINTS ITS BOUNDING BOX. Impeller's
-  // non-convex fills are stencil-then-cover; a colour-only offscreen FBO makes
-  // the accumulate pass a no-op and the cover pass unmasked. Chevrons are
-  // strokes (convex quads, would survive), but an icon set has filled concave
-  // glyphs too — the exact silent-wrong-shape trap HeadlessSurface documents.
-  glGenRenderbuffers(1, &depthStencil);
-  glBindRenderbuffer(GL_RENDERBUFFER, depthStencil);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, pxW, pxH);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                            GL_RENDERBUFFER, depthStencil);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                            GL_RENDERBUFFER, depthStencil);
-
-  ImpellerTexture texture = nullptr;
-  bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-  ImpellerSurface offscreen = nullptr;
-  if (ok) {
-    ImpellerISize size = {pxW, pxH};
-    offscreen = ImpellerSurfaceCreateWrappedFBONew(
-        renderContext_, fbo, kImpellerPixelFormatRGBA8888, &size);
-    ok = offscreen != nullptr;
-  }
-  if (ok) {
-    // Map the painted box (x,y,w,h) onto the whole (0,0,pxW,pxH) offscreen.
-    // Scale then translate: a point p lands at scale*(p - origin), so
-    // (x,y)->(0,0) and (x+w,y+h)->(pxW,pxH). Exact ratios absorb the ceil().
-    const float sx = (float)pxW / w;
-    const float sy = (float)pxH / h;
-    ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
-    ImpellerDisplayListBuilderScale(off, sx, sy);
-    ImpellerDisplayListBuilderTranslate(off, -x, -y);
-    // ⛔ SUPPRESS RE-ENTRY. paintNode would otherwise take the supersample hook
-    // again for this very node and recurse forever. Zero it for the inner walk,
-    // restore after — nested <Svg> roots simply paint in place.
-    const int savedN = supersample_;
-    supersample_ = 0;
-    // ⛔ THE OFFSCREEN WALK MUST COUNT NOTHING. painted_nodes is attributed
-    // CACHE-INDEPENDENTLY at the supersample hook (paintNode: `painted_ +=
-    // countPaintedNodes(node) - 1`), which fires on BOTH a cache hit and miss.
-    // This inner paintNode walk only happens on a MISS (renderSvgSubtreeToTexture
-    // runs only when svgCache_.find misses), so letting it touch painted_ would
-    // make the tally cache-dependent: a hit would count the subtree once (via the
-    // hook), a miss would count it twice (hook + this walk). Save painted_ before
-    // the walk and restore it after so the offscreen render leaves the counter
-    // exactly as it found it — the hook is the single source of truth.
-    //   NOT a `--painted_` (the old fix): that cancelled only the ROOT's extra
-    //   increment and left the CHILDREN double-counted on a miss. With the hook
-    //   attributing the whole subtree, the correct move is to zero this walk's
-    //   contribution entirely, hence save/restore rather than a single decrement.
-    const int savedPainted = painted_;
-    // Reproduce the exact absolute coordinates the caller used: paintNode
-    // computes x = originX + frame.origin.x, so pass origin = painted - frame.
-    const float originX = x - (float)node.layoutMetrics.frame.origin.x;
-    const float originY = y - (float)node.layoutMetrics.frame.origin.y;
-    paintNode(off, node, originX, originY);
-    supersample_ = savedN;
-    painted_ = savedPainted;
-
-    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
-    if (dl) {
-      ImpellerSurfaceDrawDisplayList(offscreen, dl);
-      ImpellerDisplayListRelease(dl);
-      glFinish();
-      // Adopt the FBO's colour texture. Ownership TRANSFERS to Impeller — never
-      // glDeleteTextures(colorTex) after this; the caller holds the
-      // ImpellerTexture (re-adopting the same handle double-frees).
-      ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                        {pxW, pxH}, 1};
-      texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-          renderContext_, &desc, (uint64_t)colorTex);
-    }
-    ImpellerDisplayListBuilderRelease(off);
-  }
-
-  if (offscreen) ImpellerSurfaceRelease(offscreen);
-  // The FBO and depth/stencil renderbuffer are OURS; free them. The colour
-  // texture is NOT — Impeller owns it now (or, on the rare adoption-failure
-  // path, we drop the handle: a single leaked texture, preferable to a
-  // double-free).
-  glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
-  glDeleteFramebuffers(1, &fbo);
-  glDeleteRenderbuffers(1, &depthStencil);
-  glViewport(prevViewport[0], prevViewport[1], prevViewport[2],
-             prevViewport[3]);
-  return texture;
-}
-
-// ENG item 2 — one 2x downsample step. Draws `src` into a fresh dstW x dstH FBO
-// with LINEAR sampling. This is an EXACT box average ONLY at a 2x reduction: a
-// linear tap reads a 2x2 texel footprint, so halving averages all four source
-// texels per destination texel. Reducing 4x in one linear step reads a 2x2
-// footprint out of a 4x4 region and MISSES half the samples — which is why the
-// caller halves iteratively (16x -> 8 -> 4 -> 2 -> 1) instead of once.
-ImpellerTexture SceneGraph::halveTexture(ImpellerTexture src, int srcW,
-                                         int srcH, int dstW, int dstH) {
-  GLint prevFbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-  GLint prevViewport[4] = {0, 0, 0, 0};
-  glGetIntegerv(GL_VIEWPORT, prevViewport);
-
-  GLuint colorTex = 0, fbo = 0;
-  glGenTextures(1, &colorTex);
-  glBindTexture(GL_TEXTURE_2D, colorTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dstW, dstH, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         colorTex, 0);
-  // No depth/stencil needed: this pass draws ONE textured quad, no path fills.
-
-  ImpellerTexture out = nullptr;
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-    ImpellerISize size = {dstW, dstH};
-    ImpellerSurface surf = ImpellerSurfaceCreateWrappedFBONew(
-        renderContext_, fbo, kImpellerPixelFormatRGBA8888, &size);
-    if (surf) {
-      ImpellerDisplayListBuilder b = ImpellerDisplayListBuilderNew(nullptr);
-      // ⛔ Y-FLIP THE DRAW. `src` is read out of a wrapped GL FBO
-      // (ImpellerSurfaceCreateWrappedFBONew), whose colour attachment is
-      // BOTTOM-LEFT origin, while DrawTextureRect samples TOP-LEFT — so each such
-      // draw comes out vertically mirrored. A negative-height srcRect does NOT
-      // flip here (Impeller clamps it and fills the whole surface); flip via a
-      // builder transform instead: translate down by the dst height, scale y by
-      // -1. This MUST be at every FBO-texture draw: the root chain does
-      // (halves + 1) such hops, so flipping only the final composite would leave
-      // odd hop counts (N=2, N=8) mirrored while even counts (N=4) stay upright —
-      // the exact N-dependent parity bug measured.
-      ImpellerRect srcRect = {0, 0, (float)srcW, (float)srcH};
-      ImpellerRect dstRect = {0, 0, (float)dstW, (float)dstH};
-      ImpellerDisplayListBuilderSave(b);
-      ImpellerDisplayListBuilderTranslate(b, 0, (float)dstH);
-      ImpellerDisplayListBuilderScale(b, 1.0f, -1.0f);
-      ImpellerDisplayListBuilderDrawTextureRect(
-          b, src, &srcRect, &dstRect, kImpellerTextureSamplingLinear, nullptr);
-      ImpellerDisplayListBuilderRestore(b);
-      ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(b);
-      if (dl) {
-        ImpellerSurfaceDrawDisplayList(surf, dl);
-        ImpellerDisplayListRelease(dl);
-        glFinish();
-        ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                          {dstW, dstH}, 1};
-        out = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-            renderContext_, &desc, (uint64_t)colorTex);
-      }
-      ImpellerDisplayListBuilderRelease(b);
-      ImpellerSurfaceRelease(surf);
-    }
-  }
-
-  glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
-  glDeleteFramebuffers(1, &fbo);
-  glViewport(prevViewport[0], prevViewport[1], prevViewport[2],
-             prevViewport[3]);
-  return out;
+// ENG item 2 / FP-14 — record the <Svg> subtree mapped onto a pxW x pxH
+// offscreen. The supersample backend renders it (GL: depth+stencil FBO) and
+// halves it on the raster side; this half only walks the tree.
+ImpellerDisplayList SceneGraph::recordSvgSubtree(const SceneNode& node, float x,
+                                                 float y, float w, float h,
+                                                 int pxW, int pxH) {
+  // Map the painted box (x,y,w,h) onto the whole (0,0,pxW,pxH) offscreen.
+  // Scale then translate: a point p lands at scale*(p - origin), so
+  // (x,y)->(0,0) and (x+w,y+h)->(pxW,pxH). Exact ratios absorb the ceil().
+  const float sx = (float)pxW / w;
+  const float sy = (float)pxH / h;
+  ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
+  ImpellerDisplayListBuilderScale(off, sx, sy);
+  ImpellerDisplayListBuilderTranslate(off, -x, -y);
+  // ⛔ SUPPRESS RE-ENTRY. paintNode would otherwise take the supersample hook
+  // again for this very node and recurse forever. Zero it for the inner walk,
+  // restore after — nested <Svg> roots simply paint in place.
+  const int savedN = supersample_;
+  supersample_ = 0;
+  // ⛔ THE OFFSCREEN WALK MUST COUNT NOTHING. painted_nodes is attributed
+  // cache-independently at the supersample hook (paintNode: `painted_ +=
+  // countPaintedNodes(node) - 1`), which fires on both a cache hit and miss;
+  // this walk only runs on a miss, so it saves and restores painted_.
+  const int savedPainted = painted_;
+  // Reproduce the exact absolute coordinates the caller used: paintNode
+  // computes x = originX + frame.origin.x, so pass origin = painted - frame.
+  const float originX = x - (float)node.layoutMetrics.frame.origin.x;
+  const float originY = y - (float)node.layoutMetrics.frame.origin.y;
+  paintNode(off, node, originX, originY);
+  supersample_ = savedN;
+  painted_ = savedPainted;
+  ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
+  ImpellerDisplayListBuilderRelease(off);
+  return dl;
 }
 
 // <world> ENG-09 — WORLD PAINTER. Reads WorldRasterStore by node name (set
@@ -3210,63 +3206,24 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
   // THIS IS THE SECOND LINE OF DEFENSE. setPixels() rejects a mismatched
   // buffer at the JS call site (see WorldRasterModule.h's header comment); a
   // buffer that somehow reached the store undersized would otherwise read out
-  // of bounds in glTexImage2D/glTexSubImage2D below.
+  // of bounds in the upload below.
   if (entry->pixels.size() < (size_t)srcW * (size_t)srcH * 4) return false;
 
   WorldTextureEntry& cacheEntry = worldTextureCache_[node.tag];
-  const bool sizeChanged =
-      cacheEntry.glTex == 0 || cacheEntry.texW != srcW || cacheEntry.texH != srcH;
-
-  if (sizeChanged) {
-    // First frame for this node, or its buffer's dimensions changed --
-    // (re)allocate.
-    //
-    // ⛔ A RESIZE NEEDS A FRESH GL NAME. RELEASE FIRST, THEN glGenTextures.
-    // ImpellerTextureCreateWithOpenGLTextureHandleNew TAKES OWNERSHIP of the
-    // handle: Impeller calls glDeleteTextures on it when the last reference
-    // drops (impeller.h, "Ownership of the handle is transferred"). The old
-    // order reused the adopted name: glTexImage2D the new pixels into it,
-    // THEN release the old wrapper, which DELETED that name along with the
-    // pixels just uploaded, THEN adopt the dead name. Every frame after a
-    // size change sampled a texture with no storage: pure black terrain on
-    // Mesa, with world_sprites_drawn and scene_nodes still reporting success.
-    // Measured by tools/ci-world-resize.sh (a 160x120 -> 320x240 swap
-    // mid-session). Once adopted, the name belongs to Impeller; never reuse it.
-    if (cacheEntry.texture) {
-      ImpellerTextureRelease(cacheEntry.texture);
-      cacheEntry.texture = nullptr;
-      cacheEntry.glTex = 0;  // Impeller deletes it; it is no longer ours
+  // FP-20: the backend's uploader fills the slot (GL: FP-14's raster-side copy
+  // into a pre-generated name, in place when the size is unchanged; Metal /
+  // Vulkan: Impeller uploads). Only when the store's version advanced, or the
+  // slot is stale (first frame, resize, an upload whose frame was dropped).
+  // `entry` (immutable after publish) owns the bytes until the GPU has them.
+  if (SlotStale(cacheEntry.slot, srcW, srcH) || entry->version != cacheEntry.uploadedVersion) {
+    if (!gpu_.uploader->Upload(cacheEntry.slot, jobs_, srcW, srcH, entry->pixels.data(), entry,
+                               UploadFlags{/*clampEdges=*/false, /*image=*/false})) {
+      return false;
     }
-    if (cacheEntry.glTex == 0) {
-      GLuint tex = 0;
-      glGenTextures(1, &tex);
-      cacheEntry.glTex = tex;
-    }
-    glBindTexture(GL_TEXTURE_2D, cacheEntry.glTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, srcW, srcH, 0, GL_RGBA,
-                GL_UNSIGNED_BYTE, entry->pixels.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    cacheEntry.texW = srcW;
-    cacheEntry.texH = srcH;
-    cacheEntry.uploadedVersion = entry->version;
-    ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                      {srcW, srcH}, 1};
-    cacheEntry.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-        renderContext_, &desc, (uint64_t)cacheEntry.glTex);
-  } else if (entry->version != cacheEntry.uploadedVersion) {
-    // Same dimensions, new pixels -- a partial update via glTexSubImage2D is
-    // the whole point of tracking uploadedVersion: re-running glTexImage2D
-    // every frame would reallocate GPU storage for a texture that never
-    // changed size, which is wasteful and is exactly what glTexSubImage2D
-    // avoids.
-    glBindTexture(GL_TEXTURE_2D, cacheEntry.glTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH, GL_RGBA,
-                    GL_UNSIGNED_BYTE, entry->pixels.data());
     cacheEntry.uploadedVersion = entry->version;
   }
 
-  if (cacheEntry.texture == nullptr) return false;
+  if (cacheEntry.slot.texture == nullptr) return false;
 
   // ⛔ NO Y-FLIP HERE — AND THAT IS THE FIX, NOT AN OVERSIGHT.
   //
@@ -3292,12 +3249,12 @@ bool SceneGraph::paintWorldNode(ImpellerDisplayListBuilder builder,
   ImpellerRect dstRect = {0, 0, w, h};
   ImpellerDisplayListBuilderSave(builder);
   ImpellerDisplayListBuilderTranslate(builder, x, y);
-  ImpellerDisplayListBuilderDrawTextureRect(builder, cacheEntry.texture,
+  ImpellerDisplayListBuilderDrawTextureRect(builder, cacheEntry.slot.texture,
                                             &srcRect, &dstRect,
                                             worldSampling(node),  // ENG-21
                                             nullptr);
   ImpellerDisplayListBuilderRestore(builder);
-  // ⛔ DO NOT RELEASE cacheEntry.texture HERE. It is cached across frames in
+  // ⛔ DO NOT RELEASE cacheEntry.slot.texture HERE. It is cached across frames in
   // worldTextureCache_ (unlike the per-icon svgCache_'s LRU eviction, this
   // cache is unbounded -- one <world> app mounts a small, fixed number of
   // these nodes, not an unbounded scrolling list) and the deferred host draw
@@ -3344,43 +3301,14 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
     if (src && srcW > 0 && srcH > 0 &&
         src->pixels.size() >= (size_t)srcW * (size_t)srcH * 4) {
       WorldTextureEntry& e = spriteTextureCache_[textureId];
-      const bool sizeChanged = e.glTex == 0 || e.texW != srcW || e.texH != srcH;
-      if (sizeChanged) {
-        // ⛔ Same ownership rule as paintWorldNode: the adopted name is
-        // Impeller's and dies with the old wrapper. Release FIRST, then take a
-        // fresh name, or a re-registered sprite of a new size adopts a deleted
-        // texture and draws black.
-        if (e.texture) {
-          ImpellerTextureRelease(e.texture);
-          e.texture = nullptr;
-          e.glTex = 0;
+      // FP-20: same uploader rule as paintWorldNode; sprites clamp their edges.
+      if (SlotStale(e.slot, srcW, srcH) || src->version != e.uploadedVersion) {
+        if (gpu_.uploader->Upload(e.slot, jobs_, srcW, srcH, src->pixels.data(), src,
+                                  UploadFlags{/*clampEdges=*/true, /*image=*/false})) {
+          e.uploadedVersion = src->version;
         }
-        if (e.glTex == 0) {
-          GLuint tex = 0;
-          glGenTextures(1, &tex);
-          e.glTex = tex;
-        }
-        glBindTexture(GL_TEXTURE_2D, e.glTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, srcW, srcH, 0, GL_RGBA,
-                     GL_UNSIGNED_BYTE, src->pixels.data());
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        e.texW = srcW;
-        e.texH = srcH;
-        e.uploadedVersion = src->version;
-        ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                          {srcW, srcH}, 1};
-        e.texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-            renderContext_, &desc, (uint64_t)e.glTex);
-      } else if (src->version != e.uploadedVersion) {
-        glBindTexture(GL_TEXTURE_2D, e.glTex);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH, GL_RGBA,
-                        GL_UNSIGNED_BYTE, src->pixels.data());
-        e.uploadedVersion = src->version;
       }
-      if (e.texture) out = &e;
+      if (e.slot.texture && !SlotStale(e.slot, srcW, srcH)) out = &e;
     }
     resolved.emplace(textureId, out);
     return out;
@@ -3399,7 +3327,7 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
     if (s.w <= 0.0f || s.h <= 0.0f || s.alpha <= 0.0f) continue;
     const WorldTextureEntry* tex = resolve(s.textureId);
     if (tex == nullptr) continue;
-    ImpellerRect srcRect = {0, 0, (float)tex->texW, (float)tex->texH};
+    ImpellerRect srcRect = {0, 0, (float)tex->slot.w, (float)tex->slot.h};
     ImpellerRect dstRect = {s.x, s.y, s.w, s.h};
     // Per-sprite globalAlpha: the paint's colour alpha modulates the
     // (premultiplied) texture. Opaque sprites pass no paint at all.
@@ -3409,7 +3337,7 @@ bool SceneGraph::paintWorldSprites(ImpellerDisplayListBuilder builder,
       ImpellerColor c = {1.0f, 1.0f, 1.0f, s.alpha, kImpellerColorSpaceSRGB};
       ImpellerPaintSetColor(alphaPaint, &c);
     }
-    ImpellerDisplayListBuilderDrawTextureRect(builder, tex->texture, &srcRect,
+    ImpellerDisplayListBuilderDrawTextureRect(builder, tex->slot.texture, &srcRect,
                                               &dstRect, sampling, alphaPaint);
     if (alphaPaint) ImpellerPaintRelease(alphaPaint);
     ++spritesDrawn_;
@@ -3489,6 +3417,15 @@ bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
   ImpellerTexture texture = nullptr;
   int texW = 0, texH = 0;
   auto cacheIt = svgCache_.find(key);
+  // FP-14: an entry whose offscreen job failed or was dropped is re-recorded.
+  if (cacheIt != svgCache_.end() && JobFailed(cacheIt->second.job)) {
+    if (cacheIt->second.texture) ImpellerTextureRelease(cacheIt->second.texture);
+    svgCache_.erase(cacheIt);
+    auto oit = std::find(svgCacheOrder_.begin(), svgCacheOrder_.end(), key);
+    if (oit != svgCacheOrder_.end()) svgCacheOrder_.erase(oit);
+    cacheIt = svgCache_.end();
+  }
+  JobFlag job;
   if (cacheIt != svgCache_.end()) {
     texture = cacheIt->second.texture;
     texW = cacheIt->second.texW;
@@ -3498,33 +3435,26 @@ bool SceneGraph::paintSvgRootSupersampled(ImpellerDisplayListBuilder builder,
     if (oit != svgCacheOrder_.end()) svgCacheOrder_.erase(oit);
     svgCacheOrder_.push_back(key);
   } else {
-    // 1. Rasterise the subtree at full N x.
-    ImpellerTexture cur = renderSvgSubtreeToTexture(node, x, y, w, h, pxW, pxH);
-    if (cur == nullptr) return false;  // fall back to in-place
-    int curW = pxW, curH = pxH;
-
-    // 2. Halve repeatedly until within 2x of native. Each step is an exact box
-    //    average; stopping at 2x leaves the final 2x reduction to the composite
-    //    DrawTextureRect below, which is itself an exact 2x box average. This is
-    //    what makes N=4, 8, 16 antialias instead of degenerating to point
-    //    sampling (a single linear tap cannot average more than a 2x2 footprint).
-    int guard = 0;
-    while ((curW > nativeW * 2 || curH > nativeH * 2) && guard++ < 16) {
-      const int nW = std::max(nativeW, curW / 2);
-      const int nH = std::max(nativeH, curH / 2);
-      ImpellerTexture half = halveTexture(cur, curW, curH, nW, nH);
-      ImpellerTextureRelease(cur);  // done with this level
-      if (half == nullptr) return false;
-      cur = half;
-      curW = nW;
-      curH = nH;
+    // FP-14: RECORD records the subtree and wraps the final texture's name;
+    // the raster side rasterises it at full N x and halves it repeatedly until
+    // within 2x of native (each step an exact box average), leaving the final
+    // 2x to the composite below. That is what makes N=4, 8, 16 antialias
+    // instead of degenerating to point sampling.
+    const auto hops = RasterJobs::HalveChain(pxW, pxH, nativeW, nativeH);
+    texW = hops.empty() ? pxW : hops.back().first;
+    texH = hops.empty() ? pxH : hops.back().second;
+    uint64_t handle = 0;
+    texture = gpu_.supersample->Target(jobs_, texW, texH, &handle);
+    if (texture == nullptr) return false;  // no storage ready: paint in place
+    ImpellerDisplayList dl = recordSvgSubtree(node, x, y, w, h, pxW, pxH);
+    if (dl == nullptr) {
+      ImpellerTextureRelease(texture);
+      return false;
     }
-    texture = cur;
-    texW = curW;
-    texH = curH;
+    job = gpu_.supersample->Render(jobs_, dl, pxW, pxH, hops, handle, texture);
 
     // Insert into the cache and evict LRU past the bound.
-    svgCache_[key] = SvgCacheEntry{texture, texW, texH};
+    svgCache_[key] = SvgCacheEntry{texture, texW, texH, job};
     svgCacheOrder_.push_back(key);
     while (svgCacheOrder_.size() > kSvgCacheMax) {
       const std::string& victim = svgCacheOrder_.front();
@@ -3596,104 +3526,44 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   // View borders on an oversize surface lose it. A strict superset of b9edbee.
   if (pxW <= 0 || pxH <= 0 || pxW > 8192 || pxH > 8192) return false;
 
-  GLint prevFbo = 0;
-  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-  GLint prevViewport[4] = {0, 0, 0, 0};
-  glGetIntegerv(GL_VIEWPORT, prevViewport);
+  // FP-14: RECORD records the N x list and wraps the final texture's name;
+  // RasterJobs renders it (depth+stencil, for stencil-then-cover concave
+  // fills) and halves it to within 2x native before RASTER draws this frame.
+  // One linear tap averages a 2x2 footprint, so reducing N x in one step
+  // would point-sample.
+  const auto hops = RasterJobs::HalveChain(pxW, pxH, nativeW, nativeH);
+  const int texW = hops.empty() ? pxW : hops.back().first;
+  const int texH = hops.empty() ? pxH : hops.back().second;
+  uint64_t handle = 0;
+  ImpellerTexture texture = gpu_.supersample->Target(jobs_, texW, texH, &handle);
+  if (texture == nullptr) return false;  // no storage ready: in-place walk
 
-  GLuint colorTex = 0, fbo = 0, depthStencil = 0;
-  glGenTextures(1, &colorTex);
-  glBindTexture(GL_TEXTURE_2D, colorTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, pxW, pxH, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glGenFramebuffers(1, &fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         colorTex, 0);
-  // Depth+stencil for the same reason renderSvgSubtreeToTexture attaches it: any
-  // concave fill in the tree is stencil-then-cover and paints its bounding box
-  // without a stencil buffer.
-  glGenRenderbuffers(1, &depthStencil);
-  glBindRenderbuffer(GL_RENDERBUFFER, depthStencil);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, pxW, pxH);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                            GL_RENDERBUFFER, depthStencil);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                            GL_RENDERBUFFER, depthStencil);
-
-  ImpellerTexture texture = nullptr;
-  int texW = 0, texH = 0;
-  bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-  ImpellerSurface offscreen = nullptr;
-  if (ok) {
-    ImpellerISize size = {pxW, pxH};
-    offscreen = ImpellerSurfaceCreateWrappedFBONew(
-        renderContext_, fbo, kImpellerPixelFormatRGBA8888, &size);
-    ok = offscreen != nullptr;
+  ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
+  // points -> N x device pixels: the same root scale paint() applies, times N.
+  const float s = pointScaleFactor * (float)N;
+  ImpellerDisplayListBuilderScale(off, s, s);
+  // ⛔ SUPPRESS THE PER-<Svg>-ROOT HOOK for the inner walk. With supersample_
+  // still >=2, paintNode would take paintSvgRootSupersampled for each icon —
+  // supersampling twice (wasteful) and, worse, at a scale the icon path does
+  // not expect. The root offscreen already supersamples the icons.
+  const int savedN = supersample_;
+  supersample_ = 0;
+  pvWalkScale_ = (float)N;  // FP-44: platform view boxes in surface pixels
+  for (auto rootTag : roots_) {
+    auto it = nodes_.find(rootTag);
+    if (it == nodes_.end()) continue;
+    paintNode(off, it->second, 0, 0);
   }
-  if (ok) {
-    ImpellerDisplayListBuilder off = ImpellerDisplayListBuilderNew(nullptr);
-    // points -> N x device pixels: the same root scale paint() applies, times N.
-    const float s = pointScaleFactor * (float)N;
-    ImpellerDisplayListBuilderScale(off, s, s);
-    // ⛔ SUPPRESS THE PER-<Svg>-ROOT HOOK for the inner walk. With supersample_
-    // still >=2, paintNode would take paintSvgRootSupersampled for each icon —
-    // supersampling twice (wasteful) and, worse, at a scale the icon path does
-    // not expect. Zero it so the inner walk is a plain in-place render; restore
-    // after. The root offscreen already supersamples the icons along with
-    // everything else.
-    const int savedN = supersample_;
-    supersample_ = 0;
-    for (auto rootTag : roots_) {
-      auto it = nodes_.find(rootTag);
-      if (it == nodes_.end()) continue;
-      paintNode(off, it->second, 0, 0);
-    }
-    paintModalsLocked(off);
-    supersample_ = savedN;
-
-    ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
-    if (dl) {
-      ImpellerSurfaceDrawDisplayList(offscreen, dl);
-      ImpellerDisplayListRelease(dl);
-      glFinish();
-      ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888,
-                                        {pxW, pxH}, 1};
-      texture = ImpellerTextureCreateWithOpenGLTextureHandleNew(
-          renderContext_, &desc, (uint64_t)colorTex);
-      texW = pxW;
-      texH = pxH;
-    }
-    ImpellerDisplayListBuilderRelease(off);
+  pvWalkScale_ = 1.0f;
+  paintModalsLocked(off);
+  supersample_ = savedN;
+  ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
+  ImpellerDisplayListBuilderRelease(off);
+  if (dl == nullptr) {
+    ImpellerTextureRelease(texture);
+    return false;
   }
-
-  if (offscreen) ImpellerSurfaceRelease(offscreen);
-  glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
-  glDeleteFramebuffers(1, &fbo);
-  glDeleteRenderbuffers(1, &depthStencil);
-  glViewport(prevViewport[0], prevViewport[1], prevViewport[2],
-             prevViewport[3]);
-
-  if (texture == nullptr) return false;  // fall back to in-place walk
-
-  // Halve iteratively to within 2x native; the final composite is the last 2x
-  // box average. Exactly the icon path's reasoning: one linear tap averages a
-  // 2x2 footprint, so reducing N x in one step would point-sample.
-  {
-    int guard = 0;
-    while ((texW > nativeW * 2 || texH > nativeH * 2) && guard++ < 16) {
-      const int nW = std::max(nativeW, texW / 2);
-      const int nH = std::max(nativeH, texH / 2);
-      ImpellerTexture half = halveTexture(texture, texW, texH, nW, nH);
-      ImpellerTextureRelease(texture);
-      if (half == nullptr) return false;  // fall back; frame paints in place
-      texture = half;
-      texW = nW;
-      texH = nH;
-    }
-  }
+  gpu_.supersample->Render(jobs_, dl, pxW, pxH, hops, handle, texture);
 
   // ---- Composite in DEVICE PIXELS. ----
   // paint() applies its pointScaleFactor scale around the in-place walk; the
@@ -3723,7 +3593,6 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   treeTexture_ = texture;
   return true;
 }
-#endif  // RNI_SUPERSAMPLE_GL
 
 // Borders are drawn EDGE BY EDGE, as filled trapezoids, not as a stroked rect.
 //
@@ -3922,12 +3791,11 @@ ImpellerColorSource SceneGraph::makeGradientSource(const SceneNode* def,
       kImpellerTileModeClamp, nullptr);
 }
 
-int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
-                            float pointScaleFactor,
-                            std::vector<facebook::react::EventEmitter::Shared>* shows) {
+void SceneGraph::rebuildPaintRegistriesLocked() {
   // Rebuild the gradient registry before walking the tree: a def may be
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
+  imageTextures_.Sweep();  // FP-33
   gradients_.clear();
   svgDefs_.clear();
   for (const auto& [tag, n] : nodes_) {
@@ -3940,9 +3808,25 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
       svgDefs_[n.svgDefName] = &n;
     }
   }
+}
+
+int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
+                            float pointScaleFactor,
+                            std::vector<facebook::react::EventEmitter::Shared>* shows,
+                            RasterJobs* jobs) {
+  // FP-14: GPU work found by this walk is queued here, never done here.
+  struct JobsScope {
+    RasterJobs*& slot;
+    ~JobsScope() { slot = nullptr; }
+  } jobsScope{jobs_};
+  jobs_ = jobs;
+  if (!cullActive_) damage_.BeginWalk();  // FP-18
+  pvBeginWalkLocked();  // FP-44
+  damageSpread_ = 0;
+  imageTextures_.BeginFrame();  // FP-56: once per frame walk (slice/snapshot walks only sweep)
+  rebuildPaintRegistriesLocked();
   svgUseDepth_ = 0;
   spinnerAnimating_.store(false, std::memory_order_relaxed);
-#if RNI_SUPERSAMPLE_GL
   // ENG item 2b — ROOT SUPERSAMPLE HOOK. At N>=2 with a wired context and known
   // surface size, render the WHOLE tree into one N x offscreen and composite it
   // back with a linear downsample — antialiasing primitives Impeller does not
@@ -3956,14 +3840,15 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   pointScale_ = pointScaleFactor > 0.0f ? pointScaleFactor : 1.0f;  // elevation DPR
   painted_ = 0;  // per frame: the root hook's inner walk counts into it (else N>=2 sums frames)
   spritesDrawn_ = 0;  // same rule: world_sprites_drawn is one frame's count
-  if (supersample_ >= 2 && rni::scenegraph_gl::Ready() &&
+  if (supersample_ >= 2 && gpu_.supersample != nullptr &&
       paintTreeSupersampled(builder, pointScaleFactor)) {
+    // FP-18: the inner walk's boxes are in the N x offscreen's space.
+    damage_.ForceFull("root_supersample");
     // painted_ is incremented inside the inner walk paintTreeSupersampled ran,
     // so it already reflects the visited node count.
     collectModalShowsLocked(shows);
     return painted_;
   }
-#endif
   // ⛔ SCALE ONCE, AT THE ROOT — NOT PER NODE.
   // The tree's frames are in points. Applying the device scale as a single
   // root transform means every child, every stroke width and every glyph run

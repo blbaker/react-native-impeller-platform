@@ -176,9 +176,19 @@ const char* kExpoCoreJs = R"JS(
     uuidv5: function (name, namespace) {
       return native.uuidv5(String(name), String(namespace));
     },
-    // No Expo native VIEWS are registered on this engine; null is the
-    // contract's "not registered" answer (CoreModule.swift getViewConfig).
-    getViewConfig: function (moduleName, viewName) { return null; },
+    // FP-41: the one Expo native view this engine registers is expo-blur's
+    // ExpoBlurView (fabric/ExpoBlurShadowNode.h). Any other answers null, the
+    // contract's "not registered" (CoreModule.swift getViewConfig).
+    getViewConfig: function (moduleName, viewName) {
+      if (moduleName === 'ExpoBlur' && viewName === 'ExpoBlurView') {
+        return {
+          validAttributes: { tint: true, intensity: true, blurReductionFactor: true,
+                             blurMethod: true, blurTargetId: true },
+          directEventTypes: {},
+        };
+      }
+      return null;
+    },
     reloadAppAsync: function (reason) {
       return new Promise(function (resolve) {
         native.reload(reason == null ? '' : String(reason));

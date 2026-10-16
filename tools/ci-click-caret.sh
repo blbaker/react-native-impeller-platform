@@ -29,6 +29,7 @@ CI_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 . "$CI_TOOLS/ci-triple.sh"
+. "$CI_TOOLS/lib/wait-for.sh"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
 FIXTURE="$ROOT/fixtures/item3-click-caret"
 APP_NAME="Item3ClickCaret"
@@ -72,6 +73,8 @@ echo "== 2. swap in the item 3 click-caret fixture as the app entry =="
 cp "$FIXTURE/index.js" "$APP/index.js"
 npx --no-install react-native init-impeller > /dev/null 2>&1 || fail "init-impeller failed"
 RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" || fail "engine resolver failed"
+# RNI_BIN overrides the installed engine (sanitizer runs, FP-06).
+[ -z "${RNI_BIN:-}" ] || RESOLVED="$RNI_BIN"
 
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/click-caret.bundle \
@@ -117,11 +120,14 @@ run_win() {  # $1=log $2=frames $3...=extra args
 painted_col() {
   local fy="$1" k="$2" band="$3" tag="p-$1-$2" keys="10:Home:down" i
   for ((i = 0; i < k; i++)); do keys="$keys;ArrowRight:down"; done
-  run_win "$WORK/$tag.log" 600 \
+  # FP-06: capture 3 frames after the last key (keys run one per frame from 10),
+  # not at a ms deadline; a solid caret (RNI_CARET_BLINK_MS=0) so a slow frame
+  # cannot land the capture in a blink-off phase.
+  RNI_CARET_BLINK_MS=0 run_win "$WORK/$tag.log" $((10 + k + 1 + 8)) \
     --screenshot-first "$WORK/$tag-nofocus.ppm" \
     --click-after-frames "5:40,$fy" \
     --key-after-frames "$keys" \
-    --screenshot "$WORK/$tag.ppm" --screenshot-after 150
+    --screenshot "$WORK/$tag.ppm" --screenshot-after-frames $((10 + k + 1 + 3))
   [ -s "$WORK/$tag.ppm" ] || fail "P: no screenshot for $tag"
   set -- $band
   python3 "$CI_TOOLS/caret-pixel-diff.py" "$WORK/$tag-nofocus.ppm" "$WORK/$tag.ppm" 24 "$1" 320 "$2"
@@ -159,19 +165,33 @@ if [ -z "$XPY" ]; then
   echo "CLICK_CARET_GATE_SKIP_R: no DISPLAY / python-xlib -- the REAL-click arm did not run."
 else
   REAL_LOG="$WORK/real.log"
+  # FP-06: each real event waits for the engine's caret line that proves the
+  # previous one landed (no sleeps, no wall-clock run window), then a clean
+  # --quit-on-term exit.
   set +e
   "$RESOLVED" --window --probe-banner off --bundle "$BUNDLE" --app-name "$APP_NAME" \
-      --width "$WIN_W" --height "$WIN_H" --idle-skip --idle-run-sec 12 \
+      --width "$WIN_W" --height "$WIN_H" --idle-skip --quit-on-term \
       > "$REAL_LOG" 2>&1 &
   PID=$!
-  sleep 4
-  "$XPY" "$XCLICK" "React Native (Impeller)" 300 $F1_Y > "$WORK/x1.log" 2>&1; R1=$?
-  "$XPY" "$XKEY" "React Native (Impeller)" z > "$WORK/x2.log" 2>&1; R2=$?
-  "$XPY" "$XCLICK" "React Native (Impeller)" "$X_LEFT" $F1_Y > "$WORK/x3.log" 2>&1; R3=$?
-  "$XPY" "$XKEY" "React Native (Impeller)" x > "$WORK/x4.log" 2>&1; R4=$?
-  wait "$PID"; APPRC=$?
+  rni_track "$PID"
+  R1=1 R2=1 R3=1 R4=1 STEP=start
+  step() {  # name ERE-the-engine-prints-after-it command...
+    local name="$1" ere="$2"; shift 2
+    "$@" > "$WORK/$name.log" 2>&1 || return 1
+    rni_wait_line "$REAL_LOG" "$ere" 20 "$PID" || { STEP="$name (no line /$ere/)"; return 1; }
+  }
+  if rni_wait_line "$REAL_LOG" '^rn-impeller: first_present_ms=' 30 "$PID"; then
+    step x1 '^rn-impeller: caret tag=[0-9-]* pos=6 text=abcdef$' "$XPY" "$XCLICK" "React Native (Impeller)" 300 $F1_Y && R1=0 &&
+    step x2 '^rn-impeller: caret tag=[0-9-]* pos=7 text=abcdefz$' "$XPY" "$XKEY" "React Native (Impeller)" z && R2=0 &&
+    step x3 '^rn-impeller: caret tag=[0-9-]* pos=2 text=abcdefz$' "$XPY" "$XCLICK" "React Native (Impeller)" "$X_LEFT" $F1_Y && R3=0 &&
+    step x4 '^rn-impeller: caret tag=[0-9-]* pos=3 text=abxcdefz$' "$XPY" "$XKEY" "React Native (Impeller)" x && R4=0
+  else
+    STEP="first present"
+  fi
+  kill -TERM "$PID" 2> /dev/null
+  rni_wait_exit "$PID" 60; APPRC=$?
   set -e
-  [ "$R1$R2$R3$R4" = "0000" ] || { cat "$WORK"/x?.log | sed 's/^/   /' >&2; fail "XTest driver failed ($R1$R2$R3$R4)"; }
+  [ "$R1$R2$R3$R4" = "0000" ] || { cat "$WORK"/x?.log | sed 's/^/   /' >&2; grep -E 'caret tag|textinput_focus' "$REAL_LOG" | sed 's/^/   /' >&2; fail "R: real event step failed at $STEP ($R1$R2$R3$R4)"; }
   [ "$APPRC" -eq 0 ] || { tail -30 "$REAL_LOG" | sed 's/^/   /' >&2; fail "windowed app exited $APPRC"; }
   assert_scene_mounted "$REAL_LOG"
   R_TEXT="$(caret_text "$REAL_LOG")"; R_POS="$(caret_pos "$REAL_LOG")"

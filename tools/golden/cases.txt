@@ -1,0 +1,15 @@
+# FP-51 golden cases. Fields (|-separated): name|bundle|app|width|height|initial-url|supersample|max_diff_pixels_percent|max_channel_delta
+# A pixel is "off" when a channel differs by more than max_channel_delta; the case fails when off pixels exceed
+# max_diff_pixels_percent of the image. Per-backend overrides: tools/golden/<backend>/tolerance.txt (name|pct|delta).
+# @WORK@ in a url is the render work dir (the images case writes its PNG there). All cases run headless.
+# style-grid also holds the shadow (shadowIOS, boxShadow, drop-shadow), gradient, filter and spinner tiles.
+style-grid|fixtures/style-audit/prebuilt/style-audit.bundle|probe|1200|2100|probe://grid|0|0.02|2
+style-layout|fixtures/style-coverage/prebuilt/style-coverage.bundle|probe|600|900|probe://g2|0|0.02|2
+text|fixtures/eng22-font-family/prebuilt/eng22-font-family.bundle|Eng22FontFamily|400|300||0|0.02|2
+svg|fixtures/eng13-svg-dash/prebuilt/eng13-svg-dash.bundle|Eng13SvgDash|400|300||0|0.02|2
+aa-ss0|fixtures/eng05-aa/prebuilt/eng05-aa.bundle|Eng05AA|400|300||0|0.02|2
+aa-ss4|fixtures/eng05-aa/prebuilt/eng05-aa.bundle|Eng05AA|400|300||4|0.02|2
+blur|fixtures/fp41-backdrop/prebuilt/fp41-backdrop.bundle|Fp41Backdrop|400|300||0|0.02|2
+world-sprites|fixtures/eng10-world-sprites/prebuilt/eng10-world-sprites.bundle|Eng10Sprites|400|300||0|0.02|2
+world-nearest|fixtures/eng21-world-nearest/prebuilt/eng21-world-nearest.bundle|Eng21Nearest|400|300||0|0.02|2
+images|fixtures/fp16-image-io/prebuilt/fp16-image-io.bundle|Fp16ImageIo|400|300|fp16://show?dir=@WORK@&names=a.png,a.png,a.png&box=120&gap=10&cols=3&mode=cover|0|0.02|2

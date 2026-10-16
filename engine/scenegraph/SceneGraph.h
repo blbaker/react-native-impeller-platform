@@ -27,8 +27,14 @@
 
 #include "impeller.h"
 #include "modules/WorldRasterStore.h"
+#include "scenegraph/DamageTracker.h"
 #include "scenegraph/ImageEvents.h"
 #include "scenegraph/ImagePaint.h"
+#include "scenegraph/TextureRegistry.h"
+#include "scenegraph/PlatformViews.h"
+#include "scenegraph/SnapshotController.h"
+#include "scenegraph/GpuBackend.h"
+#include "scenegraph/RasterJobs.h"
 #include "scenegraph/Shadows.h"
 #include "scenegraph/TextInputStyle.h"
 
@@ -259,6 +265,10 @@ struct SceneNode {
   bool isSwitch{false};
   // A20: <ActivityIndicator>. Colour defaults to iOS gray (#999) when unset.
   bool isSpinner{false};
+  // FP-41: expo-blur BlurView (ExpoBlurView): backdrop blur + tint (BackdropBlur.h).
+  bool isBlurView{false};
+  std::string blurTint{"default"};
+  float blurIntensity{50.0f};
   // A19: <Image> ("Image" from RCTImageView). Sources as JS sent them (uri,
   // scale, size in points); the painter picks one per frame size.
   bool isImage{false};
@@ -451,6 +461,12 @@ struct SceneNode {
   // unset RNSVGImage `name`/uri: silent, not a crash).
   bool isWorldRaster{false};
   std::string worldRasterName;
+  // FP-42 <ImpellerTextureView textureId>: paints TextureRegistry's latest frame.
+  bool isExternalTexture{false};
+  int64_t externalTextureId{0};
+  // FP-44 <ImpellerPlatformView color>: a native child view (PlatformViewRecord.cpp).
+  bool isPlatformView{false};
+  float pvColor[4]{0, 0, 0, 1};
 
 
   std::vector<facebook::react::Tag> children;
@@ -476,7 +492,26 @@ class SceneGraph {
   // ImpellerTextureCreateWithOpenGLTextureHandleNew. Without it, supersample_
   // is inert (the in-place path runs) rather than crashing: a null context is
   // exactly the "not wired" state, distinct from N=0 "disabled".
-  void setRenderContext(ImpellerContext context) { renderContext_ = context; }
+  // FP-14/FP-20: also builds the RenderBackend for the context (GL: the name
+  // pool RECORD wraps textures from, filled here), so call it with the context
+  // current (the raster side). Set the backend first.
+  void setRenderContext(ImpellerContext context);
+  // FP-32: every GPU texture died with a lost context. Releases the cached
+  // ones (images, <world> rasters and sprite atlases, per-<Svg> and root
+  // supersample offscreens) under the scene lock; their CPU sources (image
+  // store, WorldRasterStore, the SVG tree) stay, so the next RECORD re-uploads
+  // and re-renders them. Main thread, before setRenderContext(new context).
+  void dropGpuResources();
+  // FP-20: what `context` is (`--backend`) and whose rules the painter follows
+  // (differs only under RNI_TEST_BACKEND_POLICY). Before setRenderContext.
+  void setGpuBackend(GpuBackend context, GpuBackend policy) {
+    gpuContext_ = context;
+    gpuPolicy_ = policy;
+  }
+  // `gpu_backend context= policy= uploader= supersample=` (after setRenderContext).
+  void printGpuBackend() const;
+  // FP-14: the GPU jobs one RECORD may queue; null without a render context.
+  std::unique_ptr<RasterJobs> makeRasterJobs();
 
   // N. 0 disables (the exact current in-place path, zero behavioural change).
   // >=2 supersamples. 1 is the mutant control: an offscreen round-trip at
@@ -499,6 +534,21 @@ class SceneGraph {
   void setWorldRasterStore(std::shared_ptr<WorldRasterStore> store) {
     worldRasterStore_ = std::move(store);
   }
+  // FP-42. Register/unregister/MarkFrameAvailable wake a frame (bumpRevision).
+  void setTextureRegistry(std::shared_ptr<TextureRegistry> registry);
+  // FP-42: "id:seq:marks,..." for each texture the last full paint drew
+  // (seq 0 = registered, no frame). Read by RecordFrame into the FrameItem.
+  std::string takeExternalTextureNote();
+  // FP-43. RNViewShot requests wake a frame; RECORD (RecordFrame, after the
+  // frame's walk) records each one's subtree into its own display list and
+  // queues its render + readback on `jobs` (snapshot_controller_impeller.cc).
+  void setSnapshotController(std::shared_ptr<SnapshotController> controller);
+  void recordSnapshots(RasterJobs* jobs);
+  // FP-44. `on`: the host composites native child views (linux X11 windowed),
+  // so a platform view is a hole in the RN layers; off: it paints its colour.
+  void setPlatformViewsEmbedded(bool on) { pvEmbedded_ = on; }
+  // FP-44: the last full walk's views + overlay slices (null: none). RecordFrame.
+  std::shared_ptr<PlatformViewFrame> takePlatformViewFrame();
   // ENG-10. Sprite quads the <world> painter actually issued as GPU
   // DrawTextureRect calls during the LAST paint(). Reset per paint(). The gate
   // asserts this equals the drawSprites list length -- proof the quads went
@@ -588,6 +638,8 @@ class SceneGraph {
   // / updateViewProps, or a detached test producer) wakes the GLFW loop if it
   // is asleep in glfwWaitEventsTimeout. Main-thread callers (a windowed scroll,
   // a resize) get a harmless glfwPostEmptyEvent the next poll drains.
+  // FP-18: an untagged bump cannot be bounded, so the next frame repaints in
+  // full. Paths that know their node bump through bumpVersionFor().
   void bumpVersion();
 
   // Install the wake fired by every version_ bump. The callback only does
@@ -610,7 +662,16 @@ class SceneGraph {
   // it. pointScaleFactor is applied as a root transform, which is also what
   // makes text and vector geometry rasterise at full device resolution rather
   // than being upscaled after the fact.
-  int paint(ImpellerDisplayListBuilder builder, float pointScaleFactor = 1.0f);
+  // FP-14: `jobs` receives every GPU job the walk needs (uploads, supersample
+  // offscreens); the walk itself makes no GL call. RasterFrame runs them.
+  // FP-18: `damage` (surfaceW/H in) receives this walk's damage against the
+  // previous walk, computed under the same lock as the walk.
+  // `culled`, when the damage is a non-empty partial: a second walk, same lock,
+  // that skips every subtree whose box misses the damage (Impeller encodes
+  // every op of a list without an rtree, clip or not).
+  int paint(ImpellerDisplayListBuilder builder, float pointScaleFactor = 1.0f,
+            RasterJobs* jobs = nullptr, FrameDamage* damage = nullptr,
+            ImpellerDisplayListBuilder culled = nullptr);
   // A22: the topmost visible modal (0 if none) and its emitter, for Escape.
   facebook::react::Tag topModal(facebook::react::EventEmitter::Shared* emitter);
 
@@ -862,20 +923,10 @@ class SceneGraph {
   // is the same device scale paint() would otherwise apply at the root.
   bool paintTreeSupersampled(ImpellerDisplayListBuilder builder,
                              float pointScaleFactor);
-  // Renders the <Svg> subtree rooted at `node` (painted at x,y,w,h) into a
-  // fresh pxW x pxH offscreen FBO and returns the adopted ImpellerTexture
-  // (ownership transferred from the GL handle — caller Releases it), or null on
-  // any GL/Impeller failure. Depth+stencil attached so concave fills work.
-  ImpellerTexture renderSvgSubtreeToTexture(const SceneNode& node, float x,
-                                            float y, float w, float h, int pxW,
-                                            int pxH);
-  // Downsamples `src` (size srcW x srcH) into a fresh dstW x dstH texture via a
-  // single LINEAR DrawTextureRect — an EXACT box average only when it is a 2x
-  // reduction, which is why paintSvgRootSupersampled halves iteratively rather
-  // than reducing N x in one step. Returns the adopted texture (caller
-  // Releases) or null. Does NOT release `src`.
-  ImpellerTexture halveTexture(ImpellerTexture src, int srcW, int srcH,
-                               int dstW, int dstH);
+  // FP-14: records the <Svg> subtree rooted at `node` (painted at x,y,w,h)
+  // mapped onto a pxW x pxH offscreen, for a raster-side offscreen job.
+  ImpellerDisplayList recordSvgSubtree(const SceneNode& node, float x, float y,
+                                       float w, float h, int pxW, int pxH);
   // <world> ENG-09. Reads WorldRasterStore by node.worldRasterName and paints
   // the RGBA buffer into (x,y,w,h) as a textured rect. Returns false (paints
   // nothing) when the store is unwired, the name is empty, or nothing has
@@ -883,6 +934,11 @@ class SceneGraph {
   // "unset image source" convention the rest of this file uses.
   bool paintWorldNode(ImpellerDisplayListBuilder builder, const SceneNode& node,
                       float x, float y, float w, float h);
+  // FP-42 (flow/layers/texture_layer.cc Paint): the registry's latest frame
+  // into (x,y,w,h), inside the node's transform/opacity and its ancestors' clips.
+  void paintExternalTexture(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                            float x, float y, float w, float h, float alpha);
+  void releaseExternalTextures();  // caller holds mutex_
   // <world> ENG-10. Paints the store's drawSprites list for node.worldRasterName
   // OVER the world buffer, back-to-front, one DrawTextureRect per sprite from
   // the textureId-keyed atlas cache. Returns false when there is no list.
@@ -926,7 +982,14 @@ class SceneGraph {
   // modalWalk_; the modal passes run after the app root, at window (0,0).
   facebook::react::Tag modalWalk_{0};
   int paintLocked(ImpellerDisplayListBuilder builder, float pointScaleFactor,
-                  std::vector<facebook::react::EventEmitter::Shared>* shows);
+                  std::vector<facebook::react::EventEmitter::Shared>* shows,
+                  RasterJobs* jobs);
+  // FP-14: the current paint()'s job list (null outside paint / without GL).
+  RasterJobs* jobs_{nullptr};
+  // FP-20: uploader + supersample backend for renderContext_ (GpuBackend.h).
+  GpuBackend gpuContext_{GpuBackend::kGles};
+  GpuBackend gpuPolicy_{GpuBackend::kGles};
+  RenderBackend gpu_;
   void collectModalsLocked(facebook::react::Tag tag,
                            std::vector<facebook::react::Tag>* out) const;
   void paintModalsLocked(ImpellerDisplayListBuilder builder);
@@ -971,6 +1034,7 @@ class SceneGraph {
     ImpellerTexture texture{nullptr};
     int texW{0};
     int texH{0};
+    JobFlag job;  // FP-14: the raster job that renders it
   };
   static constexpr size_t kSvgCacheMax = 256;
   std::unordered_map<std::string, SvgCacheEntry> svgCache_;
@@ -978,25 +1042,48 @@ class SceneGraph {
   // <world> ENG-09. The store paintWorldNode reads by node name; wired by
   // setWorldRasterStore(), null until a host calls it.
   std::shared_ptr<WorldRasterStore> worldRasterStore_;
-  // Per-node-tag GL texture cache for <world>, keyed by react::Tag (each
+  // Per-node-tag texture cache for <world>, keyed by react::Tag (each
   // <world> instance owns exactly one texture -- unlike svgCache_, there is no
   // content-sharing across different <world> nodes with the same name, since
-  // each may be at a different size/frame). Re-uploaded (glTexSubImage2D) when
-  // the store's version for that node's name advances past what was last
-  // uploaded; fully reallocated (glTexImage2D) on the first frame or a
-  // width/height change.
+  // each may be at a different size/frame). Re-uploaded through the backend's
+  // TextureUploader when the store's version for that node's name advances
+  // past what was last uploaded (in place on GL; a fresh texture otherwise).
   struct WorldTextureEntry {
-    ImpellerTexture texture{nullptr};
-    // GL texture handle -- stored as uint32_t (GLuint's real underlying type
-    // on every platform this engine targets) so this header does not need to
-    // pull in a GL headers just to declare the cache; GLES3/gl3.h is only
-    // ever included from the .cpp (via SceneGraphGl.h), and never on Android.
-    uint32_t glTex{0};
-    int texW{0};
-    int texH{0};
+    TextureSlot slot;  // FP-20: filled by the backend's TextureUploader
     uint64_t uploadedVersion{0};
   };
   std::unordered_map<facebook::react::Tag, WorldTextureEntry> worldTextureCache_;
+  // FP-42: uploaded external-texture frames by node tag (uploadedVersion = frame seq).
+  std::shared_ptr<TextureRegistry> textureRegistry_;
+  std::unordered_map<facebook::react::Tag, WorldTextureEntry> extTextureCache_;
+  std::string extTextureNote_;
+  // FP-43 (SnapshotRecord.cpp).
+  std::shared_ptr<SnapshotController> snapshots_;
+  bool snapshotWalk_{false};  // a snapshot walk: no damage recorded
+  // FP-44 (PlatformViewRecord.cpp): the mutator stack the walk keeps for
+  // platform views (device-px clip rects), the views found, and the overlay
+  // slice walks (view_slicer.cc).
+  bool pvEmbedded_{false};
+  std::vector<DamageTracker::Box> pvClips_;
+  std::shared_ptr<PlatformViewFrame> pvFrame_;
+  std::vector<facebook::react::Tag> pvUnsupportedLogged_, pvSeen_;
+  float pvWalkScale_{1.0f};  // N inside the root supersample walk
+  bool pvSliceWalk_{false}, pvSliceActive_{false};
+  facebook::react::Tag pvSliceStart_{0}, pvSliceEnd_{0};
+  ImpellerDisplayListBuilder pvSink_{nullptr};
+  bool pvMainWalk() const { return !cullActive_ && !snapshotWalk_ && !pvSliceWalk_; }
+  void pvBeginWalkLocked();
+  void pvNoteViewLocked(ImpellerDisplayListBuilder b, const SceneNode& n, float x, float y,
+                        float w, float h, float alpha);
+  void pvNoteDrawLocked(ImpellerDisplayListBuilder b, const SceneNode& n, float x, float y,
+                        float w, float h);
+  void pvPushClipLocked(ImpellerDisplayListBuilder b, float x, float y, float w, float h);
+  void pvPopClipLocked();
+  // After the main walk, same lock: one overlay list per view that needs one.
+  void pvRecordOverlaysLocked(float pointScale);
+  ImpellerDisplayList recordSnapshotLocked(const SceneNode* node, int pxW, int pxH);
+  // gradients_ + svgDefs_ for the walk that follows (paintLocked, snapshots).
+  void rebuildPaintRegistriesLocked();
   // <world> ENG-10. Sprite-atlas GPU textures keyed by textureId (NOT by node
   // tag -- one peep texture is shared by every sprite and every <world> that
   // references it). Uploaded once per registerSprite version; drawSprites
@@ -1012,6 +1099,15 @@ class SceneGraph {
   // off-thread producer (JS applyMutations / updateViewProps) can bump it while
   // the GLFW loop reads it on the main thread with no scene lock held.
   std::atomic<uint64_t> version_{0};
+  // FP-18: changed tags + per-node paint bounds (mutex_, MarkFull atomic).
+  DamageTracker damage_;
+  // FP-18: the revision bump of a change whose node was marked in damage_.
+  void bumpRevision();
+  void recordDamage(ImpellerDisplayListBuilder builder, const SceneNode& node,
+                    float x, float y, float w, float h, bool unbounded);
+  int damageSpread_{0};  // > 0 inside a blur / drop-shadow / content-shadow / SVG subtree
+  bool cullActive_{false};  // FP-18 culled walk: no recording, skip subtrees outside cullBox_
+  DamageTracker::Box cullBox_;
   std::atomic<bool> spinnerAnimating_{false};
   std::chrono::steady_clock::time_point spinnerEpoch_{std::chrono::steady_clock::now()};
   // A19: <Image> textures, one per decoded source.

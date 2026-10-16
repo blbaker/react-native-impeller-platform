@@ -58,7 +58,8 @@ mutate engine/scenegraph/SceneGraph.h \
 mutate engine/scenegraph/SceneGraph.cpp \
 '  version_.fetch_add(1, std::memory_order_release);' \
 '  ++*reinterpret_cast<uint64_t*>(&version_);  // MUTANT B'
-arm B '^  NEW \[churn-[a-z]+\] data race in rni::SceneGraph::(version|bumpVersion)'
+# FP-18 moved the counter bump from bumpVersion() into bumpRevision(); the report names either.
+arm B '^  NEW \[churn-[a-z]+\] data race in rni::SceneGraph::(version|bumpVersion|bumpRevision)'
 
 mutate engine/text/TypographyContexts.cpp \
 'thread_local Slot tSlot;' \

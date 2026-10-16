@@ -23,7 +23,9 @@ ROOT="$PWD"
 BUNDLE="$ROOT/fixtures/native-anim-jsstall/prebuilt/native-anim-jsstall.bundle"
 fail() { echo "NAJ_FAIL: $*" >&2; exit 1; }
 [ -s "$BUNDLE" ] || fail "no committed bundle at $BUNDLE"
-[ "$(uname -s)" = Linux ] || fail "linux only (xvfb); darwin/win32 lanes come with FP-19"
+. tools/lib/host-window.sh
+# darwin (FP-19): real window server, no xvfb; run through tools/parity-mac.sh gate.
+[ "$(rni_host)" != other ] || fail "linux (xvfb) or darwin only"
 if [ -n "${RNI_BIN:-}" ]; then
   BIN="$RNI_BIN"
 else
@@ -32,7 +34,7 @@ else
   BIN="$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller"
 fi
 [ -x "$BIN" ] || fail "no engine binary at $BIN (set RNI_BIN)"
-echo "engine: $BIN ($(sha256sum "$BIN" | cut -c1-12))"
+echo "engine: $BIN ($(shasum -a 256 "$BIN" | cut -c1-12)) host=$(rni_host)"
 
 WORK="$(mktemp -d)"
 cleanup() { [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"; }
@@ -40,8 +42,7 @@ trap cleanup EXIT
 
 run() {  # app tag frames [extra args...]
   local app="$1" tag="$2" frames="$3" rc=0; shift 3
-  ( cd "$(dirname "$BIN")" && RNI_TEST_ANIM_ROW=150 timeout 180 \
-      xvfb-run -a -s "-screen 0 1280x1024x24" "$BIN" --window --scale 1 \
+  ( cd "$(dirname "$BIN")" && RNI_TEST_ANIM_ROW=150 rni_xrun "$WORK/xvfb.auth" timeout 180 "$BIN" --window --scale 1 \
       --width 400 --height 300 --bundle "$BUNDLE" --app-name "$app" \
       --probe-banner off --supersample-rnsvg 0 --frames "$frames" "$@" ) \
     > "$WORK/$tag.log" 2>&1 || rc=$?

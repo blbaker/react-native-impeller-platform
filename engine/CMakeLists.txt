@@ -245,26 +245,60 @@ add_executable(rn-impeller
   host/OsAppearance.cpp
   host/FrameTimings.cpp
   host/FrameScheduler.cpp
+  host/BackendSelect.cpp
+  host/Prewarm.cpp
+  host/FrameItem.cpp
+  host/RecordNoGl.cpp
   host/AnimRowProbe.cpp
+  host/MemoryPressure.cpp
+  host/UniformProbe.cpp
+  host/RasterThread.cpp
+  host/IoContextEgl.cpp
+  host/PoisonProbe.cpp
+  host/ExternalTextureProbe.cpp  # FP-42 test hook
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeSync.cpp>
+  # FP-32: GPU context loss -> teardown + rebuild (windowed EGL).
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextLoss.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextLossGl.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ContextRecovery.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceRebuild.cpp>
+  # FP-44: platform views (X11 child windows; stubs on other hosts).
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PlatformViewsX11Gl.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PlatformViewProbeX11.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeProbe.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
+  base/DevToolsFrames.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
+  base/TestSync.cpp
+  base/GpuAvailability.cpp
   base/GlLimits.cpp
+  base/ProgramCount.cpp
   base/ContextFlags.cpp
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/OsAppearanceDarwin.mm>
   # The offscreen surface, one implementation per platform. Selected here rather
   # than with #ifdefs inside one file: the two share no context-acquisition code
   # at all (Mesa surfaceless EGL vs ANGLE-over-D3D11 loaded by LoadLibrary).
-  $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurface.cpp>
+  $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceGl.cpp>
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/host/WinGLSurface.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurface.cpp>
   # The one Objective-C TU: NSWindow -> layer-backed NSView, which is what
   # ANGLE/Metal accepts as a native window. APPLE-only by generator expression
   # so no other platform ever tries to compile Cocoa.
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwCocoaView.mm>
+  # FP-21: native Metal window backend (CAMetalLayer + ImpellerContextCreateMetalNew).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/MetalSurface.mm>
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceMetal.cpp>
+  # FP-27: CVDisplayLink vsync source (FlutterDisplayLink.mm).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/DisplayLinkDarwin.cpp>
+  # FP-23: headless darwin on Metal (offscreen MTLTexture, SDK patch 0005).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   runtime/InspectorHost.cpp
+  runtime/DevToolsTracing.cpp
   modules/PlatformModules.cpp
   # ENG-14: the host's accessibility settings. darwin windowed builds read
   # NSWorkspace (Cocoa is linked only there); every other build answers false.
@@ -279,7 +313,19 @@ add_executable(rn-impeller
   modules/ExpoConstants.cpp
   modules/ExpoFetch.cpp
   fabric/FabricHost.cpp
+  fabric/ComponentRegistry.cpp
+  fabric/LayoutAnimations.cpp
+  fabric/ExpoBlurShadowNode.cpp
   scenegraph/SceneGraph.cpp
+  scenegraph/SceneGraphContextLoss.cpp
+  # FP-42: external textures (Flutter TextureRegistry + TextureLayer).
+  scenegraph/TextureRegistry.cpp
+  scenegraph/ExternalTexturePaint.cpp
+  scenegraph/PlatformViewRecord.cpp  # FP-44
+  # FP-43: view snapshots (RNViewShot, SnapshotControllerImpeller).
+  scenegraph/SnapshotController.cpp
+  scenegraph/SnapshotRecord.cpp
+  scenegraph/ImageEncode.cpp
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/scenegraph/SceneGraphGlWin.cpp>
@@ -292,14 +338,26 @@ add_executable(rn-impeller
   scenegraph/ActivityIndicator.cpp
   scenegraph/Modal.cpp
   scenegraph/ImagePaint.cpp
+  scenegraph/RasterJobs.cpp
+  scenegraph/GpuBackend.cpp
+  scenegraph/TextureUploaderGl.cpp
+  scenegraph/SupersampleBackendGl.cpp
+  scenegraph/SnapshotReadbackGl.cpp
+  scenegraph/DamageTracker.cpp
+  scenegraph/IoUploaderGl.cpp
   scenegraph/ImageEvents.cpp
   scenegraph/TextInputStyle.cpp
   scenegraph/ColorMatrixFilter.cpp
   scenegraph/ContentFilters.cpp
+  scenegraph/PrewarmTour.cpp
+  scenegraph/BackdropBlur.cpp
   scenegraph/BlendGroup.cpp
   scenegraph/EllipsizeText.cpp
   scenegraph/BorderCurve.cpp
   scenegraph/BorderDashRounded.cpp
+  scenegraph/DrawOpLog.cpp
+  scenegraph/DrawOpHooks.cpp
+  scenegraph/DrawOpHooksObjects.cpp
   text/ImpellerTextLayoutManager.cpp
   text/FontRegistry.cpp
   text/TypographyContexts.cpp
@@ -307,6 +365,26 @@ add_executable(rn-impeller
   text/FontFallback.cpp
   fabric/platform/impeller/PlatformColorTable.cpp
 )
+
+# FP-50: the painter's translation units are compiled with scenegraph/DrawOpHook.h force-included, so
+# every Impeller builder/paint/path call they make can be recorded (--dump-draw-ops, rni-scenegraph-tests).
+# Only .cpp files here: see the note in DrawOpHook.h about inline functions in headers.
+set(RNI_DRAWOP_HOOKED
+  SceneGraph.cpp Shadows.cpp BackgroundLayers.cpp BorderRounded.cpp Outline.cpp ScrollIndicators.cpp
+  ActivityIndicator.cpp Modal.cpp ImagePaint.cpp DamageTracker.cpp ContentFilters.cpp BackdropBlur.cpp
+  BlendGroup.cpp BorderCurve.cpp BorderDashRounded.cpp ExternalTexturePaint.cpp PlatformViewRecord.cpp
+  SnapshotRecord.cpp)
+set(RNI_DRAWOP_HOOKED_PATHS "${CMAKE_SOURCE_DIR}/svg/SvgPath.cpp" "${CMAKE_SOURCE_DIR}/svg/SvgDash.cpp")
+foreach(_f IN LISTS RNI_DRAWOP_HOOKED)
+  list(APPEND RNI_DRAWOP_HOOKED_PATHS "${CMAKE_SOURCE_DIR}/scenegraph/${_f}")
+endforeach()
+foreach(_f IN LISTS RNI_DRAWOP_HOOKED_PATHS)
+  if(MSVC)
+    set_property(SOURCE "${_f}" APPEND PROPERTY COMPILE_OPTIONS "/FI${CMAKE_SOURCE_DIR}/scenegraph/DrawOpHook.h")
+  else()
+    set_property(SOURCE "${_f}" APPEND PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_SOURCE_DIR}/scenegraph/DrawOpHook.h")
+  endif()
+endforeach()
 
 target_include_directories(rn-impeller PRIVATE
   ${CMAKE_SOURCE_DIR}
@@ -333,7 +411,7 @@ if(WIN32 OR APPLE)
   # ⛔ macOS NEEDS THESE FOR THE SAME REASON WINDOWS DOES, AND IT IS EASY TO
   # ASSUME OTHERWISE. Apple ships OpenGL headers, so <OpenGL/gl.h> exists and a
   # reader concludes "macOS has GL, it's fine". It has DESKTOP GL 2.1 and no
-  # EGL whatsoever — HeadlessSurface.cpp includes <EGL/egl.h> and the darwin
+  # EGL whatsoever — HeadlessSurfaceGl.cpp includes <EGL/egl.h> and the darwin
   # build died on exactly that after compiling 337 of 355 objects.
   #
   # They are headers ONLY. Nothing links against EGL/GLESv2 on either platform —
@@ -420,7 +498,12 @@ elseif(RNI_WITH_WINDOW)
       "-framework Cocoa"
       "-framework IOKit"
       "-framework CoreVideo"
-      "-framework QuartzCore")
+      "-framework QuartzCore"
+      "-framework Metal")
+    # MetalSurface.mm holds strong ObjC members in a C++ struct: ARC only.
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/host/MetalSurface.mm"
+      "${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm"
+      PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   else()
     set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
     target_link_libraries(rn-impeller PRIVATE
@@ -459,6 +542,8 @@ if(RNI_WITH_RNSVG)
   target_compile_definitions(rn-impeller PRIVATE RNI_WITH_RNSVG=1)
   target_link_libraries(rn-impeller PRIVATE rnsvg_common)
 endif()
+include(${CMAKE_SOURCE_DIR}/cmake/Fuzz.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/SceneGraphTests.cmake)
 
 # ⛔ SHARED-vs-STATIC IS A PACKAGING DIFFERENCE, AND IT LEAKS INTO OUR LINK LINE.
 # `hermesvm` is a SHARED library on Linux — libhermesvm.so has already absorbed

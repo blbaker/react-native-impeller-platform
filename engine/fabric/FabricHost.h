@@ -26,6 +26,7 @@ class SurfaceHandler;
 namespace rni {
 
 class SceneGraph;
+class LayoutAnimations;
 struct DisplayMetrics;
 
 class FabricHost {
@@ -66,6 +67,16 @@ class FabricHost {
   bool updateSurface(int surfaceId, float width, float height,
                      float pointScaleFactor = 1.0f);
   void stopSurface();
+
+  // FP-40 LayoutAnimation (fabric/LayoutAnimations.h). Tick on the platform
+  // (frame-loop) thread once per frame, after FrameScheduler::BeginFrame.
+  // Returns true while an animation is in flight (the caller keeps requesting
+  // frames). The wake fires on any thread when an animation starts.
+  bool tickLayoutAnimations();
+  bool layoutAnimationActive() const;
+  void setLayoutAnimationWake(std::function<void()> wake);
+  void setLayoutAnimationClock(std::function<std::uint64_t()> nowMs);
+  void printLayoutAnimationSummary() const;
 
   // Touch phases, mapped to TouchEventEmitter's four touch entry points.
   enum class TouchPhase { Down, Move, Up, Cancel };
@@ -329,6 +340,9 @@ class FabricHost {
   std::shared_ptr<facebook::react::RuntimeScheduler> runtimeScheduler_;
   std::shared_ptr<const facebook::react::ComponentDescriptorProviderRegistry>
       providerRegistry_;
+  // Declared before scheduler_: the Scheduler holds a raw animation-delegate
+  // pointer into it, so it must die after the Scheduler.
+  std::unique_ptr<LayoutAnimations> layoutAnimations_;
   std::unique_ptr<facebook::react::SchedulerDelegate> delegate_;
   bool logMutations_{false};
   std::unique_ptr<facebook::react::Scheduler> scheduler_;

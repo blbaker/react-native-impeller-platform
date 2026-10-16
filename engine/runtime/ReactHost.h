@@ -21,7 +21,10 @@
 #include "modules/PlatformModules.h"
 #include "modules/AppStorageModule.h"
 #include "modules/WorldRasterModule.h"
+#include "modules/TextureRegistryModule.h"
+#include "modules/ViewShotModule.h"
 #include "modules/WorldRasterStore.h"
+#include "scenegraph/TextureRegistry.h"
 #include "modules/ClipboardBridge.h"
 #include "modules/ExpoHost.h"
 #include "runtime/DeviceEventSink.h"
@@ -91,6 +94,10 @@ class ReactHost {
   std::shared_ptr<rni::WorldRasterStore> worldRasterStore() {
     return worldRasterStore_;
   }
+  // FP-42. External textures; SceneGraph paints from the SAME registry.
+  std::shared_ptr<rni::TextureRegistry> textureRegistry() { return textureRegistry_; }
+  // FP-43. RNViewShot requests; SceneGraph records them from the SAME controller.
+  std::shared_ptr<rni::SnapshotController> snapshots() { return snapshots_; }
   // Network activity, so a headless run can wait for in-flight REQUESTS and
   // not only for an idle JS thread. See NetworkActivity in NetworkingModule.h.
   std::shared_ptr<NetworkActivity> network() { return network_; }
@@ -202,6 +209,10 @@ class ReactHost {
   std::shared_ptr<ExpoModuleRegistry> expoModules_;
   std::shared_ptr<rni::WorldRasterStore> worldRasterStore_ =
       std::make_shared<rni::WorldRasterStore>();
+  std::shared_ptr<rni::TextureRegistry> textureRegistry_ =
+      std::make_shared<rni::TextureRegistry>();
+  std::shared_ptr<rni::SnapshotController> snapshots_ =
+      std::make_shared<rni::SnapshotController>();
   // ENG-06. The provider owns the NativeAnimatedNodesManager; the pump is the
   // clock the manager does not have. Both outlive the module, which is created
   // lazily by the registry on first JS access.

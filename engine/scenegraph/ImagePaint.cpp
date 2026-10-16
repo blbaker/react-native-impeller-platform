@@ -7,57 +7,136 @@
 #include <cstdlib>
 
 #include "fabric/ImageStore.h"
+#include "scenegraph/IoUploader.h"
 
 namespace rni {
 
-namespace {
-
-void ReleaseDecoded(void* userData) {
-  delete static_cast<std::shared_ptr<const image::Decoded>*>(userData);
-}
-
-}  // namespace
-
 ImageTextures::~ImageTextures() {
   for (auto& [d, e] : entries_) {
-    if (e.texture) ImpellerTextureRelease(e.texture);
+    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture), image::AddLiveTextures(-1);
   }
 }
 
-ImpellerTexture ImageTextures::Get(ImpellerContext context, const std::string& uri, float boxW,
-                                   float boxH, ImageTextureInfo* info) {
-  if (!context) return nullptr;
+void ImageTextures::Release(std::unordered_map<const image::Decoded*, Entry>::iterator it) {
+  if (it->second.slot.texture) {
+    ImpellerTextureRelease(it->second.slot.texture);
+    image::AddLiveTextures(-1);
+  }
+  auto l = live_.find(it->second.uri);
+  if (l != live_.end() && l->second == it->first) live_.erase(l);
+  entries_.erase(it);
+}
+
+void ImageTextures::BeginFrame() {
+  ++frame_;
+  Sweep();
+}
+
+void ImageTextures::Sweep() {
+  const uint64_t epoch = image::EvictionEpoch();
+  const int purges = image::PurgeCount();
+  if (epoch == sweptEpoch_ && purges == sweptPurges_ && keptAlive_ == 0) return;
+  const bool purged = purges != sweptPurges_;
+  sweptEpoch_ = epoch;
+  sweptPurges_ = purges;
+  keptAlive_ = 0;
+  for (auto it = entries_.begin(); it != entries_.end();) {
+    if (image::IsResident(it->first)) {
+      ++it;
+      continue;
+    }
+    if (!purged && it->second.lastUse + 1 >= frame_) {  // still on screen: keep alive
+      ++keptAlive_;
+      ++it;
+      continue;
+    }
+    auto dead = it++;
+    Release(dead);
+  }
+}
+
+size_t ImageTextures::Clear() {
+  const size_t n = entries_.size();
+  for (auto& [d, e] : entries_) {
+    if (e.slot.texture) ImpellerTextureRelease(e.slot.texture), image::AddLiveTextures(-1);
+  }
+  entries_.clear();
+  live_.clear();
+  keptAlive_ = 0;
+  return n;
+}
+
+ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
+                                   const std::string& uri, float boxW, float boxH,
+                                   ImageTextureInfo* info) {
+  if (!uploader) return nullptr;
+  Sweep();
   // FP-16: the cached decode for this box's size bucket (or the best other
   // size of the URI). A load in flight paints nothing yet; its completion
   // wakes the frame loop. Only a local source nobody requested (defaultSource)
   // is decoded here, synchronously, like RN iOS loads its default image.
   image::Lookup f = image::Find(uri, boxW, boxH);
-  if (!f.image && !f.failed && !f.pending) f.image = image::DecodeNow(uri, boxW, boxH);
+  if (!f.image && f.evicted) {  // FP-56 keepAlive: the budget dropped a bitmap still on screen
+    auto l = live_.find(uri);
+    auto it = l == live_.end() ? entries_.end() : entries_.find(l->second);
+    // The uri check: an erased entry's address can come back as another source's bitmap.
+    if (it != entries_.end() && it->second.uri == uri && it->second.slot.texture &&
+        !JobFailed(it->second.slot.job)) {
+      it->second.lastUse = frame_;
+      const image::Decoded& d = *it->second.decoded;
+      info->texWidth = d.width;
+      info->texHeight = d.height;
+      info->srcWidth = d.srcWidth;
+      info->srcHeight = d.srcHeight;
+      return it->second.slot.texture;
+    }
+  }
+  if (!f.image && !f.failed && !f.pending) {
+    // FP-33: a source the budget or a purge dropped is decoded again off-thread; the wake repaints.
+    if (f.evicted) image::Reload(uri, boxW, boxH, reloadWake_);
+    else f.image = image::DecodeNow(uri, boxW, boxH);
+  }
   if (!f.image) return nullptr;
   auto it = entries_.find(f.image.get());
+  // FP-14: an upload whose frame was dropped never ran; upload again.
+  if (it != entries_.end() && JobFailed(it->second.slot.job)) {
+    if (it->second.slot.texture) ImpellerTextureRelease(it->second.slot.texture);
+    entries_.erase(it);
+    it = entries_.end();
+  }
   if (it == entries_.end()) {
     const auto& d = f.image;
     Entry e;
     e.decoded = d;
-    ImpellerTextureDescriptor desc = {kImpellerPixelFormatRGBA8888, {d->width, d->height}, 1};
-    // The mapping keeps the decoded pixels alive until Impeller has uploaded them.
-    ImpellerMapping mapping = {d->rgba.data(), (uint64_t)d->rgba.size(), &ReleaseDecoded};
-    {
-      TRACE_EVENT0("image", "ImageUpload");
-      e.texture = ImpellerTextureCreateWithContentsNew(
-          context, &desc, &mapping, new std::shared_ptr<const image::Decoded>(d));
+    e.uri = uri;
+    const char* where = uploader->deferred() ? "raster" : "record";
+    // FP-17: the IO thread already uploaded it; wrapping its storage makes no GPU call.
+    if (const uint32_t ioName = io::Take(d.get()); ioName != 0) {
+      where = nullptr;  // IoUploader logged it
+      e.slot.texture = uploader->AdoptIo(ioName, d->width, d->height);
+      if (e.slot.texture == nullptr) return nullptr;
+      e.slot.w = d->width;
+      e.slot.h = d->height;
+    } else if (!uploader->Upload(e.slot, jobs, d->width, d->height, d->rgba.data(), d,
+                                 UploadFlags{/*clampEdges=*/false, /*image=*/true})) {
+      return nullptr;  // no storage ready (GL name pool empty): next frame
     }
+    if (e.slot.texture) image::AddLiveTextures(1);
     static const bool log = std::getenv("RNI_IMAGE_LOG") != nullptr;
-    if (log) std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f\n", d->width,
-                         d->height, d->srcWidth, d->srcHeight, boxW, boxH);
+    if (log && where) {
+      std::printf("rn-impeller: image_upload w=%d h=%d src=%dx%d box=%.0fx%.0f thread=%s\n",
+                  d->width, d->height, d->srcWidth, d->srcHeight, boxW, boxH, where);
+    }
     it = entries_.emplace(d.get(), std::move(e)).first;
   }
+  it->second.lastUse = frame_;
+  live_[uri] = it->first;
   const image::Decoded& d = *it->second.decoded;
   info->texWidth = d.width;
   info->texHeight = d.height;
   info->srcWidth = d.srcWidth;
   info->srcHeight = d.srcHeight;
-  return it->second.texture;
+  return it->second.slot.texture;
 }
 
 void PaintImage(ImpellerDisplayListBuilder builder, ImpellerTexture texture,

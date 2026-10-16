@@ -334,6 +334,7 @@ InspectorHost::InspectorHost(ReloadHook reload)
       if (auto q = wq.lock()) q->post(std::move(cb));
     });
     std::weak_ptr<jsi_m::HostTarget> weakTarget = hostTarget_;
+    tracing_.setHostTarget(weakTarget);
     pageId_ = jsi_m::getInspectorInstance().addPage(
         "React Native Bridgeless", /*vm*/ "",
         [weakTarget](std::unique_ptr<jsi_m::IRemoteConnection> remote)
@@ -380,6 +381,7 @@ void InspectorHost::shutdown() {
       packager_->closeQuietly();
       packager_.reset();  // destroys sessions -> releases HostTarget refs
     }
+    tracing_.detach();  // no frame may reach a dying HostTarget
     if (pageId_) {
       jsi_m::getInspectorInstance().removePage(*pageId_);
       pageId_.reset();

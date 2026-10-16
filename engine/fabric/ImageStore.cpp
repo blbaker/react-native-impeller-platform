@@ -10,6 +10,7 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "ImageCache.h"
 #include "ImageInternal.h"
 #include "ImageIoPool.h"
 #include "ImageResize.h"
@@ -37,14 +38,20 @@ struct Job {
 
 std::mutex gMutex;
 std::condition_variable gIdle;
-// uri -> size bucket -> decoded. A failed LOCAL decode maps to null so the painter does not retry it.
-std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<const Decoded>>> gCache;
+// FP-33: uri -> size bucket -> decoded in a byte-budgeted LRU (Cache()). A failed LOCAL decode
+// maps to null so the painter does not retry it.
 std::unordered_map<std::string, std::shared_ptr<Job>> gPending;  // key -> the one job for it
 std::unordered_map<std::string, int> gPendingUri;
 std::unordered_map<uint64_t, std::shared_ptr<Job>> gTickets;
 uint64_t gNextTicket = 0;
 int gInFlight = 0, gJobs = 0, gDedup = 0, gCanceled = 0;
 std::atomic<int> gSync{0};
+std::atomic<UploadHook> gUploadHook{nullptr};  // FP-17
+// FP-06 teardown fence: completions that finish after StopCallbacks() drop their waiters;
+// StopCallbacks() returns only once no completion callback is still running.
+bool gCallbacksStopped = false;
+int gCallbacksRunning = 0;
+std::condition_variable gCallbacksIdle;
 
 IoPool& DecodePool() {
   static IoPool* pool = new IoPool("rni-image-io", DecodePoolSize());
@@ -95,13 +102,18 @@ void Complete(const std::shared_ptr<Job>& job, const LoadResult& r, bool cache) 
   std::vector<Waiter> waiters;
   {
     std::lock_guard<std::mutex> lock(gMutex);
-    if (cache) gCache[job->uri][job->sizeKey] = r.image;
+    if (cache) Cache().Put(job->uri, job->sizeKey, r.image, job->headers);
     waiters = TakeWaiters(*job);
     ErasePending(job);
+    if (gCallbacksStopped) waiters.clear();
+    else if (!waiters.empty()) ++gCallbacksRunning;
   }
+  if (waiters.empty()) return;
   for (auto& w : waiters) {
     if (!w.owned || !w.owner.expired()) w.done(r);
   }
+  std::lock_guard<std::mutex> lock(gMutex);
+  if (--gCallbacksRunning == 0) gCallbacksIdle.notify_all();
 }
 
 void Finish(const std::shared_ptr<Job>& job) {
@@ -129,6 +141,16 @@ void DecodeJob(const std::shared_ptr<Job>& job) {
     if (ReadSourceBytes(job->uri, local)) r.image = RunDecode(local.data(), local.size(), job->boxW, job->boxH, job->uri);
     if (!r.image) r.error = "could not load " + job->uri;
   }
+  if (UploadHook upload = gUploadHook.load(); upload && r.image) {
+    // FP-17: the load completes after the IO thread's upload, still in flight
+    // for WaitIdle until then.
+    std::shared_ptr<const Decoded> image = r.image;
+    upload(std::move(image), [job, r] {
+      Complete(job, r, true);
+      Finish(job);
+    });
+    return;
+  }
   Complete(job, r, r.image || !job->remote);
   Finish(job);
 }
@@ -154,11 +176,7 @@ void FetchJob(const std::shared_ptr<Job>& job) {
 }  // namespace
 
 bool IsCached(const std::string& uri) {
-  std::lock_guard<std::mutex> lock(gMutex);
-  auto u = gCache.find(uri);
-  if (u == gCache.end()) return false;
-  for (const auto& [k, d] : u->second) if (d) return true;
-  return false;
+  return Cache().HasImage(uri);
 }
 
 Lookup Find(const std::string& uri, float boxW, float boxH) {
@@ -166,27 +184,15 @@ Lookup Find(const std::string& uri, float boxW, float boxH) {
   if (bw == 0 || bh == 0) bw = bh = 0;
   Lookup l;
   std::lock_guard<std::mutex> lock(gMutex);
-  auto u = gCache.find(uri);
-  if (u != gCache.end()) {
-    auto s = u->second.find(SizeKey(bw, bh));
-    if (s != u->second.end()) {
-      l.image = s->second;
-      l.failed = !s->second;
-      return l;
-    }
-    // Another size of this URI: the smallest that covers the box, else the largest.
-    for (const auto& [k, d] : u->second) {
-      if (!d) continue;
-      const bool covers = d->width >= boxW && d->height >= boxH;
-      const bool bestCovers = l.image && l.image->width >= boxW && l.image->height >= boxH;
-      const long long area = (long long)d->width * d->height;
-      const long long best = l.image ? (long long)l.image->width * l.image->height : -1;
-      if (!l.image || (covers && (!bestCovers || area < best)) || (!covers && !bestCovers && area > best)) {
-        l.image = d;
-      }
-    }
-    if (l.image) return l;
+  std::shared_ptr<const Decoded> exact;
+  if (Cache().Get(uri, SizeKey(bw, bh), &exact)) {
+    l.image = exact;
+    l.failed = !exact;
+    return l;
   }
+  // Another size of this URI: the smallest that covers the box, else the largest.
+  if ((l.image = Cache().BestOther(uri, boxW, boxH))) return l;
+  l.evicted = Cache().Seen(uri, nullptr);
   l.pending = gPendingUri.count(uri) > 0;
   return l;
 }
@@ -199,7 +205,7 @@ std::shared_ptr<const Decoded> DecodeNow(const std::string& uri, float boxW, flo
   std::shared_ptr<const Decoded> d = ReadSourceBytes(uri, bytes) ? RunDecode(bytes.data(), bytes.size(), bw, bh, uri) : nullptr;
   gSync.fetch_add(1);
   std::lock_guard<std::mutex> lock(gMutex);
-  return gCache[uri].emplace(SizeKey(bw, bh), d).first->second;
+  return Cache().Put(uri, SizeKey(bw, bh), d, {});
 }
 
 uint64_t LoadAsync(const std::string& uri, const Headers& headers, float boxW, float boxH,
@@ -214,11 +220,7 @@ uint64_t LoadAsync(const std::string& uri, const Headers& headers, float boxW, f
   std::function<void()> begin;
   {
     std::lock_guard<std::mutex> lock(gMutex);
-    auto u = gCache.find(uri);
-    if (u != gCache.end()) {
-      auto s = u->second.find(sizeKey);
-      if (s != u->second.end()) cached = true, hit = s->second;
-    }
+    cached = Cache().Get(uri, sizeKey, &hit);
     if (!cached) {
       id = ++gNextTicket;
       auto& slot = gPending[key];
@@ -291,6 +293,7 @@ void PrintStats() {
               "canceled=%d sync=%d max_texture=%d\n",
               DecodePool().size(), DecodePool().started(), jobs, DecodeCount(), PeakLiveDecodes(), dedup,
               canceled, gSync.load(), MaxTextureSize());
+  PrintCacheStats();
 #if defined(__linux__)
   if (FILE* f = std::fopen("/proc/self/status", "r")) {
     char line[256];
@@ -300,6 +303,19 @@ void PrintStats() {
     std::fclose(f);
   }
 #endif
+}
+
+void SetUploadHook(UploadHook hook) { gUploadHook.store(hook); }
+
+void StopCallbacks() {
+  std::unique_lock<std::mutex> lock(gMutex);
+  gCallbacksStopped = true;
+  gCallbacksIdle.wait(lock, [] { return gCallbacksRunning == 0; });
+}
+
+void StartCallbacks() {
+  std::lock_guard<std::mutex> lock(gMutex);
+  gCallbacksStopped = false;
 }
 
 }  // namespace rni::image

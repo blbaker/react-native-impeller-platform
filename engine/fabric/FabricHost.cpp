@@ -1,8 +1,11 @@
 #include "base/Trace.h"
+#include "fabric/LayoutAnimations.h"
 #include <algorithm>
 #include <cmath>
 #include <mutex>
 #include "fabric/FabricHost.h"
+#include "fabric/ComponentRegistry.h"
+#include "fabric/ImageStore.h"
 
 #include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
 #include <react/renderer/components/iostextinput/TextInputComponentDescriptor.h>
@@ -56,7 +59,9 @@
 #include <unordered_set>
 
 #include "modules/CoreModules.h"
+#include "scenegraph/ImageEvents.h"
 #include "scenegraph/SceneGraph.h"
+#include "scenegraph/DynamicNumber.h"
 #include "text/ImpellerTextLayoutManager.h"
 
 namespace rni {
@@ -117,8 +122,11 @@ ExitRaceProbe* gExitRaceProbe = nullptr;  // leaked on purpose (see above)
 
 class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
  public:
-  ImpellerSchedulerDelegate(SceneGraph* sceneGraph, bool logMutations)
-      : sceneGraph_(sceneGraph), logMutations_(logMutations) {}
+  ImpellerSchedulerDelegate(SceneGraph* sceneGraph, bool logMutations,
+                            std::mutex* mountMutex)
+      : sceneGraph_(sceneGraph),
+        logMutations_(logMutations),
+        mountMutex_(mountMutex) {}
 
   void schedulerDidFinishTransaction(
       const std::shared_ptr<const react::MountingCoordinator>&) override {
@@ -136,6 +144,12 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
     // shouldOverridePullTransaction() is true, so the loop never terminates
     // and the JS thread never returns to its event loop. RN's own consumer
     // pulls exactly once.
+    //
+    // FP-40: JS-thread commits and platform-thread LayoutAnimation ticks both
+    // pull here. The lock spans pull AND apply so transactions mount in the
+    // order they were pulled (fabric/LayoutAnimations.h).
+    rni::image_event_probe::BeforeMount();  // FP-57 test probe, before the mount lock
+    std::lock_guard<std::mutex> mountLock(*mountMutex_);
     if (auto transaction = mountingCoordinator->pullTransaction()) {
       if (sceneGraph_ != nullptr) {
         TRACE_EVENT0("fabric", "MountTransaction");
@@ -163,7 +177,7 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
     if (args.isArray()) {
       for (const auto& a : args) {
         if (a.isNumber()) {
-          cmd.nums.push_back(a.asDouble());
+          cmd.nums.push_back(NumberOf(a));
         } else if (a.isBool()) {
           cmd.bools.push_back(a.asBool());
         } else if (a.isString()) {
@@ -217,6 +231,7 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
  private:
   SceneGraph* sceneGraph_;
   bool logMutations_;
+  std::mutex* mountMutex_;
 };
 
 // ⛔ The base EventBeat is INERT: request() only sets a flag, and the PLATFORM
@@ -527,110 +542,13 @@ std::vector<std::string> FabricHost::knownComponentNames() {
 FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
                        ImpellerTypographyContext typography, bool logMutations,
                        std::shared_ptr<DisplayMetrics> displayMetrics) {
+  rni::image::StartCallbacks();
   runtimeScheduler_ = instance.getRuntimeScheduler();
   sceneGraph_ = sceneGraph;
   logMutations_ = logMutations;
 
-  auto providerRegistry =
-      std::make_shared<const react::ComponentDescriptorProviderRegistry>();
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RootComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::ViewComponentDescriptor>());
-  // <Text>: Paragraph is the measurable leaf; Text/RawText are virtual.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::ParagraphComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::TextComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RawTextComponentDescriptor>());
-  // <ScrollView>. ENG-02.
-  //
-  // ⛔ REGISTRATION IS THE WHOLE FEATURE'S FLOOR, NOT A DETAIL.
-  // Without this line a <ScrollView> still MOUNTS -- as a plain View with
-  // ViewProps -- lays out, paints its children, and logs nothing wrong. It is
-  // indistinguishable from "scrolling is unimplemented" by reading paint code,
-  // which is why this add() is checked before any painter change.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::ScrollViewComponentDescriptor>());
-  // <TextInput>. ENG-01b.
-  //
-  // ⛔ REGISTRATION IS THE FLOOR, AND FOR TextInput IT IS ALSO WHERE MEASUREMENT
-  // COMES FROM. BaseTextInputShadowNode::measureContent asks for a
-  // TextLayoutManager via getManagerByName, so this descriptor MUST see the same
-  // ImpellerTextLayoutManager that <Text> uses (inserted into contextContainer
-  // below) or the field measures 0x0 and its own value text never lays out.
-  // Unregistered, <TextInput> mounts as a plain View: it paints its border,
-  // swallows every keystroke, and logs nothing wrong -- byte-for-byte the
-  // read-only surface the Mac gate is currently pinned to.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::TextInputComponentDescriptor>());
-  // <Switch>. ENG-15. Same floor as above: unregistered, a <Switch> mounts as
-  // a plain View, measures 0 x 0 and paints nothing (audit tile 62). See
-  // fabric/SwitchShadowNode.h.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::ImpellerSwitchComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::ImpellerActivityIndicatorComponentDescriptor>());
-  // <Modal>. A22: a window-sized layout root painted after the app root.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::ImpellerModalHostComponentDescriptor>());
-  // <Image>. A19: RN's ImageShadowNode ("Image", from RCTImageView) with OUR
-  // ImageManager (fabric/platform/impeller/.../ImageManager.cpp).
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::ImageComponentDescriptor>());
-#if RNI_WITH_RNSVG
-  // <world>. ENG-09. See fabric/WorldShadowNode.h for why this borrows
-  // RNSVGImageProps/EventEmitter rather than getting its own codegen pair --
-  // registration here is the floor, same as every other host component:
-  // unregistered, a mounted <world> falls back to a plain View with
-  // ViewProps and paints nothing OF ITS OWN, silently.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::WorldComponentDescriptor>());
-  // RNSVGSvgView's ComponentDescriptor is OUR codegen output (react-native-svg's
-  // Svg.js resolves to the platform-suffixed name, which only the codegen
-  // emits); Group/Path use the vendor's own hand-written `using` aliases.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGSvgViewComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGGroupComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGPathComponentDescriptor>());
-  // The basic shapes. Each is converted to path data in SceneGraph and painted
-  // by the SAME fill/stroke code as <Path>, so registering them costs a line
-  // here and nothing in the painter.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGRectComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGCircleComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGEllipseComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGLineComponentDescriptor>());
-  // <Defs> paints nothing -- it is a container for definitions -- but it MUST
-  // be registered or its gradient children never mount and every url(#id)
-  // reference silently resolves to nothing.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGDefsComponentDescriptor>());
-  // <Symbol> + <Use>: one asset, N mounting sites.
-  //
-  // ⚠️ REGISTERING THESE IS NOT WHAT FIXED THEM, AND THAT IS THE LESSON.
-  // Unregistered, <Symbol> mounted with plain ViewProps and painted nothing OF
-  // ITS OWN -- but its <Path> children were registered, so the painter walked
-  // into them and drew the DEFINITION at the defs block's own coordinates. The
-  // symptom was not a missing logo, it was a stray logo somewhere nobody was
-  // probing. Registration lets us READ href/viewBox; SceneGraph's
-  // isSvgDefinition early-return is what stops the leak. Both are required and
-  // either alone is worse than neither.
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGSymbolComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGUseComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGLinearGradientComponentDescriptor>());
-  providerRegistry->add(
-      react::concreteComponentDescriptorProvider<react::RNSVGRadialGradientComponentDescriptor>());
-#endif
+  // FP-52: built by fabric/ComponentRegistry.cpp, shared with the props/scene fuzzers.
+  auto providerRegistry = MakeComponentProviderRegistry();
   providerRegistry_ = providerRegistry;
 
   auto contextContainer = std::make_shared<react::ContextContainer>();
@@ -675,13 +593,17 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
                                                *runtimeScheduler);
   };
 
+  // FP-40: RN's LayoutAnimationDriver, wired as on Android/iOS.
+  layoutAnimations_ = std::make_unique<LayoutAnimations>(
+      toolbox.runtimeExecutor, toolbox.contextContainer);
   {
-    auto d = std::make_unique<ImpellerSchedulerDelegate>(sceneGraph, logMutations);
+    auto d = std::make_unique<ImpellerSchedulerDelegate>(
+        sceneGraph, logMutations, &layoutAnimations_->MountMutex());
     d->commandHandler_ = [this](ViewCommand cmd) { postCommand(std::move(cmd)); };
     delegate_ = std::move(d);
   }
   scheduler_ = std::make_unique<react::Scheduler>(
-      toolbox, /*animationDelegate*/ nullptr, delegate_.get());
+      toolbox, layoutAnimations_->AnimationDelegate(), delegate_.get());
   std::printf("[fabric] scheduler up (UIManagerBinding installed)\n");
   std::fflush(stdout);
   if (const char* ms = std::getenv("RNI_TEST_EXIT_RACE_MS")) {
@@ -701,6 +623,9 @@ FabricHost::~FabricHost() {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
+  // FP-06: no image completion may dispatch onLoad into an emitter the empty-tree
+  // commit below is unmounting (TSan: image-io dispatchEvent vs setEnabled on main).
+  rni::image::StopCallbacks();
   stopSurface();
   // In-flight rendering-update lambdas captured a raw delegate pointer, and
   // the Scheduler only invalidates them behind a feature flag — drop the
@@ -742,6 +667,28 @@ FabricHost::~FabricHost() {
   scheduler_.reset();
   gSchedulerTornDown = true;
   delegate_.reset();
+  layoutAnimations_.reset();
+}
+
+bool FabricHost::tickLayoutAnimations() {
+  if (!scheduler_ || !layoutAnimations_) return false;
+  return layoutAnimations_->Tick(*scheduler_->getUIManager());
+}
+
+bool FabricHost::layoutAnimationActive() const {
+  return layoutAnimations_ && layoutAnimations_->Active();
+}
+
+void FabricHost::setLayoutAnimationWake(std::function<void()> wake) {
+  if (layoutAnimations_) layoutAnimations_->SetWake(std::move(wake));
+}
+
+void FabricHost::setLayoutAnimationClock(std::function<std::uint64_t()> nowMs) {
+  if (layoutAnimations_) layoutAnimations_->SetClock(std::move(nowMs));
+}
+
+void FabricHost::printLayoutAnimationSummary() const {
+  if (layoutAnimations_) layoutAnimations_->PrintSummary();
 }
 
 void FabricHost::startSurface(const std::string& moduleName, int surfaceId,
@@ -776,6 +723,8 @@ void FabricHost::startSurface(const std::string& moduleName, int surfaceId,
   surfaceHandler_->constraintLayout(constraints, layoutContext);
 
   surfaceHandler_->start();  // → AppRegistry.runApplication on the JS thread
+  // FP-40: after start(), as FabricUIManagerBinding::startSurfaceWithSurfaceHandler does.
+  layoutAnimations_->AttachSurface(*surfaceHandler_);
 
   std::printf("[fabric] surface %d (%s) started %gx%g points @%gx (%gx%g px)\n",
               surfaceId, moduleName.c_str(), (double)pointWidth,
@@ -814,6 +763,7 @@ bool FabricHost::updateSurface(int surfaceId, float width, float height,
 void FabricHost::stopSurface() {
   if (!surfaceHandler_) return;
   if (surfaceHandler_->getStatus() == react::SurfaceHandler::Status::Running) {
+    rni::image_event_probe::SurfaceStopping();
     surfaceHandler_->stop();
   }
   scheduler_->unregisterSurface(*surfaceHandler_);

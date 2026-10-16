@@ -40,6 +40,8 @@ Renderer* AsRenderer(jlong handle) {
 
 }  // namespace
 
+extern "C" __attribute__((weak)) void rni_handle_low_memory(const char* source);
+
 extern "C" {
 
 // ⛔ THE SECOND PARAMETER IS jclass, NOT jobject.
@@ -86,6 +88,14 @@ Java_com_reactnativeimpeller_ImpellerRenderer_nativeAttachSurface(
     return JNI_FALSE;
   }
   return JNI_TRUE;
+}
+
+// FP-33: ComponentCallbacks2.onTrimMemory. Levels that mean memory pressure: RUNNING_LOW (10),
+// RUNNING_CRITICAL (15) and the background-kill levels (>= 60).
+JNIEXPORT void JNICALL
+Java_com_reactnativeimpeller_ImpellerRenderer_nativeOnTrimMemory(JNIEnv*, jclass, jint level) {
+  if (level != 10 && level != 15 && level < 60) return;
+  if (rni_handle_low_memory != nullptr) rni_handle_low_memory("android");
 }
 
 JNIEXPORT void JNICALL
