@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# STYLE COVERAGE GATE (audit 2026-10-10, docs/eng/style-coverage-gap.md).
+# STYLE COVERAGE GATE (audit 2026-10-10).
 # Renders the coverage probes with the STAGED engine and scores every tile
 # with tools/style-coverage-measure.py (base control-vs-feature rule + the
 # STRICT rules in tools/style_coverage_rules.py).
@@ -7,7 +7,7 @@
 #   A. LANDED (tools/style-coverage-landed.txt): every tile a fix pass landed
 #      must PASS.
 #   B. KEEP (tools/style-coverage-keep.txt): every tile that passed on the
-#      audit binary (bf7be0f) must still PASS.
+#      audit binary (095dcba) must still PASS.
 #   Tiles in neither list are reported, not judged.
 #
 # Scenes: g2 + risky (fixtures/style-coverage), nw + variants (light, dark,

@@ -5,7 +5,7 @@
 # WHAT IS TRUE TODAY (measured 2026-10-07 on linux llvmpipe AND on the Mac's
 # ANGLE-Metal binary, identical numbers): Impeller's own path route is aliased
 # on both backends (0 partial-coverage pixels; the C API has no AA setter and
-# ignores the target's sample count, see docs/ENG-05-aa-findings.md). The AA
+# ignores the target's sample count). The AA
 # comes from --supersample-rnsvg: at N>=2 the whole tree renders into an Nx
 # offscreen and is downsampled (paintTreeSupersampled). main.cpp defaults N to
 # 4 on __APPLE__ for BOTH headless and windowed runs, so the Mac app gets it.

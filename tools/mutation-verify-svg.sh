@@ -11,7 +11,7 @@
 # ⚠️ Restore by COPY and REBUILD between mutants. Restoring source without
 # rebuilding leaves the PREVIOUS mutant's binary installed, and the next mutant
 # is then scored against the wrong engine -- that exact bug made the animation
-# suite report a pass for the wrong reason (see docs/STATE.md P9-A).
+# suite report a pass for the wrong reason (P9-A).
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)
 

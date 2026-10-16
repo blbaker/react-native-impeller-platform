@@ -11,7 +11,7 @@
 # What this gate does NOT assert: that frame N differs from frame 0. That
 # needs animated content, and nothing in this repo drives a second distinct
 # frame yet — FabricHost.cpp:189 passes a null animation delegate (P9-C, a
-# later phase; see P9-SCOPE.md gate list, which puts the "two captures
+# later phase; the P9 gate list puts the "two captures
 # differ" assertion on ci-animate.sh, not here). Testing it here would
 # require inventing animated fixture content that belongs to that phase.
 #

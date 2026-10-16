@@ -10,7 +10,7 @@
 #      -> a fallback run (seen: the bold row's U+2588 face, 8 px narrower in paint) measures in
 #         one face and paints in another; faces fontconfig also serves by family name can still
 #         match, so the arm accepts any row
-# The check rebuilds the clean binaries after this script (tools/parity-check.sh).
+# Rebuild the clean binaries after this script (tools/engine-build.sh).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/bin:$PATH"; unset RNI_BIN

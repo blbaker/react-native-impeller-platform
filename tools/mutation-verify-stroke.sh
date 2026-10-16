@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Mutation verification for tools/ci-stroke.sh.
 #
-# Restore by cp and REBUILD between mutants (docs/STATE.md P9-A: skipping the
+# Restore by cp and REBUILD between mutants (P9-A: skipping the
 # rebuild scores the next mutant against the previous mutant's binary).
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)

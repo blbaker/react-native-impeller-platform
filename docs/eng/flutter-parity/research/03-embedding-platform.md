@@ -29,7 +29,7 @@ Status: COMPLETE. Pinned Flutter SHA `114eb184d66d7ca136d89eb8ec09f61aff265062`.
   `AndroidSurfaceGLImpeller`, with every other surface method (`CreateGPUSurface`, resize, resource
   context, snapshot) forwarding to whichever is non-null
   [F:engine/src/flutter/shell/platform/android/android_surface_dynamic_impeller.cc:L31-L119].
-- **Windows**: GLES via ANGLE-over-D3D11 (confirmed by the WORKER-BRIEF's known facts and by the
+- **Windows**: GLES via ANGLE-over-D3D11 (confirmed by the study's starting facts and by the
   `shell/platform/windows/egl/*` directory wrapping `<EGL/egl.h>` directly, not raw D3D —
   `EGLErrorToString`/`LogEGLError` are the only abstraction over the platform GPU API
   [F:engine/src/flutter/shell/platform/windows/egl/egl.cc:L1-L68]; `WindowSurface` is an EGL

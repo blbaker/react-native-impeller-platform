@@ -63,7 +63,7 @@ ARGS=(--window --bundle "$BUNDLE" --app-name FirstPresent
       --width "$W" --height "$H" --frames 150 --screenshot-first "$SHOT")
 set +e
 if [ "$OS" = Darwin ]; then
-  # cwd = the engine dir: the binary links ./libimpeller.dylib (MAC-DELIVERY.md).
+  # cwd = the engine dir: the binary links ./libimpeller.dylib.
   ( cd "$(dirname "$BIN")" && zsh "$ROOT/tools/darwin-run-interactive.sh" "$LOG" 60 -- "$BIN" "${ARGS[@]}" ) > /dev/null 2>&1
 else
   "$BIN" "${ARGS[@]}" > "$LOG" 2>&1

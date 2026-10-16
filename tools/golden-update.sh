@@ -14,7 +14,7 @@ golden_backend="${1:?usage: golden-update.sh <linux-gles|darwin-metal|darwin-gle
 . tools/lib/golden-render.sh
 case "$golden_backend" in
   linux-gles) [ "$(uname -s)" = Linux ] || { echo "linux-gles renders on linux" >&2; exit 2; } ;;
-  darwin-*) [ "$(uname -s)" = Darwin ] || { echo "$golden_backend renders on darwin: bash tools/parity-mac.sh gate tools/golden-update.sh $golden_backend" >&2; exit 2; } ;;
+  darwin-*) [ "$(uname -s)" = Darwin ] || { echo "$golden_backend renders on darwin: run tools/golden-update.sh $golden_backend on the Mac itself" >&2; exit 2; } ;;
   win32-gles-angle) [ -n "${RNI_BIN:-}" ] || { echo "use --win" >&2; exit 2; } ;;
   *) echo "unknown backend $golden_backend" >&2; exit 2 ;;
 esac

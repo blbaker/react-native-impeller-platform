@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # FP-23 gate: headless darwin on native Metal (`--headless --backend metal`): an offscreen BGRA8
 # MTLTexture wrapped by SDK patch 0005 (ImpellerSurfaceCreateWrappedMetalTextureNew) and read back
-# with ImpellerSurfaceReadPixels. Run it on the Mac: `bash tools/parity-mac.sh gate tools/ci-metal-headless.sh`.
+# with ImpellerSurfaceReadPixels. Run it on a Mac with RNI_BIN set to the staged darwin binary.
 # Every Metal run has MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1. Arms (each failure prints
 # `METAL_HEADLESS FAIL <arm>: ...`; all arms run):
 #   R  read-back: backend_select metal window=0, metal_offscreen ok=1 bgra8, gpu_backend context=metal

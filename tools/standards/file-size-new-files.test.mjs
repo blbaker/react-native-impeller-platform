@@ -2,8 +2,8 @@
 // Minimal surgical edits). Scoped to NEW files on the branch — a pre-existing
 // large file that wasn't touched is not this branch's debt to fix.
 //
-// Scoped further to source/script files, not long-form docs. This repo's own
-// docs/STATE.md (an append-only engineering log) is already far past 300
+// Scoped further to source/script files, not long-form docs. An append-only
+// engineering log is routinely far past 300
 // lines by design, and a comprehensive audit or design doc is the same
 // shape: the 300-line rule exists to keep CODE reviewable, not to truncate
 // prose. Markdown/JSON/YAML are exempt; code and shell/scripts are not.

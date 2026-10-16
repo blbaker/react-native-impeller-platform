@@ -123,7 +123,7 @@ inline int runPointScaleSelfTest() {
       // Fractional backing scales are real (125%/150% Windows, some Linux
       // compositors). Nothing may round them to an integer.
       {"1.5x window", 1920, 1280, 1.0f, false, 1.5f},
-      // An explicit --scale still wins, so tools/retina-check.sh's
+      // An explicit --scale still wins, so a retina check's
       // `--scale 2` keeps its meaning.
       {"explicit --scale 2 overrides a 1x window", 800, 800, 2.0f, true, 2.0f},
       {"explicit --scale 1 overrides a 2x window", 2560, 1280, 1.0f, true, 1.0f},

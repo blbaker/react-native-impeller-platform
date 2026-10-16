@@ -317,7 +317,7 @@ RULES = {
     'g2:tiPadding': _ti_padding,
     # SC-01
     'g2:textBoxStyle': _text_box_style,
-    # SC-00 (harness example; already correct on bf7be0f)
+    # SC-00 (harness example; already correct on 095dcba)
     'g2:borderAlphaOverBg': _border_alpha_over_bg,
 }
 

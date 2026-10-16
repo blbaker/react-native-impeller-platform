@@ -11,19 +11,16 @@ Impeller the way Flutter does, "strictly but in a RN way". Branch `feat/flutter-
 | [research/03-embedding-platform.md](research/03-embedding-platform.md) | Appendix C: per-OS embedding, present, resize, background, context loss, IO, textures, platform views |
 | [research/04-quality-reliability.md](research/04-quality-reliability.md) | Appendix D: tests, goldens, validation layers, fuzzing, sanitizers, tracing, frame timing, CI |
 | [research/METHOD.md](research/METHOD.md) | How the research was done and audited (sources, pins, citation audit) |
-| [research/flutter-impeller-parity.pdf](research/flutter-impeller-parity.pdf) | Spec + appendices as one linked PDF (citations are GitHub permalinks) |
 | [DIAGRAMS.md](DIAGRAMS.md) | Visual docs: target thread model, backend per OS, how a change lands (Mermaid, renders on GitHub) |
 | [DECISIONS.md](DECISIONS.md) | Baker's directives verbatim and every decision made on his behalf |
-| [PASSES.md](PASSES.md) | The work plan: FP-00..FP-56, each with its gate and mutants; markers show status |
-| [PASSES-B.md](PASSES-B.md) | Lane B plan (FP-16, FP-22, FP-52, FP-24, FP-25), run in parallel on `feat/flutter-parity-b` |
-| [PROGRESS.md](PROGRESS.md) / PROGRESS-B.md | Generated ledgers per lane: every pass attempt, time, model, commit, evidence, session report |
-| [PR.md](PR.md) / PR-B.md | Generated PR descriptions per lane (each merge PR into main uses it, plus a verification note) |
-| [STATE.md](STATE.md) / STATE-B.md | Hand-off notes between pass sessions (gotchas, numbers) |
-| [BLOCKERS.md](BLOCKERS.md) / BLOCKERS-B.md | Blocked passes: exact error, diagnosis, triage decision |
-| [RULES.md](RULES.md) | The protocol every pass session follows |
-| `evidence/` | Before/after images and charts posted for pixel- or timing-changing passes |
-| `sessions/`, `sessions-b/` | Raw loop log + each session's final report per lane, copied from `.loop-logs/` |
-| `ARCHITECTURE.md` | Written by FP-56: the as-built architecture, every claim pointing at our code |
 
-Regenerate the PDF: `python3 tools/flutter-parity-compile.py` (needs `~/.local/state/rni-tool/scripts/md2pdf.py`).
+This directory also held a layer of internal process tracking for the
+automation loop that built this engine: per-pass work plans, generated
+progress ledgers and PR descriptions, session hand-off notes, the loop's own
+operating rules, an as-built architecture snapshot, and raw per-session logs.
+That layer isn't part of this public copy — it's a record of how the work was
+run, not design documentation a contributor needs, and most of it names
+machines and infrastructure that don't exist outside the original setup. The
+files listed in the table above are the real design record and are unaffected.
+
 Re-audit citations: `python3 tools/flutter-parity-cite-audit.py audit docs/eng/flutter-parity/SPEC.md docs/eng/flutter-parity/research/0*.md`.

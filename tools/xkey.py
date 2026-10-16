@@ -48,7 +48,7 @@ def find_window(d, root, needle):
         try:
             stack.extend(w.query_tree().children)
         except Exception:
-            pass
+            continue  # the window vanished mid-walk; its children are gone too
     return None
 
 

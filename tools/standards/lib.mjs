@@ -3,7 +3,7 @@
 // Every check here runs against the current BRANCH'S DIFF against a base
 // ref (default: origin/main, overridable via RNI_STANDARDS_BASE), not the
 // whole repo. Retroactively failing on pre-existing engineering-log docs
-// (docs/STATE.md, docs/eng/*) would block unrelated work for debt this
+// (docs/eng/*) would block unrelated work for debt this
 // suite did not create; scoping to the diff keeps the check meaningful for
 // new work without demanding a one-time mass cleanup as a side effect.
 

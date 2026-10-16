@@ -16,9 +16,7 @@ Flutter ships. The design, with file:line citations into Flutter's source, is in
 
 Pre-release and under active development. The API surface, package names, and
 versions (currently `0.0.1` everywhere) are not stable yet. Expect breaking
-changes between releases until a `1.0.0` is tagged. See
-[docs/OPEN-SOURCE-READINESS.md](docs/OPEN-SOURCE-READINESS.md) for a full
-audit of what still needs attention before this repo is announced publicly.
+changes between releases until a `1.0.0` is tagged.
 
 ## Platforms
 

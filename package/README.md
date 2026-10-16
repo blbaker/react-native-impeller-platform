@@ -74,68 +74,38 @@ required — or appropriate — for using the published package.
 
 You can consume the package on this machine exactly the way a published install
 works — `npm install @react-native-impeller/core`, no flags, no env vars, no
-build step in the consuming app — by serving it from a persistent local
-registry.
+build step in the consuming app — with a throwaway local registry:
 
 ```bash
-bash tools/local-registry.sh serve         # start it (or use the systemd unit)
-bash tools/local-registry.sh publish       # push the current builds into it
-bash tools/local-registry.sh use ~/my-app  # point an app at it
-bash tools/local-registry.sh status        # what is published, is it running
+npx verdaccio --listen 127.0.0.1:4873
+cd package && npm publish --registry http://127.0.0.1:4873
+cd ../packages-engine/engine-$(node -p 'process.platform+"-"+process.arch') \
+  && npm publish --registry http://127.0.0.1:4873
+
+# in a scratch app — exactly what a published install will look like
+npm install @react-native-impeller/core --registry http://127.0.0.1:4873
 ```
 
-Then, in that app:
-
-```bash
-npm install @react-native-impeller/core
-```
-
-`use` writes a **scoped** line to the app's `.npmrc`:
+Point only that one app's `.npmrc` at the local registry (a **scoped** line),
+never a global `registry=`:
 
 ```
 @react-native-impeller:registry=http://127.0.0.1:4873
 ```
 
-⛔ Scoped, never a global `registry=`. Everything else — React, React Native,
-the whole rest of the tree — keeps resolving from npmjs. A global redirect would
-route an app's entire dependency graph through a personal server, which is a
-supply-chain change nobody asked for and miserable to debug when the server is
-off. Verified: a real install pulled 3 packages from the local registry and 224
-from npmjs.
+⛔ Scoped, never global. Everything else — React, React Native, the whole rest
+of the tree — keeps resolving from npmjs. A global redirect routes an app's
+entire dependency graph through a throwaway server, which is a supply-chain
+change nobody asked for.
 
-This is the same npm mechanism the published package will use —
-`optionalDependencies` plus `os`/`cpu` selection, real tarballs, real
-`npm publish` — so it is a rehearsal, not a shortcut. It differs from
-`tools/ci-registry.sh` only in durability: that one is a gate with throwaway
-storage that proves selection works and then deletes everything; this one keeps
-its storage in `~/.local/share/rni-registry` so what you published yesterday is
-still installable today.
+Bump the version in every `package.json` before re-publishing; a registry
+refuses to overwrite an existing version, the same as npmjs.
 
-To keep it running across reboots:
-
-```bash
-# Linux
-systemctl --user enable --now rni-registry
-
-# macOS
-cp tools/launchd/dev.rni.registry.plist ~/Library/LaunchAgents/
-# edit the plist: replace /Users/USERNAME and set PATH to your node bin dir
-launchctl load -w ~/Library/LaunchAgents/dev.rni.registry.plist
-```
-
-⚠️ Neither systemd nor launchd sources your shell rc, so nvm's node is not on
-their PATH — both unit files set it explicitly. A wrong path there produces a
-service that reports itself loaded/active and serves nothing (`npx: not found`,
-restart-looping). If you switch node versions, update the unit.
-
-Each machine runs its own registry and publishes the engine IT built: this box
-serves `engine-linux-x64`, the Mac serves `engine-darwin-arm64`. The storage is
-per-machine, so `status` on one will show the other's engine as "not
-published" — that is expected, not a failure.
-
-Re-run `publish` after rebuilding an engine; it unpublishes the old version
-first, so the same version number can be replaced (a real registry refuses
-that, which is correct for npmjs and pure friction for a dev loop).
+(Baker's own dev loop also keeps a *persistent* local registry running via a
+systemd/launchd unit and a wrapper script, so he doesn't have to repeat the
+steps above on every rebuild. That wrapper and its unit files are specific to
+his machines and aren't included in this public copy; the commands above are
+the portable, manual equivalent.)
 
 ## Building the engine
 
@@ -149,42 +119,17 @@ tag React Native pins — budget ~40 minutes; later builds reuse it.
 
 ## Testing the consumer experience
 
-Two gates, in increasing fidelity:
-
 ```bash
 bash tools/pack-and-consume.sh   # installs packed tarballs into a pristine app
-bash tools/ci-registry.sh        # publishes to a local registry, installs BY NAME
 ```
 
-The second is the one that matters. Installing a tarball by path hand-places the
-package and **cannot** exercise what a real user hits: npm reading
-`optionalDependencies` and selecting the one engine whose `os`/`cpu` match. npm
-skips an optional dependency it cannot use *and exits 0*, so every failure in
-that path is silent. `ci-registry.sh` runs verdaccio on loopback, publishes with
-the real `npm publish`, installs by name, and asserts both that the host's
-engine arrived and that no foreign-platform engine did. It is gate 13 in
-`tools/ci-all.sh`.
-
-To keep a registry up and point a scratch app at it:
-
-```bash
-npx verdaccio --listen 127.0.0.1:4873
-cd package && npm publish --registry http://127.0.0.1:4873
-cd ../packages-engine/engine-$(node -p 'process.platform+"-"+process.arch') \
-  && npm publish --registry http://127.0.0.1:4873
-
-# in a scratch app — exactly what a published install will look like
-npm install @react-native-impeller/core --registry http://127.0.0.1:4873
-```
-
-Bump the version in every `package.json` before re-publishing; a registry
-refuses to overwrite an existing version, the same as npmjs.
-
-> **Safety:** `tools/ci-registry.sh` refuses to run unless the registry URL
-> resolves to loopback, and writes a throwaway `.npmrc` in its work directory
-> rather than touching `~/.npmrc`, so it cannot reach npmjs or read your
-> credentials. Publishing to npm proper stays gated behind `RNI_PUBLISH_ENABLED`
-> in the release workflow.
+Installing a tarball by path hand-places the package and **cannot** exercise
+what a real user hits: npm reading `optionalDependencies` and selecting the
+one engine whose `os`/`cpu` match. npm skips an optional dependency it cannot
+use *and exits 0*, so every failure in that path is silent — `pack-and-consume.sh`
+still only proves the by-path install. For the by-name, real-`npm publish`
+version of this check (a by-name registry gate isn't part of this repo), use the manual verdaccio recipe above and check both that the
+host's engine arrived and that no foreign-platform engine did.
 
 ## Using a locally built engine (engine development only)
 

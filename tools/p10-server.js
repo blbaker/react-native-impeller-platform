@@ -68,6 +68,6 @@ server.listen(0, '127.0.0.1', () => {
 // The gate kills this process; without a guard an unhandled client reset would
 // take the server down mid-run and look like a networking defect.
 server.on('clientError', (err, socket) => {
-  try { socket.destroy(); } catch (e) {}
+  try { socket.destroy(); } catch (e) { console.error('p10-server: destroy after clientError:', e.message); }
 });
 process.on('SIGTERM', () => server.close(() => process.exit(0)));

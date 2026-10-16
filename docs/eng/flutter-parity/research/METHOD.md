@@ -11,12 +11,11 @@ Date: 2026-10-14. Reproducible from this repo plus two local checkouts.
   check drift. The Impeller C API (`impeller/toolkit/interop/impeller.h`) is identical to the pin: 176
   functions, none added or removed (`research-notes.md`).
 - **React Native 0.86.2,** as vendored in `engine/rn/node_modules/react-native`.
-- **Our engine at `c07048d`** (feat/native-anim-transform, what the Mac ran on 2026-10-14).
+- **Our engine at `840961d`** (feat/native-anim-transform, what the Mac ran on 2026-10-14).
 - **GitHub issues/search API** for open upstream issues. Only URLs that were actually fetched are cited.
 
 ## Process
-1. Four research passes ran in parallel, one per subsystem, all following the same brief
-   (`worker-brief.md`): frame pipeline and threads, Impeller internals, platform embedding, and
+1. Four research passes ran in parallel, one per subsystem, all following the same brief: frame pipeline and threads, Impeller internals, platform embedding, and
    quality engineering. Each wrote one appendix with `[F:path:L]` / `[R:path:L]` / `[RN:path:L]` citations.
 2. Load-bearing claims were re-read by hand against the source. There were 22, including: raster cache off under
    Impeller, interop `Flags{}` on all three backends, the GL `WrapFBO` 1x vs the Metal 4x MSAA drawable,
@@ -29,8 +28,7 @@ Date: 2026-10-14. Reproducible from this repo plus two local checkouts.
 4. Every citation was machine-checked with `tools/flutter-parity-cite-audit.py audit`. Each file must exist at the
    pinned commit and each line range must be in bounds. Result: 335 resolvable citations. The 2 that were not
    resolvable are a legend line and a toolchain header outside the repo.
-5. The spec (`../SPEC.md`) was written from the verified facts. `tools/flutter-parity-compile.py` turns
-   citations into GitHub permalinks and renders `flutter-impeller-parity.pdf`.
+5. The spec (`../SPEC.md`) was written from the verified facts.
 
 ## Limits stated in the spec
 These are open measurements, not conclusions:

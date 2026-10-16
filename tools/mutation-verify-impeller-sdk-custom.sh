@@ -12,16 +12,12 @@
 #   SC32f  placeholder rects lose their x origin        -> placeholder
 #   SC32g  CMake keeps the stock SDK on linux           -> cmake
 #   SC35a  CMake keeps the stock SDK on darwin/win      -> cmake (--all-platforms)
-#   SC35b  darwin driver copies the Mac's stock SDK     -> stamp (--all-platforms, needs ssh mac)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 WORK="$(mktemp -d)"
 CML=engine/CMakeLists.txt
-DRV=tools/impeller-sdk-custom-build-darwin.sh
 cp "$CML" "$WORK/CMakeLists.txt"
-cp "$DRV" "$WORK/darwin-driver.sh"
 restore() {
-  cmp -s "$WORK/darwin-driver.sh" "$DRV" || cp "$WORK/darwin-driver.sh" "$DRV"
   if ! cmp -s "$WORK/CMakeLists.txt" "$CML"; then
     cp "$WORK/CMakeLists.txt" "$CML"
     cmake -S engine -B engine/build > /dev/null 2>&1 || echo "WARN: reconfigure failed" >&2
@@ -95,7 +91,7 @@ gate_must_fail SC32g cmake
 cp "$WORK/CMakeLists.txt" "$CML"
 cmake -S engine -B engine/build > /dev/null 2>&1 || fail "SC32g restore configure failed"
 fi
-if want SC35a || want SC35b; then
+if want SC35a; then
 echo "== control: --all-platforms must PASS =="
 bash tools/ci-impeller-sdk-custom.sh --all-platforms > "$WORK/control-all.log" 2>&1 \
   || { tail -6 "$WORK/control-all.log" >&2; fail "--all-platforms control FAILED"; }
@@ -105,12 +101,5 @@ echo "== SC35a: CMake keeps the stock SDK on darwin/win =="
 MUT_FILE="$CML" MUT_OLD='elseif(NOT ANDROID)' MUT_NEW='elseif(NOT WIN32 AND NOT APPLE AND NOT ANDROID)' python3 "$WORK/mutate.py"
 GATE_ARGS=--all-platforms gate_must_fail SC35a cmake
 cp "$WORK/CMakeLists.txt" "$CML"
-fi
-if want SC35b; then
-echo "== SC35b: darwin driver copies the Mac's stock SDK =="
-MUT_FILE="$DRV" MUT_OLD='$R/repo/engine/third_party/impeller-sdk-custom/.' MUT_NEW='$R/repo/engine/third_party/impeller-sdk/.' python3 "$WORK/mutate.py"
-bash "$DRV" "$WORK/sdk-SC35b" > "$WORK/SC35b.build.log" 2>&1 || { tail -8 "$WORK/SC35b.build.log" >&2; fail "SC35b driver failed"; }
-cp "$WORK/darwin-driver.sh" "$DRV"
-GATE_ARGS=--all-platforms gate_must_fail SC35b stamp RNI_SDK_DARWIN_DIR="$WORK/sdk-SC35b"
 fi
 echo "IMPELLER_SDK_CUSTOM_MUTATION_PASS"

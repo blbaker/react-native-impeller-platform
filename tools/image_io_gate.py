@@ -162,7 +162,7 @@ def run(out, cmd):
                 if open("%s/%s/comm" % (task, t)).read().strip() == "rni-image-io":
                     io += 1
             except OSError:
-                pass
+                continue  # the thread exited between listing and reading /proc
         peak_io = max(peak_io, io)
         time.sleep(0.001)
     rc = p.wait()

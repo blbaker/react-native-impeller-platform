@@ -18,7 +18,7 @@ You need Node 20+, CMake, and a C++ compiler toolchain for your platform.
 
 ```bash
 git clone https://github.com/blbaker/react-native-impeller-platform.git
-cd react-native-impeller
+cd react-native-impeller-platform
 ```
 
 GLFW is fetched, not committed, so it has to run before the engine build or
@@ -128,6 +128,4 @@ Those stay human actions.
 
 Versions are managed by [Release Please](https://github.com/googleapis/release-please)
 based on your commits' conventional-commit types. You don't bump version
-numbers by hand. See
-[docs/OPEN-SOURCE-READINESS.md](docs/OPEN-SOURCE-READINESS.md) for how the
-release pipeline is gated.
+numbers by hand.

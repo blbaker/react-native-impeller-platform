@@ -2,7 +2,7 @@
 """Audit + linkify citations in the research sections.
 
 [F:path:La-b] / [F:path#La-Lb]  -> flutter/flutter @ PIN (local: sc32 checkout, HEAD content)
-[R:path:La]                     -> blbaker/react-native-impeller @ RSHA (local: rni-merge-main)
+[R:path:La]                     -> blbaker/react-native-impeller-platform @ RSHA (local: RNI_REPO_SRC, a checkout of RSHA)
 [RN:path:La-b]                  -> facebook/react-native v0.86.2 (local: node_modules/react-native/ReactCommon)
 Usage: cite_audit.py audit <files...>      (prints stats + broken list, exit 1 if broken)
        cite_audit.py linkify <in> <out>
@@ -10,9 +10,9 @@ Usage: cite_audit.py audit <files...>      (prints stats + broken list, exit 1 i
 import os, re, subprocess, sys, functools
 
 PIN = "114eb184d66d7ca136d89eb8ec09f61aff265062"
-RSHA = "c07048d6017838d858f826eb89b373343cd22f37"
-FL = os.path.expanduser("~/projects/_ref/sc32/flutter")
-RR = os.path.expanduser("a local worktree")
+RSHA = "840961da582d5a8bc3c5ca583bbf939f1499190d"
+FL = os.path.expanduser(os.environ.get("RNI_FLUTTER_SRC", "~/projects/_ref/sc32/flutter"))
+RR = os.path.expanduser(os.environ.get("RNI_REPO_SRC", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 RNR = os.path.join(RR, "engine/rn/node_modules/react-native")
 
 BR = re.compile(r"\[((?:F|R|RN):[^\]]+)\]")

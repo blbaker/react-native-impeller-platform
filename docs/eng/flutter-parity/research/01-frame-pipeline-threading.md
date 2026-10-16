@@ -1,7 +1,7 @@
 # 01 — Frame Pipeline + Threading
 
 Pinned Flutter SHA: `114eb184d66d7ca136d89eb8ec09f61aff265062` (2026-08-09). Our tree:
-`a local worktree` @ `c07048d` (`feat/native-anim-transform`), read-only.
+this repo @ `840961d` (`feat/native-anim-transform`), read-only.
 
 ## 1. How Flutter does it
 

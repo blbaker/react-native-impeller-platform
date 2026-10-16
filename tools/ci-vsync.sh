@@ -35,7 +35,7 @@ BUNDLE="$ROOT/fixtures/fp11-vsync/prebuilt/fp11-vsync.bundle"
 fail() { echo "VSYNC FAIL: $*" >&2; exit 1; }
 [ -s "$BUNDLE" ] || fail "no committed bundle at $BUNDLE"
 . tools/lib/host-window.sh
-# darwin (FP-19): real window server, no xvfb; run through tools/parity-mac.sh gate.
+# darwin (FP-19): real window server, no xvfb; run it on the Mac itself.
 [ "$(rni_host)" != other ] || fail "linux (xvfb) or darwin only"
 if [ -n "${RNI_BIN:-}" ]; then
   BIN="$RNI_BIN"

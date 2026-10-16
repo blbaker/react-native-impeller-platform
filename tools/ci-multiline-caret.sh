@@ -88,7 +88,7 @@ read -r INK_TOP INK_BOT INK_RIGHT <<< "$($PX ink "$WORK/base-first.ppm" $TX0 $BY
   || fail "0: ink spans rows $INK_TOP..$INK_BOT -- the fixture did not wrap to 3 lines"
 echo "   OK: ink rows $INK_TOP..$INK_BOT inside the box"
 # Clicks are SCREEN coords. With --scale 1 pinned, a 2x (Retina) backing
-# store maps screen->layout by x2 (same as ci-world-resize, 4e452e9), so a
+# store maps screen->layout by x2 (same as ci-world-resize, 27f12e2), so a
 # window that opens on a Retina display would click twice as far out and miss
 # the box. Divide every click by the backing scale the engine reports; pixel
 # coordinates need no change (at --scale 1 one PPM pixel is one layout point).

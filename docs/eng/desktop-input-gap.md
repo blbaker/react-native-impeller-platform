@@ -1,6 +1,6 @@
 # Desktop input + window gap audit (react-native-impeller)
 
-Branch `feat/desktop-input` off `origin/main` 6d2dea2. Written 2026-09-30.
+Branch `feat/desktop-input` off `origin/main` 82de142. Written 2026-09-30.
 
 ## Why this exists
 

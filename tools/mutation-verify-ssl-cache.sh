@@ -74,7 +74,7 @@ expect "darwin: cached static .a     -> keep"       KEPT    "$(probe /opt/homebr
 expect "linux:  shared .so, no flag  -> keep"       KEPT    "$(probe /usr/lib/libssl.so             '')"
 
 # ------------------------------------------------------------- 3. the mutant
-# Delete the guard = the pre-aa319b9 state. The stale dylib must survive.
+# Delete the guard = the pre-7fe7555 state. The stale dylib must survive.
 echo "[3] mutant (guard deleted -- must resurrect the stale dylib)"
 cp "$WORK/block.cmake" "$WORK/block.orig"
 echo '# mutant: guard removed' > "$WORK/block.cmake"

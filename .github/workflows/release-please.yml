@@ -17,7 +17,7 @@
 # normally -- no change needed there, and RNI_PUBLISH_ENABLED stays exactly
 # as locked as it is today. Until that secret exists, this workflow still
 # opens and updates the release PR correctly; only the automatic trigger of
-# release.yml after a merge is missing. See docs/OPEN-SOURCE-READINESS.md.
+# release.yml after a merge is missing.
 name: release-please
 
 on:

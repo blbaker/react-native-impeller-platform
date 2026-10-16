@@ -1,8 +1,8 @@
 # 04. Quality, Reliability, and Observability
 
 Pin: flutter/flutter `114eb184d66d7ca136d89eb8ec09f61aff265062` (2026-08-09), local checkout
-`~/projects/_ref/sc32/flutter`. Our tree: `a local worktree`
-(`feat/native-anim-transform`, c07048d), read-only.
+`~/projects/_ref/sc32/flutter`. Our tree: this repo
+(`feat/native-anim-transform`, 840961d), read-only.
 
 ## 4.1 Test pyramid: unit tests, Playground, goldens
 
@@ -53,7 +53,7 @@ against the Impeller C SDK, requires a `IMPELLER_SPIKE_PASS` marker, a `GL_RENDE
 line, and **>=10 distinct colors** in the frame as an anti-false-positive guard
 [R:tools/ci-headless.sh:L19-27]. There is no stored-baseline-image system anywhere in the
 repo — the one "golden" reference in our docs means "a prior gate's own output"
-(`grep -rn golden tools docs` → `tools/ci-window.sh:91`, `docs/tasks/P9-A-windowed-wsi.md:58`),
+(`grep -rn golden tools docs` → `tools/ci-window.sh:91`),
 not a Skia-Gold-style asset. We run one backend at a time per host (GLES/ANGLE on
 desktop, Mesa llvmpipe in CI); nothing instantiates a single test body across backends
 the way `INSTANTIATE_PLAYGROUND_SUITE` does.
@@ -111,13 +111,13 @@ infrastructure exists in the toolchain, but Impeller does not use it.
 unrelated identifier noise). Hermes itself fuzzes its bytecode/parser upstream, but that
 is outside our pinned RN checkout and out of scope for this citation.
 
-**Our engine.** No fuzzing anywhere (same negative grep, `a local worktree`).
+**Our engine.** No fuzzing anywhere (same negative grep over this repo).
 
 **Gaps.** Medium-high, by attack surface: a malformed/malicious RN bundle, SVG asset,
 font, or downloaded image is attacker-reachable content our engine parses natively in
 C++, with no fuzz coverage proving memory safety under garbage input.
 - Fabric props: `FabricHost`/`SceneGraph` apply arbitrary JS-sourced prop dictionaries
-  into native state every commit [R:engine/scenegraph/SceneGraph.cpp (mutation path, per WORKER-BRIEF)].
+  into native state every commit [R:engine/scenegraph/SceneGraph.cpp (mutation path)].
 - SVG path parser / stroke-AA path (feeds `tools/ci-svg*.sh`, `ci-path-aa.sh`): untrusted
   path data from bundled SVG assets.
 - `ImageStore` decode: `stb_image` on a detached thread per image
@@ -310,7 +310,7 @@ correctness/log markers, never a p95/p99 frame-build or raster time against a th
 (checked by reading `ci-headless.sh`, `ci-eng05-msaa.sh`'s mutation-verify comments — both
 are correctness-shaped, not latency-shaped). The one cross-backend performance datapoint
 we have is manual: "Mac frame identical to WSL" measured 2026-08-28 by a peer
-[R:docs/MAC-DELIVERY.md:L99,L106] — a one-time correctness-equivalence check, not a
+(an internal delivery note, not in this repo) — a one-time correctness-equivalence check, not a
 tracked, repeated perf measurement.
 
 **Gaps.** High: jank regressions have zero automated detection; our only real-GPU data
@@ -504,7 +504,7 @@ substrate [R:tools/ci-headless.sh:L7-9,L12]). The Windows gate is opt-in, gated 
 staged native build and `RNI_REQUIRE_WIN=1` to prevent a silent skip from being mistaken
 for a pass [R:tools/ci-all.sh:L29-44]. There is no Mac CI at all — the one cross-platform
 pixel-equivalence check on record is manual, "measured 2026-08-28" by a peer
-[R:docs/MAC-DELIVERY.md:L99,106]. There is no Android emulator/device CI despite shipping
+(an internal delivery note). There is no Android emulator/device CI despite shipping
 a render-only AAR (`tools/android-build.sh`, `tools/android-probe-build.sh` exist but
 nothing in `tools/ci-*.sh` names an Android device gate — checked `ls tools/ci-*android*`
 → only `ci-android-lib.sh`, which per its name builds the library, not a device-driven

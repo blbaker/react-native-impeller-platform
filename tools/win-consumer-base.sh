@@ -21,7 +21,7 @@ DEST="${WIN_BASE_APP:-/mnt/c/Devel/rni-consumer-base}"
 fail() { echo "win-consumer-base: FAIL — $*" >&2; exit 1; }
 
 command -v cmd.exe >/dev/null || fail "cmd.exe not on PATH — run this from WSL"
-[ -d "$SRC" ] || fail "no Linux base app at $SRC (see docs/STATE.md)"
+[ -d "$SRC" ] || fail "no Linux base app at $SRC (run tools/base-app.sh first)"
 
 echo "win-consumer-base: copying sources $SRC -> $DEST"
 mkdir -p "$DEST"

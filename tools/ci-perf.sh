@@ -6,7 +6,7 @@
 #
 #   bash tools/ci-perf.sh            compare against the budgets
 #   bash tools/ci-perf.sh --record   re-measure and rewrite the baselines of the budget file
-#   bash tools/ci-perf.sh --mac      run on the Mac through tools/parity-mac.sh (darwin budgets)
+#   bash tools/ci-perf.sh --mac      darwin budgets; run it on the Mac itself
 #   RNI_BUDGETS_FUNCTIONAL_ONLY=1   (tools/ci-sanitize.sh sets it) the binary must be a sanitizer build:
 #                                   every fixture runs once and must still mount, present and record
 #                                   >= 20 complete monotonic frame records; the time budgets are skipped
@@ -20,8 +20,7 @@ RUNS="${RNI_PERF_RUNS:-5}"
 RECORD=0
 for a in "$@"; do case "$a" in
   --record) RECORD=1 ;;
-  --mac) [ "$(uname -s)" = Darwin ] || { [ -x tools/parity-mac.sh ] \
-           && exec bash tools/parity-mac.sh run tools/ci-perf.sh; echo "PERF_FAIL: --mac needs tools/parity-mac.sh (FP-19)" >&2; exit 2; } ;;
+  --mac) [ "$(uname -s)" = Darwin ] || { echo "PERF_FAIL: --mac runs on the Mac itself (darwin budgets)" >&2; exit 2; } ;;
   *) echo "unknown flag $a" >&2; exit 64 ;; esac; done
 fail() { echo "PERF_FAIL: $*" >&2; exit 1; }
 

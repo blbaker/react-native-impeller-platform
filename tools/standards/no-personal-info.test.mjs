@@ -1,8 +1,8 @@
 // Standard: "no personal hostnames/paths/IPs" — this repo's own version of
 // a broader rule (don't leak the author's local machine into a public repo).
 // Scans ADDED lines on this branch. Pre-existing internal engineering-log
-// docs (docs/STATE.md, docs/MAC-DELIVERY.md, ...) are a one-time cleanup
-// decision, tracked in docs/OPEN-SOURCE-READINESS.md — this gate is about
+// docs (status/session-handoff logs) were a one-time cleanup decision made
+// before this repo went public (not tracked in this tree) — this gate is about
 // NOT ADDING MORE of it going forward.
 
 import { test } from 'node:test';
@@ -55,7 +55,9 @@ test('positive control: a home path and a tailnet IP are both caught', () => {
   const dir = makeBaseRepo();
   commitFiles(
     dir,
-    { 'notes.md': 'Built at /home/alice/projects/thing, reachable at <tailnet-ip>\n' },
+    // The sample IP is assembled at runtime so this file holds no literal
+    // tailnet-shaped address for history scrubbers to rewrite.
+    { 'notes.md': `Built at /home/alice/projects/thing, reachable at ${['100', '74', '1', '2'].join('.')}\n` },
     'docs: add build notes',
   );
   const hits = checkRepo(dir);

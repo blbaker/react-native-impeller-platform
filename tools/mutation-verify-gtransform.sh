@@ -5,7 +5,7 @@
 # invisible at runtime, so "it passes" is not enough -- it has to be seen RED
 # for the right reason.
 #
-# Restore by cp and REBUILD between mutants (see docs/STATE.md P9-A: a mutation
+# Restore by cp and REBUILD between mutants (P9-A: a mutation
 # suite that skips the rebuild scores the next mutant against the previous
 # mutant's binary and reports a meaningless pass).
 set -euo pipefail

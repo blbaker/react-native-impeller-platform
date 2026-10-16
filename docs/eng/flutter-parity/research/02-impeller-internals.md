@@ -2,7 +2,7 @@
 
 Pin: flutter/flutter @ `114eb184d66d7ca136d89eb8ec09f61aff265062` (2026-08-09). `[F:...]` = permalink
 `https://github.com/flutter/flutter/blob/114eb184d66d7ca136d89eb8ec09f61aff265062/<path>#L<a>-L<b>`.
-`[R:...]` = `a local worktree`. `[RN:...]` = under `engine/rn/node_modules/react-native`.
+`[R:...]` = this repo at `840961d`. `[RN:...]` = under `engine/rn/node_modules/react-native`.
 `[W:...]` = fetched URL.
 
 ## 0. Pipeline overview

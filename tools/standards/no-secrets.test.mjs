@@ -1,8 +1,8 @@
 // Standard: "No secrets in code or config" (docs/engineering-standards.md,
 // Code quality). Scans ADDED lines on this branch for common credential
 // shapes. This is a lightweight net, not a replacement for a real secret
-// scanner — see docs/OPEN-SOURCE-READINESS.md for the full-history scan,
-// which is a one-time audit rather than a recurring gate.
+// scanner, and no substitute for the one-time full-history scan done
+// before this repo went public.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

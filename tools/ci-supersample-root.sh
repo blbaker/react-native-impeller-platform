@@ -4,7 +4,7 @@
 # WHAT THIS PROVES
 #   A View with a rounded border has a curved corner arc. Impeller emits NO
 #   edge-coverage AA for it (the arc is a stroked/filled rounded rect, the same
-#   class of tessellated edge b9edbee documents for stroked SVG paths), so at
+#   class of tessellated edge 2315c41 documents for stroked SVG paths), so at
 #   N<=1 the arc is a BINARY step: a pixel is fully the shape colour or fully
 #   background, ~2 luminance levels. The ROOT supersample path renders the WHOLE
 #   tree into one N x offscreen and composites it back with a linear downsample,

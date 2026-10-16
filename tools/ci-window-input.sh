@@ -211,7 +211,7 @@ echo "== 6. assert D: the coordinate conversion is right at non-1x scales =="
 # fb/win is 2, and the SAME correct code must yield 200. An earlier version of
 # this assertion hardcoded 100.0,50.0 and therefore FAILED on darwin against a
 # correct engine — it was asserting the CI host's display, not the arithmetic.
-# (Caught by the macOS tester running this gate on darwin-arm64 at d682627.)
+# (Caught by the macOS tester running this gate on darwin-arm64 at 2970177.)
 #
 # The fix is to assert the RELATION the conversion defines, which is identical
 # on every display, instead of one absolute number that encodes fb/win:

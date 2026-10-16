@@ -49,7 +49,7 @@ linux-x64 (llvmpipe, WSLg):
   fired 1 time.
 
 darwin-arm64 (ANGLE-Metal, Retina 2x, Interactive QoS):
-- Control, the agent's cached `rni-bb99b32` engine with the same bundle: the
+- Control, the agent's cached `rni-9947e02` engine with the same bundle: the
   first frame was HOME (`0000ff`), and the boot clock finished at JS 1540 ms.
   This reproduces D-156.
 - After, 5 of 5 gate runs passed. JS heard the first frame at 72 to 78 ms

@@ -3,7 +3,7 @@
 #
 #   tools/darwin-run-interactive.sh <logfile> <timeout-sec> -- <cmd> [args...]
 #
-# WHY. The macOS tester runs inside a launchd job with no ProcessType
+# WHY. A caller that runs inside a launchd job with no ProcessType
 # (`launchctl print` -> "spawn type = daemon (3)"). launchd gives that class
 # light resource limits: every child runs at scheduling priority 20 (the
 # utility band, same as `taskpolicy -c utility`), and macOS coalesces its

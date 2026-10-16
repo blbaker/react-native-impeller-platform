@@ -3,7 +3,7 @@
 # tools/ci-style-audit.sh). Each mutant breaks ONE landed fix; the gates must
 # FAIL and the FAIL line must NAME the tile that fix landed (a mutant killed
 # for the wrong tile proves nothing). Mutants are tagged with their pass id
-# (SC01a, SC01b, ...) so tools/style-fix-check.sh can run one pass's set:
+# (SC01a, SC01b, ...) so one pass's set can run on its own:
 #   ONLY=SC01a,SC01b bash tools/mutation-verify-style-coverage.sh
 # Sources are restored (and the engine rebuilt) on exit, whatever happens.
 #

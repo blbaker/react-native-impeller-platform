@@ -7,7 +7,7 @@
 # Absolute-path inputs are pushed under $RDIR/cache (by hash), --screenshot is
 # written on the device and pulled back, RNI_* env vars are forwarded.
 # Device: RNI_ANDROID_SERIAL, else the attached SM-G991U1 (the S21 dev phone).
-# A physical device of any other model is refused (Baker's own phones).
+# A physical device of any other model is refused (so a personal phone that happens to be attached is never driven).
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENG_DIR="${RNI_ANDROID_ENGINE_DIR:-$ROOT/engine/build/android-stage/bin}"
@@ -31,7 +31,7 @@ if [ -z "$SERIAL" ]; then
       timeout 10 adb disconnect "$ep" >/dev/null 2>&1
     done
   fi
-  [ -n "$SERIAL" ] || die "no attached $WANT_MODEL (adb devices; see the adb-over-network skill)"
+  [ -n "$SERIAL" ] || die "no attached $WANT_MODEL (check adb devices)"
 fi
 M="$(model_of "$SERIAL")"
 [ "$M" = "$WANT_MODEL" ] || [ "$(timeout 15 adb -s "$SERIAL" shell getprop ro.kernel.qemu 2>/dev/null | tr -d '\r')" = 1 ] \

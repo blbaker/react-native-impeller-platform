@@ -5,7 +5,7 @@
 # them builds green here and only breaks on a device -- so it has to be seen
 # RED before it means anything.
 #
-# Restore by cp and REBUILD between mutants (docs/STATE.md P9-A).
+# Restore by cp and REBUILD between mutants (P9-A).
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/portable-timeout.sh"  # portable timeout (mac fallback)
 

@@ -68,7 +68,7 @@ backing()  { sed -n 's/.*rn-impeller: layer .* backing_scale=\([0-9.]*\).*/\1/p'
 CS="$(contents "$LOG")"
 BS="$(backing "$LOG")"
 
-# STEP 0 (skill): assert the extractors are NUMERIC before comparing them. A
+# STEP 0: assert the extractors are NUMERIC before comparing them. A
 # missing line scrapes to empty, and `[ "" = "" ]` would pass open.
 num() { awk -v v="$1" 'BEGIN{print (v ~ /^[0-9]+\.[0-9]+$/) ? "y" : "n"}'; }
 [ "$(num "$CS")" = "y" ] || fail "no numeric contents_scale on the layer line (got '$CS') -- did the ENG-08 observable print? Is this a windowed build?"
@@ -76,7 +76,7 @@ num() { awk -v v="$1" 'BEGIN{print (v ~ /^[0-9]+\.[0-9]+$/) ? "y" : "n"}'; }
 
 echo "   contents_scale=$CS backing_scale=$BS"
 
-# NULL QUESTION (skill): on a 1x display both read 1.00 and the assertion is
+# NULL QUESTION: on a 1x display both read 1.00 and the assertion is
 # tautological -- it would pass with the setter deleted. Say so, do not claim a
 # proof. Same guard shape as ci-pointscale.sh:141-146.
 if [ "$BS" = "1.00" ]; then

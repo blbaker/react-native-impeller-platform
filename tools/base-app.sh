@@ -9,7 +9,7 @@
 # the source tree. Creating that app takes minutes, so it is cached at
 # ~/.cache/rni/base and copied per-run.
 #
-# ⛔ IT WAS DOCUMENTED IN docs/STATE.md AS A COMMAND TO RUN BY HAND, AND THAT IS
+# ⛔ IT WAS DOCUMENTED AS A COMMAND TO RUN BY HAND, AND THAT IS
 # WHY CI COULD NOT RUN THE GATES. Every developer box had the directory from
 # some earlier session, so the gates' precondition was satisfied by HISTORY
 # rather than by anything in the repo — the same shape as the RN-pin ordering

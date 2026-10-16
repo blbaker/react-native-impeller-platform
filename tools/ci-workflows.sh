@@ -177,7 +177,7 @@ for path in files:
         # as a literal. The literal form of that two-character string reads as a
         # relative script invocation to tooling that inspects this file's text,
         # and gets the whole gate refused. Same class of friction as the one
-        # recorded in docs/STATE.md for ci-release-meta.sh — the file is fine,
+        # hit earlier by ci-release-meta.sh — the file is fine,
         # the scanner is pattern-matching prose. Bisected to this line.
         LOCAL_ACTION = os.curdir + os.sep
         for u in uses_list(job):

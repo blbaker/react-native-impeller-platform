@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ENG-23 (TextInput) gate: lineHeight reaches TextInput PAINT, as it does <Text>.
 #
-# THE GAP. ebed2ca made <Text> lineHeight reach measure and paint, but the
+# THE GAP. 6d71661 made <Text> lineHeight reach measure and paint, but the
 # TextInput paragraph builder (BuildTextInputParagraph) never applied it: a
 # multiline field painted the face's own ~18 pt pitch whether lineHeight was
 # 16 or 32. Every TextInput path (paint, caret, click, selection, Up/Down)

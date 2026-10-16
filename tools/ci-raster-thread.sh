@@ -33,7 +33,7 @@ fail() { echo "RASTER_THREAD_FAIL: $*" >&2; exit 1; }
 [ -s "$TEAR" ] || fail "no committed bundle at $TEAR"
 [ -s "$ROT" ] || fail "no committed bundle at $ROT"
 . tools/lib/host-window.sh
-# darwin (FP-19): real window server, no Xvfb; run through tools/parity-mac.sh gate.
+# darwin (FP-19): real window server, no Xvfb; run it on the Mac itself.
 [ "$(rni_host)" != other ] || fail "linux (Xvfb) or darwin only"
 if [ -n "${RNI_BIN:-}" ]; then
   BIN="$RNI_BIN"

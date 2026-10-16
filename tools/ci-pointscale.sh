@@ -3,7 +3,7 @@
 # its absence still fall back to the display?
 #
 # WHY THIS FILE EXISTS
-# retina-check.sh already proves --scale changes resolution rather than layout,
+# the retina check already proves --scale changes resolution rather than layout,
 # but it runs --headless at BOTH scales. A headless surface has no display
 # behind it, so its backing scale is always 1 and the fallback branch this gate
 # covers is unreachable there. That is exactly how the windowed under-render
@@ -82,9 +82,9 @@ run() {
 }
 
 # ⛔ THE ENGINE STOPPED PRINTING TWO NUMBERS. PARSE THE PROVENANCE INSTEAD.
-# Until f92ef6e the windowed line read
+# Until 7b03dbf the windowed line read
 #     rn-impeller: window backing_scale=<measured> fb=<W>x<H> px paint_scale=<used>
-# and this gate read the two fields separately. f92ef6e replaced it with
+# and this gate read the two fields separately. 7b03dbf replaced it with
 #     rn-impeller: window px=<W>x<H> points=<W>x<H> scale=<used> (<provenance>)
 # where provenance is "from framebuffer" or "--scale override", taken from the
 # same pointScaleGiven flag the branch under test keys off. So there is exactly
@@ -151,7 +151,7 @@ echo "== 3. the two arms really did differ =="
 
 echo "== 4. layout stays in POINTS across both arms =="
 # A scale change must alter resolution, not the size of the surface in points.
-# Same trap retina-check.sh documents: feeding raw device pixels to Yoga makes
+# Same trap the retina check documents: feeding raw device pixels to Yoga makes
 # a 2x run lay out twice the points and still paint a plausible picture.
 P_AUTO="$(sed -n 's/^\[fabric\] surface .* started \([0-9.]*x[0-9.]*\) points .*/\1/p' "$W/auto.log" | head -1)"
 P_ONE="$(sed -n 's/^\[fabric\] surface .* started \([0-9.]*x[0-9.]*\) points .*/\1/p' "$W/one.log" | head -1)"

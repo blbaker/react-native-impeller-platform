@@ -12,8 +12,8 @@
 #   M4  moving the GL offscreen lost HalveInto's Y-flip -> P: pixels differ
 #       from the pre-pass binary
 #   M5  --backend metal accepted off darwin (FP-21: BackendSelect.cpp) -> B
-# The clean binary is NOT rebuilt here: tools/parity-check.sh rebuilds after
-# mutants (run tools/engine-build.sh yourself when running this standalone).
+# The clean binary is NOT rebuilt here: run tools/engine-build.sh after the
+# mutants to restore it.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

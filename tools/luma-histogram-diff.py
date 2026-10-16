@@ -2,8 +2,8 @@
 """ENG-09 world-raster gate helper: luma histogram L1 distance between two
 PPM (P6) screenshots of identical dimensions.
 
-Kept as a real file, not a command-substitution heredoc, per the
-mutation-testing skill's bash-quoting guidance: nesting a heredoc inside
+Kept as a real file, not a command-substitution heredoc, because
+of a bash-quoting trap: nesting a heredoc inside
 $(...) makes a bash syntax error point at the end of the whole gate script
 instead of the real line.
 """

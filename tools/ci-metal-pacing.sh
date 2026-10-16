@@ -14,7 +14,7 @@
 #   L  latency: median displayed - target vblank <= 3 periods (paced on the link = 1-2 measured;
 #      paced only by drawable back-pressure = 5)
 # linux: `--vsync displaylink` is refused (exit 2, darwin-only); the Metal arms run on darwin.
-# Node-free: committed bundle + RNI_BIN. Run on the Mac via tools/parity-mac.sh gate.
+# Node-free: committed bundle + RNI_BIN. Run it on a Mac with RNI_BIN set.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -39,7 +39,7 @@ if [ "$(rni_host)" = linux ]; then
   exit 0
 fi
 [ "$(rni_host)" = darwin ] || fail "linux or darwin only"
-BIN="${RNI_BIN:?darwin: set RNI_BIN (tools/parity-mac.sh gate does)}"
+BIN="${RNI_BIN:?darwin: set RNI_BIN (the staged darwin binary)}"
 [ -x "$BIN" ] || fail "no engine binary at $BIN"
 echo "engine: $BIN ($(shasum -a 256 "$BIN" | cut -c1-12))"
 

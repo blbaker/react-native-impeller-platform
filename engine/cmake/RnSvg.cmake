@@ -24,7 +24,7 @@
 #
 # Prior art (read-only reference, adapted here — not copied byte for byte
 # because our paths and target names differ):
-# ~/projects/rn-skia-prototype/engine/cmake/RnSvg.cmake
+# an earlier sibling project's engine/cmake/RnSvg.cmake
 #
 # NOTE ON THE INCLUDE ROOT: the vendor's headers include their own generated
 # output by its INSTALLED path (`<react/renderer/components/rnsvg/Props.h>`),

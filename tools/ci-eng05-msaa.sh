@@ -278,7 +278,7 @@ else
   echo "  offscreen and does not consult the wrapped target's sample count, the"
   echo "  same result as spike arm B. GLFW_SAMPLES is not the ENG-05b fix and"
   echo "  should NOT be turned on by default -- it would be a config change with"
-  echo "  no measured effect. The remaining lead is docs/ENG-05-aa-findings.md"
+  echo "  no measured effect. The remaining lead (ENG-05 AA findings):"
   echo "  step 2: route <Circle>/<Ellipse> to AddOval and <Rect> to"
   echo "  AddRoundedRect, which keeps the analytic-coverage path that DOES"
   echo "  antialias. Arbitrary d paths stay aliased regardless; that is upstream."

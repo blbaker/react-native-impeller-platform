@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # FP-21 gate: darwin native Metal windowed backend (CAMetalLayer + ImpellerContextCreateMetalNew).
-# Run it on the Mac through `bash tools/parity-mac.sh gate tools/ci-metal.sh` (RNI_BIN = staged darwin bin).
+# Run it on a Mac with RNI_BIN set to the staged darwin binary.
 # Every Metal run has MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1. Arms (each failure prints
 # `METAL_GATE FAIL <arm>: ...`; all arms run, so a mutant's own arm is always visible):
 #   R  read-back: default darwin window = metal, gpu_backend context=metal uploader=contents

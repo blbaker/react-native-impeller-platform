@@ -111,7 +111,7 @@ run_mutant "M1 repaint once then spin (the pre-P9-A engine)"
 #   It does NOT prove those frames reach the screen.
 # Presentation is covered by the window actually appearing (tools/window-spike.sh,
 # screenshot-verified) and would need an off-process screen capture to gate.
-# Recorded in docs/STATE.md as a known gap.
+# A known gap.
 
 # M3: vacuity check on the CONTROL. Make the "static" fixture animate too; the
 # negative assertion must then fail. Without this, a gate whose control silently

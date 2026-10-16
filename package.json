@@ -2,5 +2,5 @@
   "name": "react-native-impeller-repo",
   "version": "0.0.1",
   "private": true,
-  "description": "Release Please anchor for this repo. Not published -- the published packages are package/ and packages-engine/*/. See docs/OPEN-SOURCE-READINESS.md."
+  "description": "Release Please anchor for this repo. Not published -- the published packages are package/ and packages-engine/*/."
 }

@@ -7,7 +7,7 @@
 # Two arms, one render:
 #   A. LANDED: every tile named in LANDED below must PASS. Each entry is one
 #      audit item; the list grows as items land. On the binary the audit
-#      measured (Mac f5fc6e1, sha 02cf8ea7) every one of them FAILS.
+#      measured (Mac 79e4ce2, sha 02cf8ea7) every one of them FAILS.
 #      lineHeight (12) and textInputMultiline (16) landed as ENG-23 / ENG-16
 #      on feat/eng-overnight and are judged here too.
 #   B. KEEP-GREEN: every tile in KEEP below (the features the audit found

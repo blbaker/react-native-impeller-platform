@@ -307,7 +307,7 @@ int ListModules() {
       "  for (var i = 0; i < names.length; i++) {\n"
       "    var n = names[i];\n"
       "    var m = null;\n"
-      "    try { m = g.nativeModuleProxy[n]; } catch (e) {}\n"
+      "    try { m = g.nativeModuleProxy[n]; } catch (e) { m = null; }\n"
       "    if (m == null) { console.log('module=' + n + ' methods=<UNREACHABLE FROM JS>'); continue; }\n"
       "    var keys = [];\n"
       "    for (var k in m) { keys.push(k); }\n"
@@ -605,7 +605,7 @@ static bool gFollowOsAppearance = false;  // SC-23 (set in headless builds too)
 // picking that architecture: an unconditional per-frame repaint is exactly
 // as compatible with a future mutation-driven skip-if-unchanged optimisation
 // as it is with staying vsync-driven forever, so nothing about P9-C is
-// foreclosed. See docs/STATE.md "Open questions" if that changes.
+// foreclosed.
 // parity item 14: defined below main()'s argv capture.
 [[noreturn]] static void ReexecForReload(const std::string& reason);
 
@@ -1264,7 +1264,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // suppress hover enter/leave entirely -- a control being dragged does not
     // fire pointerenter on whatever the cursor passes over. The cursor shape is
     // held at the drag's grabbing shape by the mac's NSCursor path (mac-patches
-    // 2c0ed10); returning the last shape keeps this path from fighting it.
+    // ca434a7); returning the last shape keeps this path from fighting it.
     // item 4b: a drag that began in a TextInput extends its selection. Checked
     // on its own, not only under isTouchCaptured(): a press on a field whose
     // emitter took no touch capture must still drag-select.

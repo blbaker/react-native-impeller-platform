@@ -966,7 +966,10 @@ int runHttpSelfTest() {
             "0\r\n\r\n";
         asio::write(sock, asio::buffer(resp), ec);
         sock.shutdown(tcp::socket::shutdown_both, ec);
-      } catch (const std::exception&) {}
+      } catch (const std::exception& e) {
+        // A client reset mid-response is a valid outcome here; the client side asserts it.
+        std::fprintf(stderr, "[net-selftest] chunked server: %s\n", e.what());
+      }
     });
 
     auto url = parseUrl("http://127.0.0.1:" + std::to_string(port) + "/chunked");

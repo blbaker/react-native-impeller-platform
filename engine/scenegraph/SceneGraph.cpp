@@ -161,7 +161,7 @@ bool svgFillFromDynamic(const folly::dynamic& v, float out[4]) {
   // with the paint guard's `&& node.svgHasFill`, the path was skipped
   // entirely: nothing drawn, no error, and painted_nodes STILL counted it
   // because that counter increments on node entry. Exactly the silent
-  // failure docs/P9-SCOPE.md warns about -- and it was invisible until a gate
+  // failure mode the P9 scope warned about -- and it was invisible until a gate
   // probed actual pixels.
   //
   // Semi-transparent fills (alpha < 0x80) DO land in int range, so a test
@@ -969,7 +969,7 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
   // RNSVGPath: parse `d` into geometry (re-parsing only on change — the SVG
   // path parser is the expensive step and props re-snapshot on every commit)
   // and capture fill/fillRule. Group's `matrix` field is a documented known
-  // gap (see docs/STATE.md P9-B2) — not consumed here.
+  // gap (P9-B2) — not consumed here.
   node.isSvgPath = false;
   // ⛔ THE MATRIX IS READ FOR EVERY RNSVG COMPONENT, NOT JUST <Path>.
   //
@@ -3523,7 +3523,7 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   // Same 8192/axis GPU bound as the icon path. A surface large enough that N x
   // overflows it (e.g. a 5K window at N>=2) falls back to the in-place walk,
   // which STILL runs the per-<Svg>-root hook — so icons keep their AA and only
-  // View borders on an oversize surface lose it. A strict superset of b9edbee.
+  // View borders on an oversize surface lose it. A strict superset of 2315c41.
   if (pxW <= 0 || pxH <= 0 || pxW > 8192 || pxH > 8192) return false;
 
   // FP-14: RECORD records the N x list and wraps the final texture's name;
@@ -3778,7 +3778,7 @@ ImpellerColorSource SceneGraph::makeGradientSource(const SceneNode* def,
   // ⚠️ Impeller's radial gradient is CIRCULAR -- one radius, no focal point.
   // SVG's is an ellipse (rx, ry) with an optional focus. Using the mean radius
   // is a documented approximation, NOT parity: an SVG radial with rx != ry
-  // renders as a circle here. Recorded in docs/STATE.md rather than silently
+  // renders as a circle here. Recorded as a known gap rather than silently
   // shipped as if correct.
   ImpellerPoint centre = {mapX(def->svgGradientCoords[4]),
                           mapY(def->svgGradientCoords[5])};

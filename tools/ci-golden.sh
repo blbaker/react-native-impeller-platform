@@ -19,7 +19,7 @@ ROOT="$PWD"
 BACKEND=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --mac) exec bash tools/parity-mac.sh gate tools/ci-golden.sh ;;
+    --mac) echo "--mac: run this gate on the Mac itself, with RNI_BIN set to the staged darwin binary" >&2; exit 2 ;;
     --win) BACKEND=win32-gles-angle; export RNI_BIN="$ROOT/tools/win-run-engine.sh" ;;
     --backend) BACKEND="${2:?backend}"; shift ;;
     *) echo "usage: ci-golden.sh [--backend B | --mac | --win]" >&2; exit 64 ;;

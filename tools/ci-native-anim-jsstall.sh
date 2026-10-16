@@ -16,7 +16,7 @@
 #   D  native Animated.event: a wheel scroll at frame 20 moves the box driven
 #      by onScroll (useNativeDriver) from x0=0 to x0=200
 # Frame-counted, not wall-clock: xvfb has no vsync, so one clock frame is the
-# vsync unit (STATE.md FP-01). Node-free: committed bundle + RNI_BIN.
+# vsync unit (FP-01). Node-free: committed bundle + RNI_BIN.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -24,7 +24,7 @@ BUNDLE="$ROOT/fixtures/native-anim-jsstall/prebuilt/native-anim-jsstall.bundle"
 fail() { echo "NAJ_FAIL: $*" >&2; exit 1; }
 [ -s "$BUNDLE" ] || fail "no committed bundle at $BUNDLE"
 . tools/lib/host-window.sh
-# darwin (FP-19): real window server, no xvfb; run through tools/parity-mac.sh gate.
+# darwin (FP-19): real window server, no xvfb; run it on the Mac itself.
 [ "$(rni_host)" != other ] || fail "linux (xvfb) or darwin only"
 if [ -n "${RNI_BIN:-}" ]; then
   BIN="$RNI_BIN"

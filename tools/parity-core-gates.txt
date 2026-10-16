@@ -1,6 +1,5 @@
-# Core keep-green gates for every Flutter-parity pass (tools/parity-check.sh runs them in order).
-# One per line: script path, then an optional comment. Keep the whole set under ~45 min on this box;
-# tools/parity-baseline.sh records each gate's duration in .loop-logs/baseline.log.
+# Core keep-green gates (tools/ci-sanitize.sh runs them on the sanitized binary).
+# One per line: script path, then an optional comment. The whole set takes about 45 min.
 tools/ci-headless.sh          # P0 headless pixels
 tools/ci-p2.sh                # React tree -> pixels through the consumer path
 tools/ci-text.sh              # paragraphs
@@ -35,9 +34,9 @@ tools/ci-record-no-gl.sh      # FP-14 RECORD makes no GL call (shim counts 0, no
 tools/ci-raster-thread.sh     # FP-15 raster thread: stall still presents, 0 torn frames, 20 clean quits
 tools/ci-partial-repaint.sh    # FP-18 partial repaint: <= 5% per spinner frame, pixel-identical to full, 0.7 rule
 tools/ci-backend-agnostic.sh  # FP-20 no GL above the backend, pixels == pre-pass, metal/vulkan policy: 0 GL names, no supersample
-tools/ci-metal.sh             # FP-21 Metal: refused off darwin, gles default (darwin arms run via parity-mac.sh)
-tools/ci-metal-headless.sh    # FP-23 headless Metal: refused off darwin, headless gles default (darwin arms via parity-mac.sh)
-tools/ci-metal-pacing.sh  # FP-27: linux ~3 s (displaylink refusal); darwin ~1 min via parity-mac
+tools/ci-metal.sh             # FP-21 Metal: refused off darwin, gles default (darwin arms run on a Mac)
+tools/ci-metal-headless.sh    # FP-23 headless Metal: refused off darwin, headless gles default (darwin arms run on a Mac)
+tools/ci-metal-pacing.sh  # FP-27: linux ~3 s (displaylink refusal); darwin ~1 min on a Mac
 tools/ci-resize-geometry.sh   # FP-30 resize sync: no stale-size present, 1 s wait cap (~20 s)
 tools/ci-gpu-availability.sh  # FP-31 GPU availability switch: zero draw/present/upload while unavailable, full repaint on restore (~45 s)
 tools/ci-context-loss.sh     # FP-32 context loss: 10 forced losses, every box correct on the 1st present after each, ASan arm (~15 s + incremental ASan build)

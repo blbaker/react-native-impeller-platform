@@ -24,7 +24,7 @@
 # *view manager*, not from the C++ prop generation.
 #
 # This is solved prior art -- verbatim reasoning and structure from
-# ~/projects/rn-skia-prototype/tools/gen-rnsvg-codegen.sh (that repo
+# an earlier sibling project's tools/gen-rnsvg-codegen.sh (that repo
 # is read-only reference for us; this script is our own copy, adapted to
 # this engine's paths).
 #
