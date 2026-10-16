@@ -864,8 +864,8 @@ int runHttpSelfTest() {
     // TLS stack with verification disabled passes every other assertion here,
     // which is exactly the failure mode this test exists to catch.
     //
-    // Uses a documented-invalid-certificate endpoint rather than a live the company
-    // host. Skipped when the network is unreachable so the suite stays
+    // Uses a documented-invalid-certificate endpoint rather than a live
+    // internal host. Skipped when the network is unreachable so the suite stays
     // hermetic; a network failure is not a verification failure and must not
     // be reported as one.
     auto badUrl = parseUrl("https://self-signed.badssl.com/");

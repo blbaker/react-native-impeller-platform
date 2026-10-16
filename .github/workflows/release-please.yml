@@ -1,0 +1,40 @@
+# Opens/updates the version-bump PR from Conventional Commits, and -- once
+# that PR is merged by a human -- tags the release. It never publishes
+# anything: .github/workflows/release.yml (tag-only, RNI_PUBLISH_ENABLED
+# gated) owns that, unchanged by this file.
+#
+# ⛔ A TAG AUTHORED BY THE DEFAULT GITHUB_TOKEN DOES NOT TRIGGER OTHER
+# WORKFLOWS. GitHub suppresses push/workflow_run events for refs created by
+# the built-in token, specifically to stop recursive workflow chains.
+# release-please-action creates the release tag through the GitHub API using
+# whatever token it's given; with the default GITHUB_TOKEN, the resulting
+# `refs/tags/v*` push will NOT fire release.yml, and nothing will reach the
+# publish gate automatically.
+#
+# Fix, one-time, at go-public time: create a fine-grained PAT (contents:
+# write) or a GitHub App installation token, store it as the repo secret
+# RNI_RELEASE_PLEASE_TOKEN. A tag authored by that token fires release.yml
+# normally -- no change needed there, and RNI_PUBLISH_ENABLED stays exactly
+# as locked as it is today. Until that secret exists, this workflow still
+# opens and updates the release PR correctly; only the automatic trigger of
+# release.yml after a merge is missing. See docs/OPEN-SOURCE-READINESS.md.
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.RNI_RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

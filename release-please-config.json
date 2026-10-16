@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bump-minor-pre-major": true,
+  "include-component-in-tag": false,
+  "changelog-path": "CHANGELOG.md",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "package/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "package/package.json",
+          "jsonpath": "$.optionalDependencies['@react-native-impeller/engine-darwin-arm64']"
+        },
+        {
+          "type": "json",
+          "path": "package/package.json",
+          "jsonpath": "$.optionalDependencies['@react-native-impeller/engine-linux-x64']"
+        },
+        {
+          "type": "json",
+          "path": "package/package.json",
+          "jsonpath": "$.optionalDependencies['@react-native-impeller/engine-win32-x64']"
+        },
+        {
+          "type": "json",
+          "path": "packages-engine/engine-darwin-arm64/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "packages-engine/engine-linux-x64/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "packages-engine/engine-win32-x64/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
+  }
+}

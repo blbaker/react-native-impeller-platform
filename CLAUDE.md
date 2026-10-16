@@ -1,0 +1,18 @@
+# CLAUDE.md
+
+Read `AGENTS.md`. It is the single source of agent instructions for this
+repo.
+
+## Engineering standards
+
+Read `docs/engineering-standards.md` before writing or changing any code.
+
+## Optional Stop hook
+
+`tools/standards/stop-audit.sh` can be wired as a Claude Code `Stop` hook
+(`.claude/settings.json`) to run `node --test tools/standards/*.test.mjs`
+automatically before a session hands off a branch. It is not required and
+is not installed by default in this repo; add it yourself if you want the
+check to run without being asked. It exits `0` silently when there is
+nothing to check (for example, no commits yet ahead of `main`), so it never
+blocks a session that has not touched any code.
