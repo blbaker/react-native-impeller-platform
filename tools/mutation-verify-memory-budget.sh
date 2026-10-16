@@ -4,8 +4,10 @@
 #   M1  low-memory purge is a no-op                      -> purge: cache holds N bytes after the signal
 #   M2  the LRU evicts the most recently used entry      -> cycle: reloads= (recent images were evicted)
 #   M3  inserts never trim to the budget                 -> cycle: cache peak exceeds the 6 MB budget
-#   M4  textures of evicted bitmaps are never released   -> purge: textures_live= (leaked next to the reloads)
+#   M4  textures of evicted bitmaps are never released   -> purge: reloads=0 (stale texture kept) or textures_live=
 #   M5  evicted visible images are never reloaded        -> purge: reloads= (did not repaint)
+#   M6  (FP-56) no keep-alive: a budget eviction drops a texture still on screen -> live: reloads= (loop)
+#   M7  (FP-56) keep-alive survives a purge too          -> purge: reloads= (Flutter clear() drops live)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 FILES=(engine/fabric/ImageCache.cpp engine/scenegraph/ImagePaint.cpp)
@@ -54,8 +56,10 @@ run_gate "$BAK/m3.log"; expect_killed M3 "$BAK/m3.log" "cycle: cache peak [0-9]+
 restore
 
 echo "== M4: evicted bitmaps keep their textures =="
-mutate engine/scenegraph/ImagePaint.cpp "  if (epoch == sweptEpoch_) return;" "  if (true) return;"
-run_gate "$BAK/m4.log"; expect_killed M4 "$BAK/m4.log" "purge: textures_live="
+mutate engine/scenegraph/ImagePaint.cpp "  if (epoch == sweptEpoch_ && purges == sweptPurges_ && keptAlive_ == 0) return;" "  if (true) return;"
+# Since FP-56 the unswept texture is also served by the keep-alive path, so the purge arm's reload
+# check (which runs first) reports it before textures_live does.
+run_gate "$BAK/m4.log"; expect_killed M4 "$BAK/m4.log" "purge: (textures_live=|reloads=0 uploads_after=0)"
 restore
 
 echo "== M5: evicted visible images are not reloaded =="
@@ -64,4 +68,14 @@ mutate engine/scenegraph/ImagePaint.cpp "    if (f.evicted) image::Reload(uri, b
     else f.image"
 run_gate "$BAK/m5.log"; expect_killed M5 "$BAK/m5.log" "purge: reloads="
 restore
-echo "MUTATION_VERIFY_PASS (5 mutants killed)"
+echo "== M6: no keep-alive for on-screen images =="
+mutate engine/scenegraph/ImagePaint.cpp "    if (!purged && it->second.lastUse + 1 >= frame_) {" "    if (false) {  // MUTANT M6"
+run_gate "$BAK/m6.log"; expect_killed M6 "$BAK/m6.log" "live: reloads=[0-9]+ decodes=[0-9]+ for 8 visible images"
+restore
+
+echo "== M7: keep-alive ignores the purge =="
+mutate engine/scenegraph/ImagePaint.cpp "    if (!purged && it->second.lastUse + 1 >= frame_) {" "    if (it->second.lastUse + 1 >= frame_) {  // MUTANT M7"
+run_gate "$BAK/m7.log"; expect_killed M7 "$BAK/m7.log" "(purge|clear): reloads="
+restore
+
+echo "MUTATION_VERIFY_PASS (7 mutants killed)"

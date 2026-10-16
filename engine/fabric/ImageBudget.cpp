@@ -20,6 +20,7 @@ void SetCacheFloor(int64_t bytes) { Cache().SetFloor(bytes); }
 int64_t CacheBytes() { return Cache().Bytes(); }
 bool IsResident(const Decoded* d) { return Cache().IsResident(d); }
 uint64_t EvictionEpoch() { return Cache().Epoch(); }
+int PurgeCount() { return gPurges.load(); }
 
 void SetPurgeListener(std::function<void()> fn) {
   std::lock_guard<std::mutex> lock(gListenerMutex);

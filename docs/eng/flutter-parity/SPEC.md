@@ -1,6 +1,6 @@
 # react-native-impeller: rendering architecture to Flutter parity
 
-Research and build spec. 2026-10-14. Status: PROPOSED, waiting for Baker's approval. Nothing below is built yet.
+Research and build spec. 2026-10-14. Status: the roadmap was built by the Flutter-parity pass loop, 2026-10-14..16. See the status mark under each item in section 5.
 
 Scope: how Flutter uses Impeller for every part of rendering, read from Flutter's own source. Then how to follow that design inside a React Native 0.86 host (Hermes + Fabric + TurboModules), what our engine does today, and the ordered work to close the gap. Each work item comes with a gate, plus a mutant the gate has to catch.
 
@@ -78,46 +78,72 @@ Ordering rule: **instruments first**. "Bulletproof" can't be proven without fram
 ### Phase 0: instruments (about 1 week)
 
 - **RX-01 Frame-timing recorder + trace spans.** Model: Flutter's `FrameTimingsRecorder` state machine and `TRACE_EVENT` (A4 §4.7-4.8). Record vsync, build start/end, raster start/end and present per frame. Export to RN's `FrameTimingSequence` / PerformanceObserver and to a Chrome-trace JSON. Gate: a 120-frame animated fixture yields a monotonic, complete record for every frame plus p50/p95/p99. Mutant: skip the raster-start stamp on idle-skip frames.
+  - **Landed:** FP-01 [`4f14044`](https://github.com/blbaker/react-native-impeller-platform/commit/4f14044) (gate `tools/ci-frame-timings.sh`), trace spans FP-02 [`35bc9ec`](https://github.com/blbaker/react-native-impeller-platform/commit/35bc9ec) (gate `tools/ci-trace.sh`), RN DevTools FrameTimingSequence export FP-54 [`49d9727`](https://github.com/blbaker/react-native-impeller-platform/commit/49d9727) (gate `tools/ci-devtools-frames.sh`).
 - **RX-02 Sanitizer builds.** ASan+UBSan and TSan CMake presets, with the existing gate suite run under them. Gate: suite clean. Mutants: one deliberate out-of-bounds read (ASan), and the `SceneGraph` mutex dropped on one path (TSan).
+  - **Partial:** ASan+UBSan FP-03 [`ed892e1`](https://github.com/blbaker/react-native-impeller-platform/commit/ed892e1) (gate `tools/ci-sanitize.sh`) and TSan FP-04 [`e2bec60`](https://github.com/blbaker/react-native-impeller-platform/commit/e2bec60) (gate `tools/ci-tsan.sh`) landed, with the load proof FP-06 [`3d8ebeb`](https://github.com/blbaker/react-native-impeller-platform/commit/3d8ebeb) (gate `tools/ci-load-proof.sh`). Not landed: the ASan suite was taken out of merge verification on 2026-10-15 (DECISIONS.md item 15) and comes back with FP-57, which is still open in lane B (PASSES-B.md).
 - **RX-03 Validation layers on in CI.** `MTL_DEBUG_LAYER=1` + shader validation on the Mac; `VK_LAYER_KHRONOS_validation` for Vulkan. Gate: zero validation errors across the suite. Mutant: a wrong `VkImageLayout` / an out-of-range texture binding.
+  - **Partial:** GL KHR_debug validation on every GL context landed in FP-05 [`b015b4d`](https://github.com/blbaker/react-native-impeller-platform/commit/b015b4d) (gate `tools/ci-gl-validation.sh`). Metal runs use `MTL_DEBUG_LAYER=1` + shader validation inside `tools/ci-metal.sh` (FP-21) and `tools/ci-metal-headless.sh` (FP-23). Not done: `VK_LAYER_KHRONOS_validation` for Vulkan; no pass in PASSES.md or PASSES-B.md covers it.
 
 ### Phase 1: frame pipeline and threads (about 2-3 weeks)
 
 - **RX-10 NativeAnimated on the platform thread at vsync.** Drive `onRender` from our frame scheduler, matching RN's UI-tick contract (§2), not `scheduleWork`. Gate: a 50 ms JS stall every other frame adds no more than one vsync of latency to a running `Animated.timing` (`useNativeDriver: true`). Mutant: today's HEAD must go RED.
+  - **Landed:** FP-10 [`2c55278`](https://github.com/blbaker/react-native-impeller-platform/commit/2c55278) (gate `tools/ci-native-anim-jsstall.sh`). JS-stall lag went from 49-53 frames on the pre-pass binary to 0.0.
 - **RX-11 Real vsync + FrameScheduler.** `RequestFrame` dedupe, per-OS vsync (CVDisplayLink, swap interval 1, Choreographer). Gate: present-interval stddev under 10% of the refresh period over 120 frames. Mutant: swap interval 0.
+  - **Partial:** FrameScheduler + vsync on linux in FP-11 [`7a7a7ec`](https://github.com/blbaker/react-native-impeller-platform/commit/7a7a7ec) (gate `tools/ci-vsync.sh`); darwin present pacing on Metal with CVDisplayLink in FP-27 [`1de7a10`](https://github.com/blbaker/react-native-impeller-platform/commit/1de7a10) (gate `tools/ci-metal-pacing.sh`). FP-19 was blocked on ANGLE-Metal present jitter (BLOCKERS.md) and was superseded by FP-26 [`05a41ec`](https://github.com/blbaker/react-native-impeller-platform/commit/05a41ec) (gate `tools/ci-vsync-sched.sh`) and FP-27. Not done: Android Choreographer vsync; no pass covers it.
 - **RX-12 Raster thread + immutable snapshot pipeline (depth 2).** Mount on main produces a frozen render-tree snapshot; the raster thread turns it into the display list and presents. Model: `Pipeline<T>` / `Animator` / `Rasterizer`. Gate: a 50 ms main-thread stall with a queued frame still presents within one vsync of the stall ending; 1,000 commit-during-raster iterations show zero torn frames. Mutant: the raster side reads the live tree.
+  - **Landed:** record/raster split FP-13 [`69a3f7d`](https://github.com/blbaker/react-native-impeller-platform/commit/69a3f7d) (gate `tools/ci-record-raster.sh`), no GL in RECORD FP-14 [`2b4c01d`](https://github.com/blbaker/react-native-impeller-platform/commit/2b4c01d) (gate `tools/ci-record-no-gl.sh`), dedicated raster thread with a depth-2 pipeline FP-15 [`9466013`](https://github.com/blbaker/react-native-impeller-platform/commit/9466013) (gate `tools/ci-raster-thread.sh`). Headless stays single-threaded by design.
 - **RX-13 IO pool + decode clamp + off-thread upload.** Decode in a bounded pool, resize to the `<Image>` box, clamp to max texture size, upload off the raster thread (Metal/Vulkan direct; GL through a shared context). Gate: 200 distinct images keep threads at or below cores+2; an 8000x6000 PNG in a 200x200 box stays under 50 MB RSS and uploads at most 400x400 at 2x. Mutants: HEAD (unbounded threads), and the clamp removed.
+  - **Landed:** bounded IO pool + decode clamp FP-16 [`96ed663`](https://github.com/blbaker/react-native-impeller-platform/commit/96ed663) (gate `tools/ci-image-io.sh`, RSS limit 64 MB instead of 50 MB, measured +0 MB), upload on an IO context FP-17 [`1a8a92e`](https://github.com/blbaker/react-native-impeller-platform/commit/1a8a92e) (gate `tools/ci-image-upload.sh`). Windows has no EGL in this binary and keeps raster-thread uploads (FP-17 commit body).
 
 ### Phase 2: backends (about 2-3 weeks)
 
 - **RX-20 darwin native Metal (windowed).** `ImpellerContextCreateMetalNew` + `ImpellerSurfaceCreateWrappedMetalDrawableNew` on a CAMetalLayer, presented from the raster thread. Remove ANGLE from the darwin windowed path. Gate: the icon-edge AA metric at supersample 0 matches or beats today's N=4 result on hardware, and the style-audit grid stays green. Mutant: force the GL path; the AA metric must fail.
+  - **Landed, gate criterion changed:** FP-21 [`b1fca5b`](https://github.com/blbaker/react-native-impeller-platform/commit/b1fca5b) (gate `tools/ci-metal.sh`). "Metal N=0 matches ANGLE N=4" was measured false for 4x MSAA (edge error 6.69 vs 2.71), so the gate asserts real AA clearly better than ANGLE N=0 and prints the N=4 numbers (DECISIONS.md, triage call 2026-10-15). `--backend gles` keeps the ANGLE path.
 - **RX-21 SDK patch 0003: plumb `Flags.use_sdfs`.** Gate: a rounded-rect / circle fixture gains partial-coverage pixels on GL with supersample off. Mutant: flag ignored.
+  - **Landed:** FP-22 [`d7ba34d`](https://github.com/blbaker/react-native-impeller-platform/commit/d7ba34d) (gate `tools/ci-sdf-aa.sh`). `--sdf-aa` defaults to off until goldens agree.
 - **RX-22 SDK patch 0004: Metal offscreen texture surface.** Headless darwin gates then render on real Metal, not ANGLE. Gate: per-pixel match against the windowed capture. Mutant: wrong pixel format.
+  - **Landed:** FP-23 [`bd992d6`](https://github.com/blbaker/react-native-impeller-platform/commit/bd992d6) (gate `tools/ci-metal-headless.sh`). The patch is numbered 0005 because lane B's FP-24 took 0004. Headless darwin defaults to gles; Metal is opt-in with `--backend metal`.
 - **RX-23 Android: swapchain recreate + GLES fallback + bad-driver list.** Gate: 20 rotations, zero frozen frames; with a forced bad driver the app still renders via GLES. Mutants: no recreate; no fallback wiring.
+  - **Landed:** swapchain recreate FP-24 [`0324a4a`](https://github.com/blbaker/react-native-impeller-platform/commit/0324a4a) (gate `tools/ci-android-swapchain.sh`, S21, 20 rotations) and GLES fallback + bad-driver list FP-25 [`667c3b9`](https://github.com/blbaker/react-native-impeller-platform/commit/667c3b9) (gate `tools/ci-android-backend.sh`, S21). `tools/android-build.sh` still links the stock Android SDK by default; the fix needs `RNI_ANDROID_IMPELLER_SDK_DIR` pointed at the -parity-android SDK (FP-24 commit body).
 
 ### Phase 3: platform contract (about 2 weeks)
 
 - **RX-30 Resize synchronizer + stale-frame discard.** Gate: across 10 random fast resizes, a reference shape's aspect error stays at or under 2% in every captured frame. Mutant: skip the relayout for one resize.
+  - **Landed:** FP-30 [`916a636`](https://github.com/blbaker/react-native-impeller-platform/commit/916a636) (gate `tools/ci-resize-geometry.sh`), linux and darwin Metal.
 - **RX-31 GPU availability switch** on AppState background/inactive. Gate: zero submit/present calls while backgrounded. Mutant: paint loop ignores the flag.
+  - **Landed:** FP-31 [`b8da607`](https://github.com/blbaker/react-native-impeller-platform/commit/b8da607) (gate `tools/ci-gpu-availability.sh`), linux under xvfb. Not run: darwin, win32, a real window-manager minimize (FP-31 commit body).
 - **RX-32 Context / device loss recovery** (GL context lost, Vulkan device lost): rebuild the context and re-upload textures from the CPU cache. Gate: a forced loss mid-run recovers within 2 frames. Mutant: no re-upload, so images come back black.
+  - **Partial:** GL context loss recovery FP-32 [`59287bd`](https://github.com/blbaker/react-native-impeller-platform/commit/59287bd) (gate `tools/ci-context-loss.sh`), linux with a test hook. Not covered: Vulkan device loss, darwin Metal, Windows, headless, and a real driver reset (FP-32 commit body).
 - **RX-33 Memory pressure:** LRU image cache + glyph/texture caps + a low-memory purge hook. Gate: the long-session working set plateaus. Mutant: purge is a no-op.
+  - **Landed:** FP-33 [`619f36e`](https://github.com/blbaker/react-native-impeller-platform/commit/619f36e) (gate `tools/ci-memory-budget.sh`); FP-56 added Flutter's live-image keep-alive after the budget was found evicting on-screen images (gate arm `live`).
 
 ### Phase 4: features RN apps expect (about 3-4 weeks)
 
 - **RX-40 LayoutAnimation** (`UIManagerAnimationDelegate` / `LayoutAnimationKeyFrameManager`). Gate: more than one intermediate frame. Mutant: `nullptr` (HEAD).
+  - **Landed:** FP-40 [`348a13f`](https://github.com/blbaker/react-native-impeller-platform/commit/348a13f) (gate `tools/ci-layout-animation.sh`), 15-16 intermediate frames per arm.
 - **RX-41 Backdrop filters** (blur behind a card). Model: `Canvas::ApplyBackdropFilter`. Gate: lower variance inside the card than a control, unchanged pixels outside. Mutant: backdrop null (HEAD).
+  - **Landed:** FP-41 [`62964ab`](https://github.com/blbaker/react-native-impeller-platform/commit/62964ab) (gate `tools/ci-backdrop.sh`). RN 0.86 does not parse a backdrop-filter style, so this is expo-blur's BlurView.
 - **RX-42 External textures + texture registry** (video/camera frames). Model: `flow/layers/texture_layer.cc`. Gate: a registered texture is drawn under clip + rotate. Mutant: transform/clip not applied.
+  - **Landed:** FP-42 [`2547694`](https://github.com/blbaker/react-native-impeller-platform/commit/2547694) (gate `tools/ci-external-texture.sh`).
 - **RX-43 Platform views** (real OS views for WebView/maps). Model: `flow/embedded_views.h` mutator stack. Gate: a native view tracks its RN box through scroll and transform. Mutant: one transform skipped.
+  - **Partial:** FP-44 [`892a148`](https://github.com/blbaker/react-native-impeller-platform/commit/892a148) (gate `tools/ci-platform-view.sh`) embeds X11 child windows on linux. NSView and HWND embedders are not implemented; rounded clips clip to the bounding rect and opacity is not applied (FP-44 commit body).
 - **RX-44 Snapshot / toImage** (view-shot). Gate: snapshot equals an on-screen crop. Mutant: Y-flip.
+  - **Landed:** FP-43 [`312a6e6`](https://github.com/blbaker/react-native-impeller-platform/commit/312a6e6) (gate `tools/ci-snapshot.sh`).
 - **RX-45 Pipeline pre-warm tour** at startup. Gate: the first use of each blend/stencil combo stays under budget. Mutant: tour skipped.
+  - **Landed, gate criterion changed:** FP-34 [`43bb64f`](https://github.com/blbaker/react-native-impeller-platform/commit/43bb64f) (gate `tools/ci-prewarm.sh`). The gate checks tour coverage counters and first-use cost (<= 15 ms and <= 65% of the no-tour control) instead of the frame 29/30 ratio; about 10 ms of first-use cost remains (FP-34 commit body).
 
 ### Phase 5: enterprise quality bar (ongoing; starts in parallel with Phase 1)
 
 - **RX-50 Fast in-process tests on display-list output.** Flutter runs 723 backend-parameterized `TEST_P`s via `INSTANTIATE_PLAYGROUND_SUITE` (A4 §4.1). Ours: render-tree snapshot → draw-op dump assertions, under 2 s, alongside the existing 101 `ci-*` gates and 92 mutation scripts.
+  - **Blocked/open:** FP-50 [`d1db2e6`](https://github.com/blbaker/react-native-impeller-platform/commit/d1db2e6) (gate `tools/ci-unit.sh`, 42 cases in 11-13 ms) is committed on lane B (`origin/feat/flutter-parity-b`) and is not on main yet; PASSES-B.md on main still shows it open.
 - **RX-51 Per-backend goldens with a tolerance policy.** We go beyond Flutter here: its Impeller goldens run on macOS/Metal only [F:engine/src/flutter/impeller/golden_tests/README.md:L19-L20]. Ours: Metal, ANGLE-D3D11, GLES-Mesa, Vulkan. Mutant: 1 LSB colour shift stays PASS (tolerance works); a 1 px offset FAILS.
+  - **Partial:** FP-51 [`09576a3`](https://github.com/blbaker/react-native-impeller-platform/commit/09576a3) (gate `tools/ci-golden.sh`) has goldens for linux GLES (llvmpipe), darwin Metal and darwin ANGLE. Not done: win32 ANGLE-D3D11 goldens (the win32 build failed on the merged tree, STATE.md) and Vulkan goldens.
 - **RX-52 Fuzzing:** Fabric prop parsers, SVG path + dash parser, image decoders, display-list builder; a nightly 10-minute corpus under ASan.
+  - **Partial:** FP-52 [`ec1e39d`](https://github.com/blbaker/react-native-impeller-platform/commit/ec1e39d) (gate `tools/ci-fuzz.sh`) fuzzes the SVG path and dash parsers, image decode, prop parsers and SceneGraph mutation lists, 120 s per target under ASan+UBSan. The commit body describes no nightly 10-minute job.
 - **RX-53 Perf budgets:** p95/p99 build and raster per fixture, with alarms against a 10-run baseline.
+  - **Partial:** FP-53 [`1d532b2`](https://github.com/blbaker/react-native-impeller-platform/commit/1d532b2) (gate `tools/ci-perf.sh`) with linux xvfb baselines in `tools/perf/budgets.json`. `tools/perf/budgets-darwin.json` has no baselines yet.
 - **RX-54 Real-hardware CI matrix:** Mac (Metal), Windows (ANGLE-D3D11), Android emulator + 1 device (Vulkan + GLES). The macOS tester's manual measuring becomes an unattended job.
+  - **Partial, rest is this pass:** FP-55 [`165c264`](https://github.com/blbaker/react-native-impeller-platform/commit/165c264) (gate `tools/ci-matrix.sh`) runs linux and the Mac (Metal and ANGLE); its check run had win 1 SKIP (no win32 goldens). Android runs on the S21 through its own gates, outside the matrix. FP-56 (this pass) owns the full matrix run.
 
 ## 6. What we deliberately do NOT copy
 

@@ -5,7 +5,8 @@
 #
 #   M1  the bad glBindTexture runs on frame 2 of every run (not only under the test hook)
 #       -> arm A reports gl_validation_errors>=1 on a clean fixture
-#   M2  the <world> setPixels upload passes a depth format to glTexImage2D
+#   M2  the raster-side texture upload (TextureUploaderGl, used by <world> setPixels since FP-14)
+#       passes a depth format to glTexImage2D
 #       -> arm A reports gl_validation_errors>=1 on Eng21Nearest
 #   M3  the KHR_debug callback stops counting errors -> arm B sees the planted error uncounted
 set -euo pipefail
@@ -13,11 +14,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 GV="engine/base/GlValidation.cpp"
-SG="engine/scenegraph/SceneGraph.cpp"
+SG="engine/scenegraph/TextureUploaderGl.cpp"
 BACKUP="$(mktemp -d)"
 cp "$GV" "$BACKUP/GlValidation.cpp"
-cp "$SG" "$BACKUP/SceneGraph.cpp"
-restore() { cp "$BACKUP/GlValidation.cpp" "$GV"; cp "$BACKUP/SceneGraph.cpp" "$SG"; }
+cp "$SG" "$BACKUP/TextureUploaderGl.cpp"
+restore() { cp "$BACKUP/GlValidation.cpp" "$GV"; cp "$BACKUP/TextureUploaderGl.cpp" "$SG"; }
 trap 'restore; echo "(engine source restored; rebuild with tools/engine-build.sh)" >&2' EXIT
 
 build() { bash tools/engine-build.sh linux x64 > "$1" 2>&1 || { tail -20 "$1" >&2; echo "MUTATE_FAIL: build failed" >&2; exit 1; }; }
@@ -50,10 +51,8 @@ expect_killed M1 "$BACKUP/m1.log" 'GL_VALIDATION_FAIL: A (window|headless) Nativ
 restore
 
 echo "== M2: depth format in the world-raster upload =="
-mutate "$SG" '    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, srcW, srcH, 0, GL_RGBA,
-                GL_UNSIGNED_BYTE, entry->pixels.data());' \
-'    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, srcW, srcH, 0, GL_DEPTH_COMPONENT,  // MUTANT M2
-                GL_UNSIGNED_BYTE, entry->pixels.data());'
+mutate "$SG" '    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, j.w, j.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, j.rgba);' \
+'    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, j.w, j.h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, j.rgba);  // MUTANT M2'
 build "$BACKUP/m2-build.log"; gate "$BACKUP/m2.log" || true
 expect_killed M2 "$BACKUP/m2.log" 'GL_VALIDATION_FAIL: A (window|headless) Eng21Nearest: gl_validation_errors=[1-9]'
 restore

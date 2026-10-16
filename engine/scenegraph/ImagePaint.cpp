@@ -17,20 +17,41 @@ ImageTextures::~ImageTextures() {
   }
 }
 
+void ImageTextures::Release(std::unordered_map<const image::Decoded*, Entry>::iterator it) {
+  if (it->second.slot.texture) {
+    ImpellerTextureRelease(it->second.slot.texture);
+    image::AddLiveTextures(-1);
+  }
+  auto l = live_.find(it->second.uri);
+  if (l != live_.end() && l->second == it->first) live_.erase(l);
+  entries_.erase(it);
+}
+
+void ImageTextures::BeginFrame() {
+  ++frame_;
+  Sweep();
+}
+
 void ImageTextures::Sweep() {
   const uint64_t epoch = image::EvictionEpoch();
-  if (epoch == sweptEpoch_) return;
+  const int purges = image::PurgeCount();
+  if (epoch == sweptEpoch_ && purges == sweptPurges_ && keptAlive_ == 0) return;
+  const bool purged = purges != sweptPurges_;
   sweptEpoch_ = epoch;
+  sweptPurges_ = purges;
+  keptAlive_ = 0;
   for (auto it = entries_.begin(); it != entries_.end();) {
     if (image::IsResident(it->first)) {
       ++it;
       continue;
     }
-    if (it->second.slot.texture) {
-      ImpellerTextureRelease(it->second.slot.texture);
-      image::AddLiveTextures(-1);
+    if (!purged && it->second.lastUse + 1 >= frame_) {  // still on screen: keep alive
+      ++keptAlive_;
+      ++it;
+      continue;
     }
-    it = entries_.erase(it);
+    auto dead = it++;
+    Release(dead);
   }
 }
 
@@ -40,6 +61,8 @@ size_t ImageTextures::Clear() {
     if (e.slot.texture) ImpellerTextureRelease(e.slot.texture), image::AddLiveTextures(-1);
   }
   entries_.clear();
+  live_.clear();
+  keptAlive_ = 0;
   return n;
 }
 
@@ -53,6 +76,21 @@ ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
   // wakes the frame loop. Only a local source nobody requested (defaultSource)
   // is decoded here, synchronously, like RN iOS loads its default image.
   image::Lookup f = image::Find(uri, boxW, boxH);
+  if (!f.image && f.evicted) {  // FP-56 keepAlive: the budget dropped a bitmap still on screen
+    auto l = live_.find(uri);
+    auto it = l == live_.end() ? entries_.end() : entries_.find(l->second);
+    // The uri check: an erased entry's address can come back as another source's bitmap.
+    if (it != entries_.end() && it->second.uri == uri && it->second.slot.texture &&
+        !JobFailed(it->second.slot.job)) {
+      it->second.lastUse = frame_;
+      const image::Decoded& d = *it->second.decoded;
+      info->texWidth = d.width;
+      info->texHeight = d.height;
+      info->srcWidth = d.srcWidth;
+      info->srcHeight = d.srcHeight;
+      return it->second.slot.texture;
+    }
+  }
   if (!f.image && !f.failed && !f.pending) {
     // FP-33: a source the budget or a purge dropped is decoded again off-thread; the wake repaints.
     if (f.evicted) image::Reload(uri, boxW, boxH, reloadWake_);
@@ -70,6 +108,7 @@ ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
     const auto& d = f.image;
     Entry e;
     e.decoded = d;
+    e.uri = uri;
     const char* where = uploader->deferred() ? "raster" : "record";
     // FP-17: the IO thread already uploaded it; wrapping its storage makes no GPU call.
     if (const uint32_t ioName = io::Take(d.get()); ioName != 0) {
@@ -90,6 +129,8 @@ ImpellerTexture ImageTextures::Get(TextureUploader* uploader, RasterJobs* jobs,
     }
     it = entries_.emplace(d.get(), std::move(e)).first;
   }
+  it->second.lastUse = frame_;
+  live_[uri] = it->first;
   const image::Decoded& d = *it->second.decoded;
   info->texWidth = d.width;
   info->texHeight = d.height;
