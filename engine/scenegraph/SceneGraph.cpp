@@ -35,6 +35,8 @@
 #include "scenegraph/BackdropBlur.h"
 #include "fabric/ExpoBlurShadowNode.h"  // FP-41
 #include <react/renderer/components/image/ImageProps.h>  // A19
+#include "fabric/TextureViewShadowNode.h"  // FP-42
+#include "fabric/PlatformViewShadowNode.h"  // FP-44
 #include "scenegraph/ColorMatrixFilter.h"
 #include "scenegraph/BlendGroup.h"
 #include "scenegraph/EllipsizeText.h"
@@ -389,6 +391,7 @@ SceneGraph::~SceneGraph() {
     std::lock_guard<std::mutex> lock(imageDamage_->mutex);
     imageDamage_->wake = nullptr;
   }
+  if (snapshots_) snapshots_->SetWake(nullptr);  // FP-43: the controller outlives us
   // Release every cached offscreen texture. Ownership of each was transferred
   // to Impeller when it was adopted from the GL handle, so Impeller frees the
   // underlying GL texture on the last Release — we must not glDeleteTextures it.
@@ -400,6 +403,9 @@ SceneGraph::~SceneGraph() {
   for (auto& [tag, entry] : worldTextureCache_) {
     if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
   }
+  // FP-42: no producer may wake a dead scene; then the same ownership rule.
+  if (textureRegistry_) textureRegistry_->SetFrameListener(nullptr);
+  releaseExternalTextures();
   // ENG-10 sprite atlas -- same ownership rule.
   for (auto& [id, entry] : spriteTextureCache_) {
     if (entry.slot.texture) ImpellerTextureRelease(entry.slot.texture);
@@ -822,6 +828,20 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
     }
   }
 
+  // FP-42 <ImpellerTextureView textureId>.
+  if (node.componentName == "ImpellerTextureView") {
+    node.isExternalTexture = true;
+    if (const auto* tp = dynamic_cast<const react::ImpellerTextureViewProps*>(view.props.get())) {
+      node.externalTextureId = tp->textureId;
+    }
+  }
+  // FP-44 <ImpellerPlatformView color>.
+  if (node.componentName == "ImpellerPlatformView") {
+    node.isPlatformView = true;
+    if (const auto* pp = dynamic_cast<const react::ImpellerPlatformViewProps*>(view.props.get())) {
+      if (pp->color) colorToFloats(pp->color, node.pvColor);
+    }
+  }
   // FP-41: expo-blur <BlurView>'s native ExpoBlurView.
   if (node.componentName == react::ExpoBlurViewComponentName) {
     node.isBlurView = true;
@@ -1335,7 +1355,8 @@ void SceneGraph::bumpRevision() {
 // node's box (shadows, filters, images, SVG content) are recorded unbounded.
 void SceneGraph::recordDamage(ImpellerDisplayListBuilder builder, const SceneNode& node,
                               float x, float y, float w, float h, bool unbounded) {
-  if (cullActive_) return;
+  // FP-43: a snapshot is not this frame's damage; FP-44: nor an overlay slice.
+  if (cullActive_ || snapshotWalk_ || pvSliceWalk_) return;
   bool textShadow = false;
   float font = node.fontSize;
   for (const auto& r : node.runs) {
@@ -1353,7 +1374,9 @@ void SceneGraph::recordDamage(ImpellerDisplayListBuilder builder, const SceneNod
   }
   // Glyph ink (italics, descenders, a tight lineHeight) can leave the frame.
   if (node.isParagraph || node.isTextInput) outset = std::max(outset, std::max(8.0f, font));
-  const bool spinning = node.isSpinner && node.spAnimating;
+  // FP-42: a texture's frames change with no commit; TextureLayer::Diff marks
+  // its bounds dirty every frame, so it is volatile like a spinner.
+  const bool spinning = (node.isSpinner && node.spAnimating) || node.isExternalTexture;
   const bool caret = node.isTextInput && node.tag == tiFocused_;
   damage_.Record(builder, node.tag, node.parent, ImpellerRect{x, y, w, h}, outset, unbounded,
                  node.overflowHidden, spinning || caret);
@@ -2151,6 +2174,8 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
   // FP-18: the node's box through every transform above it, its own included.
   if (!damageEarlyOut) recordDamage(builder, node, x, y, w, h, /*unbounded=*/false);
+  // FP-44: RN pixels painted after a platform view that land on it (view_slicer.cc).
+  if (pvFrame_ && pvMainWalk()) pvNoteDrawLocked(builder, node, x, y, w, h);
   // Effects that spread a descendant's change past its own box.
   const bool damageSpreads = node.blurSigma > 0.0f || !node.dropShadows.empty() ||
                              node.hasLayerShadow || node.isSvgRoot;
@@ -2335,6 +2360,10 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
 
   // A7: continuous corners fill and clip as the squircle path; borders stay circular.
   const bool continuous = rounded && node.borderContinuous;
+  // FP-44 overlay slice walk: outside the slice the node's OWN pixels go to a
+  // sink; its transform, layers and clips (real builder) still apply.
+  const ImpellerDisplayListBuilder sliceBuilder = builder;
+  if (pvSliceWalk_ && !pvSliceActive_) builder = pvSink_;
   auto drawBoxWith = [&](ImpellerPaint p) {
     ImpellerPath sq = rni::MakeContinuousRRectPath(x, y, w, h, radii);
     if (sq == nullptr) return false;
@@ -2695,6 +2724,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     }
   }
 
+  // FP-42: inside this node's transform / opacity and every ancestor clip
+  // (TextureLayer is a leaf under the mutator stack). Leaf opacity = paint alpha.
+  if (node.isExternalTexture) paintExternalTexture(builder, node, x, y, w, h, OwnAlpha(node));
+  // FP-44: the native view's box and mutators (a hole when the host embeds it).
+  if (node.isPlatformView) pvNoteViewLocked(builder, node, x, y, w, h, OwnAlpha(node));
+
   // <TextInput>. ENG-01b. Paint the field's text (the live edit buffer if this
   // field is focused, else its controlled value), or the placeholder when the
   // field is empty, plus a caret when focused. Uses the SAME Impeller paragraph
@@ -2898,10 +2933,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
 
   ImpellerPaintRelease(paint);
+  builder = sliceBuilder;  // FP-44
 
   // Children are positioned relative to this node's frame origin.
   const bool clip = node.overflowHidden;
   if (clip) {
+    pvPushClipLocked(builder, x, y, w, h);  // FP-44 kClipRect mutator
     ImpellerDisplayListBuilderSave(builder);
     // Style audit item 13: a rounded box clips its children to the ROUNDED
     // outline (iOS masksToBounds + cornerRadius), not to its square frame.
@@ -3007,6 +3044,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
   if (clip) {
     ImpellerDisplayListBuilderRestore(builder);
+    pvPopClipLocked();
   }
   // Paired with the viewBox save above. AFTER the child walk, for the same
   // reason the SVG-matrix restore is: the mapping exists to transform the
@@ -3510,11 +3548,13 @@ bool SceneGraph::paintTreeSupersampled(ImpellerDisplayListBuilder builder,
   // not expect. The root offscreen already supersamples the icons.
   const int savedN = supersample_;
   supersample_ = 0;
+  pvWalkScale_ = (float)N;  // FP-44: platform view boxes in surface pixels
   for (auto rootTag : roots_) {
     auto it = nodes_.find(rootTag);
     if (it == nodes_.end()) continue;
     paintNode(off, it->second, 0, 0);
   }
+  pvWalkScale_ = 1.0f;
   paintModalsLocked(off);
   supersample_ = savedN;
   ImpellerDisplayList dl = ImpellerDisplayListBuilderCreateDisplayListNew(off);
@@ -3751,18 +3791,7 @@ ImpellerColorSource SceneGraph::makeGradientSource(const SceneNode* def,
       kImpellerTileModeClamp, nullptr);
 }
 
-int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
-                            float pointScaleFactor,
-                            std::vector<facebook::react::EventEmitter::Shared>* shows,
-                            RasterJobs* jobs) {
-  // FP-14: GPU work found by this walk is queued here, never done here.
-  struct JobsScope {
-    RasterJobs*& slot;
-    ~JobsScope() { slot = nullptr; }
-  } jobsScope{jobs_};
-  jobs_ = jobs;
-  if (!cullActive_) damage_.BeginWalk();  // FP-18
-  damageSpread_ = 0;
+void SceneGraph::rebuildPaintRegistriesLocked() {
   // Rebuild the gradient registry before walking the tree: a def may be
   // declared anywhere (usually inside <Defs>, which never paints), so it
   // cannot be resolved during the walk itself.
@@ -3779,6 +3808,22 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
       svgDefs_[n.svgDefName] = &n;
     }
   }
+}
+
+int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
+                            float pointScaleFactor,
+                            std::vector<facebook::react::EventEmitter::Shared>* shows,
+                            RasterJobs* jobs) {
+  // FP-14: GPU work found by this walk is queued here, never done here.
+  struct JobsScope {
+    RasterJobs*& slot;
+    ~JobsScope() { slot = nullptr; }
+  } jobsScope{jobs_};
+  jobs_ = jobs;
+  if (!cullActive_) damage_.BeginWalk();  // FP-18
+  pvBeginWalkLocked();  // FP-44
+  damageSpread_ = 0;
+  rebuildPaintRegistriesLocked();
   svgUseDepth_ = 0;
   spinnerAnimating_.store(false, std::memory_order_relaxed);
   // ENG item 2b — ROOT SUPERSAMPLE HOOK. At N>=2 with a wired context and known

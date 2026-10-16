@@ -56,6 +56,7 @@
 #if RNI_WITH_WINDOW
 #include "host/GlfwSurface.h"
 #include "host/WindowRasterizer.h"
+#include "host/PlatformViewEmbedder.h"
 #include "host/ContextLoss.h"
 #include "host/ContextRecovery.h"
 #include <chrono>
@@ -82,6 +83,7 @@
 #endif
 #include "host/AnimRowProbe.h"
 #include "host/UniformProbe.h"
+#include "host/ExternalTextureProbe.h"
 #include "host/PoisonProbe.h"
 #include "base/GpuAvailability.h"
 #include "host/ResizeProbe.h"
@@ -274,6 +276,8 @@ int ListModules() {
   rni::SceneGraph sceneGraph(surface.typography());
   // ENG-09 — wire the world raster store so --list-modules boots identically.
   sceneGraph.setWorldRasterStore(host.worldRasterStore());
+  sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
+  sceneGraph.setSnapshotController(host.snapshots());  // FP-43
   rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
                          /*logMutations*/ false, host.displayMetrics());
 
@@ -645,7 +649,10 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // input, mount, NativeAnimated, the FrameScheduler and RECORD.
   // FP-30: declared before the rasterizer, which reports into it until it joins.
   rni::ResizeSync resizeSync;
+  // FP-44: native child views (linux X11); null elsewhere (views paint their colour).
+  auto pvEmbedder = rni::MakePlatformViewEmbedder(surface);
   rni::WindowRasterizer rasterizer(surface, frameTimings, gRasterThread);
+  rasterizer.SetPlatformViewEmbedder(pvEmbedder.get());
   rasterizer.SetPartialRepaint(gPartialRepaint);
   rasterizer.SetResizeSync(&resizeSync);
   resizeSync.SetExpected(surface.width(), surface.height());
@@ -709,6 +716,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // ENG-09 — the <world> painter reads pixel buffers the WorldRaster
   // TurboModule writes; give the SceneGraph the same store the host owns.
   sceneGraph.setWorldRasterStore(host.worldRasterStore());
+  sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
+  sceneGraph.setSnapshotController(host.snapshots());  // FP-43
+  sceneGraph.setPlatformViewsEmbedded(pvEmbedder != nullptr);  // FP-44
   host.displayMetrics()->set((float)pxWidth / pointScale,
                              (float)pxHeight / pointScale, pointScale);
   host.appearance()->set(colorScheme);
@@ -2097,6 +2107,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   }
   fabric.printLayoutAnimationSummary();  // FP-40
   rasterizer.PrintSummary();  // FP-13 pipeline + FP-15 raster thread
+  if (pvEmbedder) pvEmbedder->PrintSummary();  // FP-44
   rni::uniformprobe::PrintSummary();  // FP-15 test hook
   rni::poisonprobe::PrintSummary();  // FP-17 test hook
   resizeSync.PrintSummary();  // FP-30
@@ -2108,6 +2119,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::image::PrintStats();  // FP-16
   rni::io::PrintStats();  // FP-17
   rni::PrintGpuTextureTotals();  // FP-20
+  host.textureRegistry()->PrintSummary();  // FP-42
+  rni::exttexprobe::PrintSummary();  // FP-42 test hook
+  host.snapshots()->PrintSummary();  // FP-43
   rni::typography::PrintSummary();  // FP-12
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
@@ -3158,6 +3172,8 @@ int main(int argc, char** argv) {
     host.setKnownComponents(rni::FabricHost::knownComponentNames());
     // ENG-09 — wire the world raster store, same as the primary path.
     sceneGraph.setWorldRasterStore(host.worldRasterStore());
+    sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
+  sceneGraph.setSnapshotController(host.snapshots());  // FP-43
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
     // Dimensions/PixelRatio read this. RN code branches on PixelRatio.get()
     // for asset selection (@2x/@3x) and hairline widths, so reporting 1 while
@@ -3671,6 +3687,7 @@ int main(int argc, char** argv) {
     rni::image::PrintStats();  // FP-16
     rni::io::PrintStats();  // FP-17
     rni::PrintGpuTextureTotals();  // FP-20
+    host.snapshots()->PrintSummary();  // FP-43
     rni::typography::PrintSummary();  // FP-12
   }
 

@@ -79,12 +79,19 @@ class SupersampleBackend {
                          ImpellerTexture target) = 0;
 };
 
+// FP-43 (shell/common/snapshot_controller_impeller.cc DoMakeRasterSnapshot +
+// image_encoding_impeller.cc readback). RASTER: draws `dl` into a fresh w x h
+// offscreen and reads it back as premultiplied RGBA8, row 0 = TOP.
+using SnapshotReadback =
+    std::function<bool(ImpellerDisplayList dl, int w, int h, std::vector<uint8_t>* rgba)>;
+
 struct RenderBackend {
   GpuBackend context{GpuBackend::kGles};  // what the ImpellerContext really is
   GpuBackend policy{GpuBackend::kGles};   // whose rules the painter follows
   std::unique_ptr<TextureUploader> uploader;
   std::unique_ptr<SupersampleBackend> supersample;  // null: MSAA from the surface
   std::function<void()> afterRaster;                // RASTER, after each frame
+  SnapshotReadback snapshot;                        // null: no offscreen readback
 };
 
 // RASTER side (a GL context must be current when context == kGles). `policy`
@@ -97,6 +104,7 @@ struct GlParts {
   std::unique_ptr<TextureUploader> uploader;
   std::unique_ptr<SupersampleBackend> supersample;
   std::function<void()> afterRaster;
+  SnapshotReadback snapshot;
 };
 GlParts MakeGlParts(ImpellerContext ctx);
 std::unique_ptr<TextureUploader> MakeContentsUploader(ImpellerContext ctx);

@@ -48,6 +48,10 @@ std::unique_ptr<FrameItem> RecordFrame(SceneGraph& scene, float pointScale,
       drawop::AppendFrame(item->frameNumber, ops);
     }
   }
+  item->extTextures = scene.takeExternalTextureNote();
+  item->platformViews = scene.takePlatformViewFrame();  // FP-44
+  // FP-43: queued snapshots record after the walk; their jobs run after its uploads.
+  scene.recordSnapshots(item->jobs.get());
   if (timings) timings->SetNodes(item->painted);  // FP-34
   if (extras) extras(builder);
   {
