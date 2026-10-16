@@ -4,6 +4,8 @@
 // (rni::image cache) and kept for the scene's lifetime.
 
 #include "impeller.h"
+#include "scenegraph/GpuBackend.h"
+#include "scenegraph/RasterJobs.h"
 
 #include <cstdint>
 #include <functional>
@@ -30,6 +32,8 @@ class ImageTextures {
   ImageTextures(const ImageTextures&) = delete;
   ImageTextures& operator=(const ImageTextures&) = delete;
   ~ImageTextures();
+  // FP-32: releases every texture; the decoded pixels stay in the image store.
+  size_t Clear();
 
   // FP-33: releases the textures whose bitmap the budget or a low-memory purge evicted. Cheap
   // when nothing was evicted since the last call. Paint thread.
@@ -37,14 +41,17 @@ class ImageTextures {
   // Runs (any thread) when a reload of an evicted source ends, so the scene repaints.
   void SetReloadWake(std::function<void()> wake) { reloadWake_ = std::move(wake); }
 
-  // Null when the source is not decoded (yet) or no context is wired.
+  // Null when the source is not decoded (yet) or no backend is wired.
   // boxW/boxH: the painted box in device pixels (picks the decode size).
-  ImpellerTexture Get(ImpellerContext context, const std::string& uri, float boxW, float boxH,
-                      ImageTextureInfo* info);
+  // FP-20: a miss goes through the backend's uploader (GL: a pool name filled
+  // on the raster side, FP-14, so RECORD makes no GL call; Metal/Vulkan:
+  // Impeller uploads in place). `jobs` is this frame's raster queue.
+  ImpellerTexture Get(TextureUploader* uploader, RasterJobs* jobs, const std::string& uri,
+                      float boxW, float boxH, ImageTextureInfo* info);
 
  private:
   struct Entry {
-    ImpellerTexture texture{nullptr};
+    TextureSlot slot;
     std::shared_ptr<const image::Decoded> decoded;
   };
   std::unordered_map<const image::Decoded*, Entry> entries_;

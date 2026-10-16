@@ -20,3 +20,10 @@ called_from_lib:libimpeller.so
 # race:, not called_from_lib: (the latter hides the driver's mutex calls and TSan then
 # reports lock-order inversions against our locks that it can no longer order).
 race:libgallium
+
+# glog stamps every message through LogMessageTime -> CalcGmtOffset -> localtime_r/gmtime_r,
+# which run glibc's tzset under glibc's internal tzset_lock (a lowlevellock TSan does not
+# intercept). Two threads logging at once (main: ~Scheduler's LOG at teardown, js: a LOG in the
+# same instant) then show as strdup/free of the TZ name racing (seen 1 in 4 fp12 runs under a CPU
+# hog, FP-06). Every non-libc frame is glog's; no engine/ frame is involved.
+race:CalcGmtOffset

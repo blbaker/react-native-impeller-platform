@@ -75,7 +75,7 @@ WINDOWED="${RNI_SC_WINDOWED:-1}"
 if [ "$WINDOWED" = 1 ]; then
   echo "== render windowed probe://interact =="
   if [ "$OS" = Darwin ]; then WRAP=(); elif command -v xvfb-run >/dev/null; then
-    WRAP=(xvfb-run -a -s "-screen 0 1280x1024x24"); else WRAP=(); export DISPLAY="${DISPLAY:-:0}"; fi
+    WRAP=(xvfb-run -a -f "$WORK/xvfb.auth" -s "-screen 0 1280x1024x24"); else WRAP=(); export DISPLAY="${DISPLAY:-:0}"; fi
   # Hooks fire at frame 200: ~0.2 s on xvfb, ~3.3 s on a 60 Hz vsynced darwin window.
   if [ "$OS" = Darwin ]; then SHOT_MS=6000; else SHOT_MS=2500; fi
   # macOS ships no timeout(1); perl's alarm survives exec.

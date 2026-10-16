@@ -34,6 +34,8 @@ if [ -n "${EXTRA_NPM:-}" ]; then
     || { echo "build-fixture-bundle: FAIL — could not install $EXTRA_NPM" >&2; exit 1; }
 fi
 cp "$SRC/index.js" "$APP/index.js"
+# Sibling modules the entry imports (e.g. eng10-world-sprites/scene.js).
+for m in "$SRC"/*.js; do [ "$(basename "$m")" = index.js ] || cp "$m" "$APP/"; done
 npx --no-install react-native init-impeller >/dev/null 2>&1 || true
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/fixture.bundle > "$WORK/bundle.log" 2>&1 \

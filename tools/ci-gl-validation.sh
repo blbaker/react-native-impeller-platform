@@ -23,7 +23,9 @@ echo "engine: $BIN ($( (shasum -a 256 "$BIN" 2>/dev/null || sha256sum "$BIN") | 
 WORK="$(mktemp -d)"
 cleanup() { [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"; }
 trap cleanup EXIT
-WIN=(); [ "$(uname -s)" = Linux ] && WIN=(xvfb-run -a -s "-screen 0 1280x1024x24")
+# FP-06: -f gives xvfb-run an auth file, so it makes no temp dir whose failed cleanup replaces the
+# child's exit status with 5 (seen once under a CPU hog: "B window abort: exit 5").
+WIN=(); [ "$(uname -s)" = Linux ] && WIN=(xvfb-run -a -f "$WORK/xvfb.auth" -s "-screen 0 1280x1024x24")
 FX="$ROOT/fixtures"
 declare -A BUNDLE=(
   [NativeRotateProbe]="$FX/native-transform/prebuilt/native-transform.bundle"

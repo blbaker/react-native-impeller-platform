@@ -30,3 +30,14 @@ tools/ci-layout-animation.sh  # FP-40 LayoutAnimation update/create/delete curve
 tools/ci-backdrop.sh  # FP-41 expo-blur backdrop blur, tint, outside unchanged, ss 0/4, ScrollView (about 2 s)
 tools/ci-perf.sh  # FP-53 frame-time budgets, median of 5 runs x3 fixtures (about 45 s)
 tools/ci-devtools-frames.sh  # FP-54 DevTools trace: frames == presents while recording, none outside, RN clock (about 55 s)
+tools/ci-record-raster.sh     # FP-13 record/raster split: pixels == pre-pass, phases stamped
+tools/ci-record-no-gl.sh      # FP-14 RECORD makes no GL call (shim counts 0, no context current), pixels == FP-13
+tools/ci-raster-thread.sh     # FP-15 raster thread: stall still presents, 0 torn frames, 20 clean quits
+tools/ci-partial-repaint.sh    # FP-18 partial repaint: <= 5% per spinner frame, pixel-identical to full, 0.7 rule
+tools/ci-backend-agnostic.sh  # FP-20 no GL above the backend, pixels == pre-pass, metal/vulkan policy: 0 GL names, no supersample
+tools/ci-metal.sh             # FP-21 Metal: refused off darwin, gles default (darwin arms run via parity-mac.sh)
+tools/ci-metal-headless.sh    # FP-23 headless Metal: refused off darwin, headless gles default (darwin arms via parity-mac.sh)
+tools/ci-metal-pacing.sh  # FP-27: linux ~3 s (displaylink refusal); darwin ~1 min via parity-mac
+tools/ci-resize-geometry.sh   # FP-30 resize sync: no stale-size present, 1 s wait cap (~20 s)
+tools/ci-gpu-availability.sh  # FP-31 GPU availability switch: zero draw/present/upload while unavailable, full repaint on restore (~45 s)
+tools/ci-context-loss.sh     # FP-32 context loss: 10 forced losses, every box correct on the 1st present after each, ASan arm (~15 s + incremental ASan build)

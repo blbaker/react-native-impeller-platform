@@ -46,6 +46,12 @@ std::unordered_map<uint64_t, std::shared_ptr<Job>> gTickets;
 uint64_t gNextTicket = 0;
 int gInFlight = 0, gJobs = 0, gDedup = 0, gCanceled = 0;
 std::atomic<int> gSync{0};
+std::atomic<UploadHook> gUploadHook{nullptr};  // FP-17
+// FP-06 teardown fence: completions that finish after StopCallbacks() drop their waiters;
+// StopCallbacks() returns only once no completion callback is still running.
+bool gCallbacksStopped = false;
+int gCallbacksRunning = 0;
+std::condition_variable gCallbacksIdle;
 
 IoPool& DecodePool() {
   static IoPool* pool = new IoPool("rni-image-io", DecodePoolSize());
@@ -99,10 +105,15 @@ void Complete(const std::shared_ptr<Job>& job, const LoadResult& r, bool cache) 
     if (cache) Cache().Put(job->uri, job->sizeKey, r.image, job->headers);
     waiters = TakeWaiters(*job);
     ErasePending(job);
+    if (gCallbacksStopped) waiters.clear();
+    else if (!waiters.empty()) ++gCallbacksRunning;
   }
+  if (waiters.empty()) return;
   for (auto& w : waiters) {
     if (!w.owned || !w.owner.expired()) w.done(r);
   }
+  std::lock_guard<std::mutex> lock(gMutex);
+  if (--gCallbacksRunning == 0) gCallbacksIdle.notify_all();
 }
 
 void Finish(const std::shared_ptr<Job>& job) {
@@ -129,6 +140,16 @@ void DecodeJob(const std::shared_ptr<Job>& job) {
   } else {
     if (ReadSourceBytes(job->uri, local)) r.image = RunDecode(local.data(), local.size(), job->boxW, job->boxH, job->uri);
     if (!r.image) r.error = "could not load " + job->uri;
+  }
+  if (UploadHook upload = gUploadHook.load(); upload && r.image) {
+    // FP-17: the load completes after the IO thread's upload, still in flight
+    // for WaitIdle until then.
+    std::shared_ptr<const Decoded> image = r.image;
+    upload(std::move(image), [job, r] {
+      Complete(job, r, true);
+      Finish(job);
+    });
+    return;
   }
   Complete(job, r, r.image || !job->remote);
   Finish(job);
@@ -282,6 +303,19 @@ void PrintStats() {
     std::fclose(f);
   }
 #endif
+}
+
+void SetUploadHook(UploadHook hook) { gUploadHook.store(hook); }
+
+void StopCallbacks() {
+  std::unique_lock<std::mutex> lock(gMutex);
+  gCallbacksStopped = true;
+  gCallbacksIdle.wait(lock, [] { return gCallbacksRunning == 0; });
+}
+
+void StartCallbacks() {
+  std::lock_guard<std::mutex> lock(gMutex);
+  gCallbacksStopped = false;
 }
 
 }  // namespace rni::image

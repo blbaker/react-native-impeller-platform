@@ -16,6 +16,7 @@
 #pragma once
 
 #include <FBReactNativeSpecJSI.h>
+#include "base/GpuAvailability.h"
 #include <react/bridging/Bridging.h>
 
 #include <cstdio>
@@ -193,17 +194,21 @@ class AppStateModule
   jsi::Object getConstants(jsi::Runtime& rt) {
     jsi::Object constants(rt);
     constants.setProperty(rt, "initialAppState",
-                          jsi::String::createFromAscii(rt, "active"));
+                          jsi::String::createFromAscii(rt, AppStateName()));
     return constants;
   }
   void getCurrentAppState(jsi::Runtime& rt, jsi::Function success,
                           jsi::Function /*error*/) {
     jsi::Object state(rt);
-    state.setProperty(rt, "app_state", jsi::String::createFromAscii(rt, "active"));
+    state.setProperty(rt, "app_state", jsi::String::createFromAscii(rt, AppStateName()));
     success.call(rt, std::move(state));
   }
   void addListener(jsi::Runtime&, jsi::String) {}
   void removeListeners(jsi::Runtime&, double) {}
+
+ private:
+  // FP-31: "background" while the GPU-availability switch is off (window iconified).
+  static const char* AppStateName() { return rni::gpu::Available() ? "active" : "background"; }
 };
 
 class DeviceInfoModule

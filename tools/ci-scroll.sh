@@ -35,6 +35,7 @@ CI_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 . "$CI_TOOLS/ci-triple.sh"
+. "$CI_TOOLS/lib/wait-for.sh"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
 FIXTURE="$ROOT/fixtures/p9-scroll"
 
@@ -118,24 +119,26 @@ print("%d,%d,%d" % (px[o], px[o+1], px[o+2]))
 PY
 }
 
-# ⛔ THE SCREENSHOT MUST BE TAKEN AFTER THE SCROLL, AND --screenshot-after IS A
-# DEADLINE IN MILLISECONDS FROM PROCESS START, NOT FROM THE SCROLL. The first
-# frame lands at ~15ms and the scroll hook fires at frame N, so a large value
-# here captures long after the scroll (fine) and a value smaller than the
-# scroll's frame captures BEFORE it -- producing a "nothing moved" failure that
-# is entirely this script's fault. 60ms is comfortably after frame 10 on every
-# host measured and comfortably inside the 400-frame budget.
-SHOT_MS=60
+# ⛔ THE SCREENSHOT IS ANCHORED TO THE SCROLL'S FRAME, NOT TO A CLOCK (FP-06).
+# This used to be --screenshot-after 60: a deadline in ms from process start,
+# "comfortably after frame 10 on every host measured". Under ASan on a box two
+# lanes kept busy, frame 10 came later than 60 ms, the capture landed BEFORE the
+# scroll, and a correct engine failed both the offset and the clamp assertions.
+# The scroll hook fires once frame SCROLL_FRAME has painted and applies the
+# offset synchronously, so the first frame painted after it already shows it;
+# SHOT_FRAME leaves one spare frame. No timing assumption is left in B/C/D.
 SCROLL_FRAME=10
+SHOT_FRAME=$((SCROLL_FRAME + 2))
+RUN_FRAMES=$((SHOT_FRAME + 6))
 
 run_scroll() {
   local spec="$1" shot="$2" log="$3"
   set +e
   "$RESOLVED" --window --probe-banner off --bundle "$BUNDLE" --app-name P9Scroll \
-              --width "$WIN_W" --height "$WIN_H" --frames 400 \
+              --width "$WIN_W" --height "$WIN_H" --frames "$RUN_FRAMES" \
               --screenshot-first "$WORK/before.ppm" \
               --scroll-after-frames "$spec" \
-              --screenshot "$shot" --screenshot-after "$SHOT_MS" > "$log" 2>&1
+              --screenshot "$shot" --screenshot-after-frames "$SHOT_FRAME" > "$log" 2>&1
   local rc=$?
   set -e
   [ "$rc" -eq 0 ] || { tail -20 "$log" | sed 's/^/   /' >&2; fail "--scroll-after-frames $spec exited $rc"; }
@@ -170,14 +173,22 @@ if [ "$XTEST_OK" = "0" ]; then
   echo "  glfwSetScrollCallback. Do not read this run as full coverage."
 else
   REAL_LOG="$WORK/real-scroll.log"
+  # FP-06: no sleeps. Wheel once the engine reports its first present (the window
+  # is mapped and painted), wait for the engine's own "scroll hit=" line, then ask
+  # for a clean exit; --quit-on-term drains the JS thread before the counters.
   set +e
   "$RESOLVED" --window --probe-banner off --bundle "$BUNDLE" --app-name P9Scroll \
-              --width "$WIN_W" --height "$WIN_H" --frames 5000 > "$REAL_LOG" 2>&1 &
+              --width "$WIN_W" --height "$WIN_H" --quit-on-term > "$REAL_LOG" 2>&1 &
   APP_PID=$!
-  sleep 4
+  rni_track "$APP_PID"
+  rni_wait_line "$REAL_LOG" '^rn-impeller: first_present_ms=' 30 "$APP_PID"
+  WRC=$?
+  [ "$WRC" -eq 0 ] || { tail -20 "$REAL_LOG" | sed 's/^/   /' >&2; fail "the window never reported its first present (wait rc=$WRC)"; }
   "$XPY" "$XSCROLL" "React Native (Impeller)" 200 150 -2 > "$WORK/xscroll.log" 2>&1
   XRC=$?
-  wait "$APP_PID"
+  rni_wait_line "$REAL_LOG" '^rn-impeller: scroll hit=' 20 "$APP_PID"
+  kill -TERM "$APP_PID" 2> /dev/null
+  rni_wait_exit "$APP_PID" 60
   APPRC=$?
   set -e
   [ "$XRC" -eq 0 ] || { sed 's/^/   /' "$WORK/xscroll.log" >&2; fail "XTest wheel driver failed (rc=$XRC)"; }

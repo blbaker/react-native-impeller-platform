@@ -18,9 +18,12 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "host/ContextLossGl.h"
 #include "host/Pixel.h"
 #include "impeller.h"
 
@@ -29,6 +32,7 @@
 // itself and attaches it to the Cocoa view's layer. Those handles have to live
 // for the surface's lifetime, so they are members here. See GlfwSurface.cpp.
 #include <EGL/egl.h>
+#include "host/MetalSurface.h"  // FP-21: complete type for the unique_ptr member
 #endif
 
 struct GLFWwindow;
@@ -41,8 +45,37 @@ class GlfwSurface {
   ~GlfwSurface();
 
   // Returns false and fills `error` rather than aborting, matching
-  // HeadlessSurface's contract.
+  // HeadlessSurface's contract. init() = initWindow() + initGpu(false) on the
+  // calling thread.
   bool init(int width, int height, std::string* error);
+  // FP-15: the window half, on the main thread (every glfw* window call stays
+  // there; darwin also builds the ANGLE EGL objects here and leaves them not
+  // current). Creates and binds the main thread's typography context.
+  bool initWindow(int width, int height, std::string* error);
+  // FP-15: the GL half. The CALLING thread owns the GL context from here on:
+  // it makes it current, creates the Impeller context (the interop GLES reactor
+  // only reacts on its creating thread: reactor_worker_gles.cc) and wraps fbo 0.
+  // rasterThread: RECORD on main has no context to release (record hooks).
+  bool initGpu(bool rasterThread, std::string* error);
+  // GL thread. Rebuild the fbo-0 wrap + viewport when a frame was recorded for
+  // another pixel size (Rasterizer: the surface frame takes the tree's size).
+  bool ensureGpuSize(int w, int h);
+  // GL thread. Release the wrap and the Impeller context, then make no context
+  // current, so the window (and its GL context) can die on main.
+  void releaseGpu();
+  // FP-32 (Rasterizer::Teardown + Setup), raster thread: the IO context, the
+  // Impeller surface and context and the EGL context are destroyed, then a new
+  // EGL context (same config) and everything on it are built. False when the
+  // platform cannot (Metal, Windows) or a step failed (`error`).
+  bool rebuildGpu(bool rasterThread, std::string* error);
+  // FP-32, main thread: a new typography context replaces the bound one.
+  void rebuildTypography();
+  // FP-32, raster thread, after present(): the swap failed with EGL_CONTEXT_LOST.
+  bool takeSwapLost() { return std::exchange(swapLost_, false); }
+  // FP-32, raster thread: non-zero GL reset status of a robust context.
+  unsigned pollResetStatus() const;
+  int gpuWidth() const { return gpuWidth_; }
+  int gpuHeight() const { return gpuHeight_; }
 
   // --title: the string handed to glfwCreateWindow (window title bar, macOS
   // Window menu). Call BEFORE init(); an empty string keeps the default.
@@ -103,6 +136,9 @@ class GlfwSurface {
   // which it is, because consumeDirty() returns false when the geometry is
   // unchanged and a repaint of identical content is a no-op to the user.
   void setRefreshHandler(std::function<void()> handler);
+  // FP-31: the window was iconified (true) or restored (false). Main thread,
+  // from pollEvents. GLFW has no occlusion signal; iconify is the one it gives.
+  void setIconifyHandler(std::function<void(bool)> handler) { iconifyHandler_ = std::move(handler); }
 
   // ⛔ NOTHING IN THE WINDOWED PATH COULD DELIVER A PRESS BEFORE THIS.
   // The input tier (SceneGraph::hitTest -> retained EventEmitter ->
@@ -444,6 +480,11 @@ class GlfwSurface {
 
   bool drawDisplayList(ImpellerDisplayList dl);
 
+  // FP-21: call before initWindow. darwin only: the window gets a CAMetalLayer
+  // and a native Metal context (host/MetalSurface) instead of ANGLE.
+  void setMetal(bool on) { metalRequested_ = on; }
+  bool metal() const { return metalRequested_; }
+
   // Reads the DEFAULT framebuffer back, already Y-flipped into top-left
   // order (same convention as HeadlessSurface::readPixels) so a screenshot
   // gate can treat both surfaces identically.
@@ -475,17 +516,29 @@ class GlfwSurface {
   void postEmptyEvent();
   bool shouldClose() const;
   void present();  // glfwSwapBuffers
+  // FP-27: present(), plus onDisplayed(presentedUs) from the drawable's
+  // presentedTime. False (and no callback) when the backend cannot report it.
+  bool presentReportingDisplay(std::function<void(int64_t presentedUs)> onDisplayed);
+  // FP-27, main thread: the window's CGDirectDisplayID on Metal (else 0).
+  uint32_t displayId() const;
   // FP-11: swap interval on the window context (glfwSwapInterval; eglSwapInterval
   // on darwin). Main thread, context current.
   void setSwapInterval(int interval);
 
  private:
   std::string title_ = "React Native (Impeller)";
+  void installRecordHooks(bool rasterThread);  // FP-14
+  void captureEglWindow();  // FP-32 (GlfwSurfaceRebuild.cpp)
+  int gpuWidth_{0};   // FP-15: the size the fbo-0 wrap was built for (GL thread)
+  int gpuHeight_{0};
 
 #if defined(__APPLE__)
   // Builds the ANGLE display/context and the window surface bound to the
   // Cocoa view. Split out because it is the entire darwin-only story.
   bool initAngleForWindow(std::string* error);
+  // FP-21 (GlfwSurfaceMetal.cpp): the Metal halves of initGpu / releaseGpu.
+  bool initGpuMetal(bool rasterThread, std::string* error);
+  void releaseGpuMetal();
 #endif
 
   // Converts a GLFW screen-coordinate cursor position into LAYOUT POINTS and
@@ -553,6 +606,7 @@ class GlfwSurface {
   // the refresh callback from the thread that is inside glfwPollEvents, which
   // is the same thread that installed it.
   std::function<void()> refreshHandler_;
+  std::function<void(bool)> iconifyHandler_;  // FP-31
   // Invoked from the GLFW mouse-button callback with LAYOUT POINTS already
   // resolved. Same threading argument as refreshHandler_: installed once
   // before the loop, called only from the thread inside glfwPollEvents.
@@ -646,7 +700,9 @@ class GlfwSurface {
   // list. Re-entry is dropped rather than queued: the outer paint is already
   // producing a frame for the current geometry.
   bool paintInFlight_{false};
+  bool metalRequested_{false};
 #if defined(__APPLE__)
+  std::unique_ptr<MetalSurface> metal_;  // FP-21
   EGLDisplay display_{EGL_NO_DISPLAY};
   EGLSurface eglSurface_{EGL_NO_SURFACE};
   EGLContext eglContext_{EGL_NO_CONTEXT};
@@ -654,6 +710,12 @@ class GlfwSurface {
   ImpellerContext context_{nullptr};
   ImpellerSurface surface_{nullptr};
   ImpellerTypographyContext typography_{nullptr};
+  // FP-32: the window's EGL objects (linux: GLFW's; darwin ANGLE: ours) and
+  // whether the context in them is a rebuilt one (GLFW no longer owns it).
+  ctxlossgl::EglWindow egl_;
+  bool rebuilt_{false};
+  bool swapLost_{false};
+  int swapInterval_{-1};  // re-applied to a rebuilt context
 };
 
 }  // namespace rni
