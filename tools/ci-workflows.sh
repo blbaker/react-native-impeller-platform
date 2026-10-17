@@ -67,6 +67,7 @@ GUARD_VAR = os.environ.get("RNI_PUBLISH_GUARD", "RNI_PUBLISH_ENABLED")
 # Matched against the raw text of every `run:` block.
 IRREVERSIBLE = [
     (r"npm\s+publish",            "npm publish"),
+    (r"npm\s+stage\s+publish",    "npm stage publish"),
     (r"npm\s+deprecate",          "npm deprecate"),
     (r"gh\s+release\s+create",    "gh release create"),
     (r"git\s+push[^\n]*--force",  "git push --force"),
@@ -133,6 +134,14 @@ for path in files:
     pr_triggered = "pull_request" in tnames
 
     jobs = doc.get("jobs") or {}
+
+    # W14 — an OIDC token is a credential. Granting id-token at the top level
+    # hands it to every job in the file, including ones that run third-party
+    # code and the reusable gates workflow. Grant it on the publishing job only.
+    top_perms = doc.get("permissions")
+    if isinstance(top_perms, dict) and top_perms.get("id-token") == "write":
+        fail("W14", f"{name} grants 'id-token: write' to every job (top-level"
+                    " permissions). Grant it on the publishing job only.")
 
     # W4 — a workflow reachable from a pull request gets read-only token scope,
     # declared explicitly. The default token permissions are a repository-wide
@@ -248,6 +257,23 @@ for path in files:
                                 f" {step.get('name', '?')!r} gates `{label}` on the"
                                 " ref alone — that is always true on a tag-triggered"
                                 f" workflow. It must require {GUARD_VAR}.")
+
+            # W13 — a real npm publish authenticates with trusted publishing.
+            # The job must be able to mint an OIDC token, and nothing in it may
+            # name an npm secret: a long-lived token is exactly what trusted
+            # publishing exists to remove, and once it is back the OIDC path is
+            # silently optional.
+            if armed and label in ("npm publish", "npm stage publish"):
+                jperms = job.get("permissions")
+                if not (isinstance(jperms, dict) and jperms.get("id-token") == "write"):
+                    fail("W13", f"{name}:{job_name} publishes to npm for real but does"
+                                " not grant 'id-token: write' at job level (trusted"
+                                " publishing needs it)")
+                job_text = yaml.safe_dump(job)
+                for m in re.finditer(r"secrets\.([A-Z0-9_]*NPM[A-Z0-9_]*)", job_text):
+                    fail("W13", f"{name}:{job_name} publishes to npm and references"
+                                f" secrets.{m.group(1)} — use trusted publishing (OIDC),"
+                                " not a stored token")
 
             # W11 — workflow_dispatch on a tag-only workflow is a way to run the
             # same job from an arbitrary branch. Allowed, but the job must then
