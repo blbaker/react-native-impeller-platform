@@ -1,0 +1,119 @@
+# Builds the prebuilt engine for each platform a release publishes, and hands
+# each one to the caller as an artifact.
+#
+# Called by release.yml, which unpacks these builds into packages-engine/ and
+# refuses to publish unless every engine package carries a binary for its own
+# platform (tools/ci-release-meta.sh, RNI_REQUIRE_ENGINE_BINARIES=1). Also runs
+# on any pull request that touches the engine or how it is built, so a change
+# that breaks the macOS build shows up in review instead of on a version tag.
+#
+# ⛔ WINDOWS IS NOT IN THE MATRIX YET, AND A RELEASE FAILS BECAUSE OF IT.
+# The Windows engine has only ever been built by hand on one machine
+# (tools/win/engine-build-win.bat, with a Hermes built outside this repo), so
+# there is no script a hosted runner could call. Until there is, the release
+# job's binary check fails naming engine-win32-x64. That is the intended
+# outcome: the main package pins all three engines, and npm skips a missing
+# optional dependency silently, so publishing without it would give every
+# Windows user a clean install with no engine.
+name: engines
+
+on:
+  workflow_call:
+  pull_request:
+    paths:
+      - 'engine/**'
+      - 'packages-engine/**'
+      - 'tools/engine-build.sh'
+      - 'tools/glfw-fetch.sh'
+      - 'tools/hermes-build.sh'
+      - 'tools/sdk-fetch.sh'
+      - 'tools/sdk-fetch-darwin.sh'
+      - 'tools/angle-fetch.sh'
+      - '.github/workflows/engines.yml'
+
+permissions:
+  contents: read
+
+# Same reasoning as ci.yml: superseding a pull-request run is fine, but a cold
+# Hermes build that gets cancelled never saves its cache.
+concurrency:
+  group: engines-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: engine ${{ matrix.triple }}
+    strategy:
+      # One platform failing must not cancel the other: the useful report is
+      # which platforms build, not that something failed first.
+      fail-fast: false
+      matrix:
+        include:
+          - triple: linux-x64
+            platform: linux
+            arch: x64
+            os: ubuntu-24.04
+          - triple: darwin-arm64
+            platform: darwin
+            arch: arm64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    # A cold run compiles Hermes from source. See the timeout note in ci.yml.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Same list as ci.yml's, for the same reasons.
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ libicu-dev \
+            libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libglvnd-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
+
+      # Xcode's toolchain and CMake are on the macOS image; Ninja is not
+      # guaranteed to be.
+      - name: System dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          command -v ninja >/dev/null || brew install ninja
+          cmake --version | head -1
+          ninja --version
+
+      # The same key formula as ci.yml, so the Linux entry is shared with the
+      # gates job rather than built twice.
+      - name: Cache Hermes (source + build)
+        uses: actions/cache@v4
+        with:
+          path: |
+            engine/third_party/hermes
+            engine/third_party/hermes-build
+          key: hermes-v2-${{ runner.os }}-${{ hashFiles('engine/rn/package-lock.json') }}
+
+      - name: Build the engine
+        run: bash tools/engine-build.sh ${{ matrix.platform }} ${{ matrix.arch }}
+
+      - name: Show what was built
+        run: |
+          file "packages-engine/engine-${{ matrix.triple }}/bin/rn-impeller"
+          ls -la "packages-engine/engine-${{ matrix.triple }}/bin"
+
+      # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
+      # symlinks, so uploading the folder directly would hand the release job
+      # an rn-impeller with no exec bit (EACCES at spawn) and, on macOS, a
+      # hermesvm.framework with its links flattened. A tarball keeps both.
+      - name: Pack the staged engine package
+        run: tar -C packages-engine -czf "engine-${{ matrix.triple }}.tgz" "engine-${{ matrix.triple }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.triple }}
+          path: engine-${{ matrix.triple }}.tgz
+          if-no-files-found: error
+          retention-days: 7

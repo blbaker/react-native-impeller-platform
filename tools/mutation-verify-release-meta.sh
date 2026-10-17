@@ -187,6 +187,79 @@ p="package/package.json"
 d=json.load(open(p)); d["publishConfig"]={"access":"restricted"}; json.dump(d,open(p,"w"),indent=2)
 ' "is unscoped but declares"
 
+# ── Check 6 (RNI_REQUIRE_ENGINE_BINARIES=1): every engine package carries a
+# real binary for its own triple. These mutants start from a world where all
+# three engines are present, using minimal synthetic headers (the check reads
+# headers, and no host has all three real builds), then break one thing.
+fake_engines() {  # dir — give every engine package a well-formed binary
+  python3 - "$1" <<'PY'
+import os, struct, sys
+root = sys.argv[1]
+def elf(machine):
+    h = bytearray(64); h[:4] = b"\x7fELF"; h[4] = 2; h[5] = 1
+    struct.pack_into("<H", h, 18, machine); return bytes(h)
+def macho(cpu):
+    return struct.pack("<IIII", 0xFEEDFACF, cpu, 0, 2) + bytes(48)
+def pe(machine):
+    h = bytearray(0x80); h[:2] = b"MZ"; struct.pack_into("<I", h, 0x3C, 0x40)
+    h[0x40:0x44] = b"PE\0\0"; struct.pack_into("<H", h, 0x44, machine); return bytes(h)
+want = {"linux-x64": ("rn-impeller", elf(0x3E)),
+        "darwin-arm64": ("rn-impeller", macho(0x0100000C)),
+        "win32-x64": ("rn-impeller.exe", pe(0x8664))}
+for triple, (exe, data) in want.items():
+    d = os.path.join(root, "packages-engine", f"engine-{triple}", "bin")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, exe)
+    with open(p, "wb") as f:
+        f.write(data)
+    os.chmod(p, 0o755)
+PY
+}
+mutate_bin() {  # name, shell-edit (runs in the scratch copy), expected-substring
+  local name="$1" edit="$2" want="$3"
+  TOTAL=$((TOTAL + 1))
+  local dir="$WORK/m$TOTAL"
+  rm -rf "$dir"; cp -a "$REPO" "$dir" 2>/dev/null
+  fake_engines "$dir"
+  ( cd "$dir" && eval "$edit" ) || { echo "  M$TOTAL $name -> ❌ mutation script failed"; return; }
+  local out rc
+  out=$(cd "$dir" && RNI_REQUIRE_ENGINE_BINARIES=1 bash tools/ci-release-meta.sh 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && grep -q -- "$want" <<<"$out"; then
+    echo "  M$TOTAL $name -> ✅ caught (rc=$rc)"
+    CAUGHT=$((CAUGHT + 1))
+  else
+    echo "  M$TOTAL $name -> ❌ NOT caught (rc=$rc)"
+    echo "$out" | grep -E 'FAIL|OK ' | tail -4 | sed 's/^/      /'
+  fi
+}
+
+# Positive control. Without it, a check that fails EVERY tree would score
+# every mutant below as caught.
+dir="$WORK/control"; rm -rf "$dir"; cp -a "$REPO" "$dir" 2>/dev/null; fake_engines "$dir"
+outc=$(cd "$dir" && RNI_REQUIRE_ENGINE_BINARIES=1 bash tools/ci-release-meta.sh 2>&1); rcc=$?
+if [ "$rcc" -eq 0 ] && [ "$(grep -c 'OK .* ships bin/' <<<"$outc")" -eq 3 ]; then
+  echo "  control: all three engines present -> passes, 3 engines checked"
+else
+  echo "  control: all three engines present -> ❌ did NOT pass (rc=$rcc); check 6 proves nothing"
+  echo "$outc" | grep -E 'FAIL' | tail -4 | sed 's/^/      /'
+  TOTAL=$((TOTAL + 1))
+fi
+
+# M12: the release job forgot to unpack one platform's build.
+mutate_bin "an engine package has no binary" \
+  'rm -rf packages-engine/engine-darwin-arm64/bin' "has no engine binary"
+# M13: an artifact unpacked into the wrong folder (the linux build under darwin).
+mutate_bin "an engine package holds another platform's binary" \
+  'cp packages-engine/engine-linux-x64/bin/rn-impeller packages-engine/engine-darwin-arm64/bin/rn-impeller' \
+  "expected Mach-O arm64"
+# M14: the exec bit was lost (upload-artifact drops file modes).
+mutate_bin "the engine binary is not executable" \
+  'chmod -x packages-engine/engine-linux-x64/bin/rn-impeller' "is not executable"
+# M15: the binary is on disk but the tarball would leave it out.
+mutate_bin "npm pack would not ship the binary" \
+  'python3 -c "import json; p=\"packages-engine/engine-win32-x64/package.json\"; d=json.load(open(p)); d[\"files\"]=[\"README.md\"]; json.dump(d,open(p,\"w\"),indent=2)"' \
+  "would not ship it"
+
 echo
 if [ "$CAUGHT" -eq "$TOTAL" ]; then
   echo "MUTATION_VERIFY_RELEASE_META_PASS ($CAUGHT/$TOTAL)"

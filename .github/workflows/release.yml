@@ -52,8 +52,12 @@ jobs:
   gates:
     uses: ./.github/workflows/ci.yml
 
+  # The prebuilt engine for each platform, built on that platform's runner.
+  engines:
+    uses: ./.github/workflows/engines.yml
+
   publish:
-    needs: gates
+    needs: [gates, engines]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # ⚠️ THIS LINE IS NOT PROTECTION YET — IT IS A PLACEHOLDER WITH A NAME.
@@ -104,15 +108,33 @@ jobs:
             exit 1
           }
 
-      # ⛔ THE ENGINE BINARIES ARE NOT BUILT HERE, AND THAT IS THE POINT.
-      # A Linux runner cannot produce the win32 or darwin engines, so publishing
-      # from a green Linux job would ship a host package whose declared
-      # optionalDependencies point at versions that do not exist — the exact
-      # silent-skip defect ci-release-meta.sh exists to catch (npm skips a
-      # missing optional dependency and exits 0). The gate is the guard: it
-      # fails if package.json declares a platform that has no built package, so
-      # this job can only ever publish a coherent set.
-      - name: Release metadata
+      # The engines are built on their own runners by engines.yml, which
+      # tars each staged package so the exec bit and symlinks survive.
+      - name: Download the engine builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          path: engine-artifacts
+          merge-multiple: true
+
+      - name: Unpack the engine builds
+        run: |
+          for t in engine-artifacts/engine-*.tgz; do
+            tar -xzf "$t" -C packages-engine
+          done
+          ls -la packages-engine/*/bin
+
+      # ⛔ EVERY ENGINE PACKAGE MUST CARRY ITS ENGINE, OR NOTHING PUBLISHES.
+      # packages-engine/*/bin is gitignored, so without the builds above this
+      # job would publish engine packages holding only a README. The binary
+      # check reads each binary's own header (right OS, right CPU), its exec
+      # bit, and what `npm pack` would actually ship. A platform with no CI
+      # build (Windows, for now) fails it by name, which is the point: the
+      # main package pins all three, and npm skips a missing optional
+      # dependency silently. tools/ci-workflows.sh (W15) keeps this step here.
+      - name: Release metadata, with every engine binary required
+        env:
+          RNI_REQUIRE_ENGINE_BINARIES: '1'
         run: bash tools/ci-release-meta.sh
 
       # Always runs. Exercises packing and the shipped file list on every tag,

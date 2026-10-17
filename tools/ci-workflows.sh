@@ -223,6 +223,16 @@ for path in files:
                     if n not in jobs:
                         fail("W5", f"{name}:{job_name} needs '{n}', which is not a job"
                                    f" in {name}")
+                # Waiting on SOMETHING is not waiting on the gates. Once the job
+                # also needs the engine builds, dropping `gates` from the list
+                # still leaves a non-empty needs, and a tag would publish
+                # without a single test having run.
+                gate_jobs = [n for n in needs if isinstance(jobs.get(n), dict)
+                             and str(jobs[n].get("uses", "")).endswith("workflows/ci.yml")]
+                if not gate_jobs:
+                    fail("W5", f"{name}:{job_name} can run `{label}` without waiting for"
+                               " the gates: none of its needs ({}) calls"
+                               " .github/workflows/ci.yml".format(", ".join(needs)))
 
             # W8 — armed (non-dry) commands must be gated on the one variable.
             #
@@ -274,6 +284,29 @@ for path in files:
                     fail("W13", f"{name}:{job_name} publishes to npm and references"
                                 f" secrets.{m.group(1)} — use trusted publishing (OIDC),"
                                 " not a stored token")
+
+            # W15 — before a real npm publish, the job must prove that every
+            # engine package carries its engine: ci-release-meta.sh with
+            # RNI_REQUIRE_ENGINE_BINARIES=1, on an earlier step of the same job.
+            # packages-engine/*/bin is gitignored, so dropping that one variable
+            # quietly goes back to publishing engine packages with no engine in
+            # them, and every other rule here would still pass.
+            if armed and label in ("npm publish", "npm stage publish"):
+                steps = [s for s in (job.get("steps") or []) if isinstance(s, dict)]
+                first = min((i for i, s in enumerate(steps)
+                             if any(s is a for a, _ in armed)), default=len(steps))
+                def requires_bins(s):
+                    run = str(s.get("run", ""))
+                    if not re.search(r"tools/ci-release-meta\.sh", run):
+                        return False
+                    env = {**(job.get("env") or {}), **(s.get("env") or {})}
+                    return (str(env.get("RNI_REQUIRE_ENGINE_BINARIES", "")) == "1"
+                            or re.search(r"RNI_REQUIRE_ENGINE_BINARIES=1\s", run))
+                if not any(requires_bins(s) for s in steps[:first]):
+                    fail("W15", f"{name}:{job_name} publishes to npm for real without"
+                                " first running tools/ci-release-meta.sh with"
+                                " RNI_REQUIRE_ENGINE_BINARIES=1 — nothing stops an engine"
+                                " package with no engine in it")
 
             # W11 — workflow_dispatch on a tag-only workflow is a way to run the
             # same job from an arbitrary branch. Allowed, but the job must then

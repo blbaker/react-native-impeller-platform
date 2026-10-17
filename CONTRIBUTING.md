@@ -167,3 +167,11 @@ One-time setup, done by a maintainer with npm 11.15.0 or later and 2FA on:
 
 `tools/ci-workflows.sh` enforces the workflow side: a real publish needs the
 guard variable, `id-token: write` on the publishing job only, and no npm token.
+
+The engine binaries are built by `.github/workflows/engines.yml`, on a Linux
+runner for `linux-x64` and a macOS runner for `darwin-arm64`. The release job
+unpacks those builds and runs `tools/ci-release-meta.sh` with
+`RNI_REQUIRE_ENGINE_BINARIES=1`. That check fails unless every engine package
+holds a binary for its own OS and CPU, with its exec bit set, that `npm pack`
+would actually ship. Windows has no CI build yet, so until it does, a release
+stops at that check and names `engine-win32-x64`.

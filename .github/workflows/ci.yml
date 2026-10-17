@@ -58,11 +58,15 @@ jobs:
       # source for the windowed host. The engine links the same five libraries
       # (X11 Xrandr Xcursor Xi Xinerama), so their -dev packages are needed for
       # the link too, not just for GLFW's configure.
+      #
+      # libicu-dev is for the cold Hermes build. The runner image happens to ship
+      # it today; it is listed so that an image change cannot quietly break the
+      # one build that only runs on a cache miss.
       - name: System dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ \
+            cmake ninja-build g++ libicu-dev \
             libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libglvnd-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
           cmake --version | head -1
