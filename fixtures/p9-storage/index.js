@@ -19,7 +19,7 @@
  */
 import React from 'react';
 import {Alert, AppRegistry, Text, View} from 'react-native';
-import Storage from '@react-native-impeller/core/src/storage';
+import Storage from 'react-native-impeller-platform/src/storage';
 
 // ⛔ NOT process.env. HERMES HAS NO OS ENVIRONMENT.
 //

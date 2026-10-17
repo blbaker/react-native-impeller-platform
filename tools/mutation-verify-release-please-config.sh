@@ -77,7 +77,7 @@ src = "packages-engine/engine-linux-x64"
 dst = "packages-engine/engine-linux-arm64"
 os.makedirs(dst, exist_ok=True)
 d = json.load(open(f"{src}/package.json"))
-d["name"] = "@react-native-impeller/engine-linux-arm64"
+d["name"] = "@blbaker/react-native-impeller-platform-engine-linux-arm64"
 d["cpu"] = ["arm64"]
 json.dump(d, open(f"{dst}/package.json", "w"), indent=2)
 ' "has no extra-files"
@@ -89,7 +89,7 @@ mutate "a new optionalDependency has no extra-files entry" '
 import json
 p = "package/package.json"
 d = json.load(open(p))
-d["optionalDependencies"]["@react-native-impeller/engine-linux-arm64"] = "0.0.1"
+d["optionalDependencies"]["@blbaker/react-native-impeller-platform-engine-linux-arm64"] = "0.0.1"
 json.dump(d, open(p, "w"), indent=2)
 ' "has no extra-files entry"
 

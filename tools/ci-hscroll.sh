@@ -84,7 +84,7 @@ npm install --no-audit --no-fund --silent "$WORK/$ENGINE_TGZ" "$WORK/$MAIN_TGZ" 
 echo "== 2. swap in the ENG-02b hscroll fixture as the app entry =="
 cp "$FIXTURE/index.js" "$APP/index.js"
 npx --no-install react-native init-impeller > /dev/null 2>&1 || fail "init-impeller failed"
-RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" || fail "engine resolver failed"
+RESOLVED="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" || fail "engine resolver failed"
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/hscroll.bundle \
     > /dev/null 2>&1

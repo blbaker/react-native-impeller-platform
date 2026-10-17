@@ -86,7 +86,7 @@ npm install --no-audit --no-fund --silent react-native-svg@15.15.5 \
 
 cp "$ROOT/fixtures/eng05-msaa/index.js" "$APP/index.js"
 npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
 INSTALLED_SHA="$(sha256sum "$ENGINE" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$ENGINE" | cut -d' ' -f1)"
 STAGED_SHA="$(sha256sum "$RNI_ENGINE_PKG/bin/rn-impeller" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$RNI_ENGINE_PKG/bin/rn-impeller" | cut -d' ' -f1)"

@@ -57,7 +57,7 @@ cd "$APP"
 node -e '
 const fs = require("fs");
 const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
-p.dependencies["@react-native-impeller/core"] = "file:" + process.argv[1];
+p.dependencies["react-native-impeller-platform"] = "file:" + process.argv[1];
 fs.writeFileSync("package.json", JSON.stringify(p, null, 2));
 ' "$WORK/$CORE_TGZ"
 npm install --no-audit --no-fund --omit=optional > "$WORK/npm.log" 2>&1 \

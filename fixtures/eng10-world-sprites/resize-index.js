@@ -19,7 +19,7 @@
 import React from 'react';
 import {AppRegistry, Pressable, View} from 'react-native';
 import * as NativeComponentRegistry from 'react-native/Libraries/NativeComponent/NativeComponentRegistry';
-import WorldRaster from '@react-native-impeller/core/src/worldraster';
+import WorldRaster from 'react-native-impeller-platform/src/worldraster';
 import {WIDTH, HEIGHT, ATLAS, ATLAS_IDS, buildTerrain, buildAtlasEntry, buildSprites} from './scene';
 
 const World = NativeComponentRegistry.get('world', () => ({

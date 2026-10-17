@@ -67,7 +67,7 @@ npm install --no-audit --no-fund --silent react-native-svg@15.15.5 \
 
 cp "$ROOT/fixtures/eng05-aa/entrypoint-discriminator.js" "$APP/index.js"
 npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)"
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)"
 
 echo "== 2. bundle =="
 npx --no-install react-native bundle --platform impeller --dev false \

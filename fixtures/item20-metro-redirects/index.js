@@ -1,6 +1,6 @@
 /**
  * parity item 20 fixture: the Metro redirects HostApp needed in its own
- * metro.config.js now ship in @react-native-impeller/core.
+ * metro.config.js now ship in react-native-impeller-platform.
  *
  * Each REDIRECT_* line proves one redirect, from inside the bundle:
  *   BACKHANDLER   Utilities/BackHandler.js is a self re-export; without the

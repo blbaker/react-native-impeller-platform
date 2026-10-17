@@ -9,7 +9,7 @@
 import React from 'react';
 import {AppRegistry, View} from 'react-native';
 import * as NativeComponentRegistry from 'react-native/Libraries/NativeComponent/NativeComponentRegistry';
-import WorldRaster from '@react-native-impeller/core/src/worldraster';
+import WorldRaster from 'react-native-impeller-platform/src/worldraster';
 import {WIDTH, HEIGHT, buildSprites, compositeOnCpu} from './scene';
 
 const World = NativeComponentRegistry.get('world', () => ({

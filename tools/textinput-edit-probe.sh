@@ -30,7 +30,7 @@ cp "$FIXTURE" "$APP/index.js"
 npx --no-install react-native init-impeller >/dev/null 2>&1
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/ti.bundle >/dev/null 2>&1
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)"
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)"
 "$ENGINE" --bundle "$APP/impeller/build/ti.bundle" --app-name P9TextInput \
   --headless --probe-banner off --type "$TYPE_SPEC" \
   --screenshot "$OUT/ti.ppm" 2>&1 | grep -iE "scene_nodes|node_frame|type_focus|textinput_value|len=|submitted|error|fatal" | head -40

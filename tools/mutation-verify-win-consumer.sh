@@ -53,7 +53,7 @@ cp "$PKG/package.json" /tmp/pkgjson.bak
 node -e '
 const fs=require("fs"), p=process.argv[1];
 const j=JSON.parse(fs.readFileSync(p,"utf8"));
-j.name="@react-native-impeller/engine-windows-x64";
+j.name="@blbaker/react-native-impeller-platform-engine-windows-x64";
 fs.writeFileSync(p, JSON.stringify(j,null,2));
 ' "$PKG/package.json"
 L="$(mktemp)"; bash tools/ci-win-consumer.sh > "$L" 2>&1

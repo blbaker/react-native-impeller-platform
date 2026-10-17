@@ -1,19 +1,22 @@
 {
-  "name": "@react-native-impeller/engine-win32-x64",
+  "name": "@blbaker/react-native-impeller-platform-engine-win32-x64",
   "version": "0.0.1",
-  "description": "Prebuilt Impeller engine host for win32-x64 (installed automatically by react-native-impeller)",
+  "description": "Prebuilt Impeller engine host for win32-x64 (installed automatically by react-native-impeller-platform)",
   "license": "MIT",
-  "files": [
-    "bin",
-    "README.md"
-  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blbaker/react-native-impeller-platform.git",
+    "directory": "packages-engine/engine-win32-x64"
+  },
+  "homepage": "https://github.com/blbaker/react-native-impeller-platform#readme",
+  "bugs": {
+    "url": "https://github.com/blbaker/react-native-impeller-platform/issues"
+  },
+  "author": "Brandon Baker",
+  "files": ["bin", "README.md"],
   "publishConfig": {
     "access": "public"
   },
-  "os": [
-    "win32"
-  ],
-  "cpu": [
-    "x64"
-  ]
+  "os": ["win32"],
+  "cpu": ["x64"]
 }

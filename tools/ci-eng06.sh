@@ -72,7 +72,7 @@ npm install --no-audit --no-fund --silent \
 npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
 
 cd "$APP"
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
 echo "engine: $ENGINE"
 INSTALLED_SHA="$(sha256sum "$ENGINE" | cut -d' ' -f1)"

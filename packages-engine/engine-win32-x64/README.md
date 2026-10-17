@@ -1,9 +1,9 @@
-# @react-native-impeller/engine-win32-x64
+# @blbaker/react-native-impeller-platform-engine-win32-x64
 
-Prebuilt engine binary for `react-native-impeller` on Windows x64.
+Prebuilt engine binary for `react-native-impeller-platform` on Windows x64.
 
 Installed automatically as an optional dependency — do not depend on it directly.
-Version is locked in step with `react-native-impeller`; the resolver refuses a
+Version is locked in step with `react-native-impeller-platform`; the resolver refuses a
 mismatch because the engine C ABI is not stable across versions.
 
 ## Runtime requirements

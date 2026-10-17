@@ -80,7 +80,7 @@ fs.writeFileSync("app.json", JSON.stringify(a,null,2));
 npm install --no-audit --no-fund --silent \
   "$WORK/$ENGINE_TGZ" "$WORK/$MAIN_TGZ" || fail "npm install of the tarballs failed"
 npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
 # RNI_BIN overrides the installed engine (tools/ci-sanitize.sh runs this gate on the ASan build).
 [ -z "${RNI_BIN:-}" ] || ENGINE="$RNI_BIN"

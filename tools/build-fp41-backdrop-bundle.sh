@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Rebuild fixtures/fp41-backdrop/prebuilt/fp41-backdrop.bundle (FP-41, expo-blur).
 # Same recipe as build-expo-host-bundles.sh: the fixture's package.json (expo 57.0.27 +
-# expo-blur) installed fresh with @react-native-impeller/core packed from THIS tree, bundled
+# expo-blur) installed fresh with react-native-impeller-platform packed from THIS tree, bundled
 # with the expo metro config + impeller shims. Needs node + network.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,7 +19,7 @@ cd "$APP"
 node -e '
 const fs = require("fs");
 const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
-p.dependencies["@react-native-impeller/core"] = "file:" + process.argv[1];
+p.dependencies["react-native-impeller-platform"] = "file:" + process.argv[1];
 fs.writeFileSync("package.json", JSON.stringify(p, null, 2));
 ' "$WORK/$CORE_TGZ"
 npm install --no-audit --no-fund --omit=optional > "$WORK/npm.log" 2>&1 \

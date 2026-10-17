@@ -54,13 +54,13 @@ npm install --no-audit --no-fund --silent \
 # ⚠️ The shim ships INSIDE the core package, so it must be present in the
 # tarball -- not just in the repo. A gate that imported it by relative path
 # from the repo would pass while the published package shipped without it.
-[ -f "$APP/node_modules/@react-native-impeller/core/src/storage/index.js" ] \
+[ -f "$APP/node_modules/react-native-impeller-platform/src/storage/index.js" ] \
   || fail "the storage shim is NOT in the packed tarball (check package.json files[])"
 
 echo "== 2. install the ENG-04 fixture =="
 cp "$ROOT/fixtures/p9-storage/index.js" "$APP/index.js"
 npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
 
 echo "== 3. bundle =="

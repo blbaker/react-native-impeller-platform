@@ -15,7 +15,7 @@ import React from 'react';
 import {AppRegistry, Image, Linking, Text, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
 import * as NativeComponentRegistry from 'react-native/Libraries/NativeComponent/NativeComponentRegistry';
-import WorldRaster from '@react-native-impeller/core/src/worldraster';
+import WorldRaster from 'react-native-impeller-platform/src/worldraster';
 
 const World = NativeComponentRegistry.get('world', () => ({
   uiViewClassName: 'world',

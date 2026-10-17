@@ -1,7 +1,7 @@
 // ENG-19: the WHOLE app-side Metro config. No resolveRequest of its own, no
 // metro-shims folder: withImpeller (the package) + withNativewind only.
 const path = require('path');
-const {withImpeller} = require('@react-native-impeller/core/src/metro-shims');
+const {withImpeller} = require('react-native-impeller-platform/src/metro-shims');
 const {getDefaultConfig} = require('@react-native/metro-config');
 const {withNativewind} = require('nativewind/metro');
 

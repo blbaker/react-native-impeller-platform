@@ -324,7 +324,7 @@ function withImpeller(config = {}) {
       // word (see teachExpoImpellerPlatform). Fail loudly instead.
       if (/platform "impeller"/.test(String(error && error.message))) {
         throw new Error(
-          '@react-native-impeller/core: the bundler rejected platform "impeller" (' +
+          'react-native-impeller-platform: the bundler rejected platform "impeller" (' +
             String(error.message).split('\n')[0] +
             '). Refusing to fall back to ios for every module.',
         );

@@ -77,7 +77,7 @@ echo "== 2. build BOTH apps: animating (positive) and static (negative) =="
 build_app "P9Repaint" "$ROOT/fixtures/p9-repaint"    "$WORK/anim"
 build_app "P3Fixture" "$ROOT/fixtures/p3-conformance" "$WORK/static"
 
-ENGINE="$(node "$WORK/anim/node_modules/@react-native-impeller/core/src/bin/engine-path.js")" \
+ENGINE="$(node "$WORK/anim/node_modules/react-native-impeller-platform/src/bin/engine-path.js")" \
   || fail "engine resolver failed"
 
 # Capture two frames from ONE run: frame 0, and a frame >= 300ms later. Two

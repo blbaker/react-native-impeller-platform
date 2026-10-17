@@ -98,8 +98,8 @@ WORK_WIN="$(win "$WORK_WSL")"
 # spaces. Also: no --silent, or a failure here produces an empty log.
 wincmd "$APP_WIN" "npm install --no-audit --no-fund $WORK_WIN\\$ENGINE_TGZ $WORK_WIN\\$MAIN_TGZ" \
   > "$WORK_WSL/npm.log" 2>&1 || { tr -d '\r' < "$WORK_WSL/npm.log" | tail -20; fail "npm install of the tarballs failed"; }
-[ -d "$APP_WSL/node_modules/@react-native-impeller/core" ] || fail "main package not installed"
-[ -d "$APP_WSL/node_modules/@react-native-impeller/engine-win32-x64" ] \
+[ -d "$APP_WSL/node_modules/react-native-impeller-platform" ] || fail "main package not installed"
+[ -d "$APP_WSL/node_modules/@blbaker/react-native-impeller-platform-engine-win32-x64" ] \
   || fail "engine package not installed — check the \"os\"/\"cpu\" fields in its package.json"
 echo "   installed both packages"
 
@@ -119,10 +119,10 @@ echo "== 4. the resolver finds the WINDOWS engine from the consumer's node_modul
 # substitution that exits non-zero kills the script AT THE ASSIGNMENT — before
 # the case/fail below can print anything. Measured: the version-mismatch mutation
 # produced a gate that died silently after step 4 with no reason on screen.
-RESOLVER_OUT="$(wincmd "$APP_WIN" "node node_modules\\@react-native-impeller\\core\\src\\bin\\engine-path.js" 2>&1 | tr -d '\r' || true)"
+RESOLVER_OUT="$(wincmd "$APP_WIN" "node node_modules\\react-native-impeller-platform\\src\\bin\\engine-path.js" 2>&1 | tr -d '\r' || true)"
 RESOLVED_WIN="$(printf '%s' "$RESOLVER_OUT" | tail -1)"
 case "$RESOLVED_WIN" in
-  "$APP_WIN"\\node_modules\\@react-native-impeller\\engine-win32-x64\\bin\\rn-impeller.exe) echo "   $RESOLVED_WIN" ;;
+  "$APP_WIN"\\node_modules\\@blbaker\\react-native-impeller-platform-engine-win32-x64\\bin\\rn-impeller.exe) echo "   $RESOLVED_WIN" ;;
   *) printf '%s\n' "$RESOLVER_OUT" | sed 's/^/   /' >&2
      fail "the engine resolver did not return the installed Windows binary (full output above)" ;;
 esac
