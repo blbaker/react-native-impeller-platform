@@ -63,12 +63,16 @@ jobs:
       # it today; it is listed so that an image change cannot quietly break the
       # one build that only runs on a cache miss.
       #
-      # ⛔ THE TEXT GATES ASSUME DEJAVU SANS IS fontconfig's sans-serif.
-      # The engine asks fontconfig for "sans-serif", and the style audit's
-      # expectations (underline, line-through, justify, head ellipsis, tabular
-      # figures) were measured with DejaVu Sans. On a runner that resolves to
-      # another face, those tiles fail even though the engine is right. The
-      # fc-match line below records what this runner actually picked.
+      # ⛔ THE TEXT GATES WERE MEASURED WITH THE UBUNTU FONT AS THE DEFAULT FACE.
+      # Text with no fontFamily gets the Impeller SDK's default face, which on
+      # Linux is the first installed of Ubuntu, Cantarell, DejaVu Sans,
+      # Liberation Sans, Arial (Flutter's txt default list). It does not go
+      # through fontconfig. The style audit's expectations were measured with
+      # Ubuntu. Without it the runner falls through to DejaVu Sans: every text
+      # tile gets wider, and underline, line-through, justify, head ellipsis
+      # and tabular figures drop under their thresholds. That was reproduced
+      # locally by hiding the Ubuntu font: the same six tiles fail with the
+      # same numbers. fontconfig still resolves named families.
       - name: System dependencies
         run: |
           sudo apt-get update -qq
@@ -76,8 +80,8 @@ jobs:
             cmake ninja-build g++ libicu-dev \
             libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libglvnd-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
-            fontconfig fonts-dejavu-core
-          echo "sans-serif -> $(fc-match sans-serif)"
+            fontconfig fonts-dejavu-core fonts-ubuntu
+          echo "Ubuntu font faces installed: $(fc-list : family | grep -c '^Ubuntu')"
           cmake --version | head -1
           node --version
 
