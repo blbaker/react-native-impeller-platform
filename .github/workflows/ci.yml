@@ -53,12 +53,18 @@ jobs:
       # The engine links against EGL/GLESv2 and renders through Mesa's software
       # rasteriser — there is no GPU on a hosted runner, which is precisely the
       # configuration tools/ci-headless.sh was written for.
+      #
+      # The X11 headers are for GLFW, which tools/engine-build.sh builds from
+      # source for the windowed host. The engine links the same five libraries
+      # (X11 Xrandr Xcursor Xi Xinerama), so their -dev packages are needed for
+      # the link too, not just for GLFW's configure.
       - name: System dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build g++ \
-            libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libglvnd-dev
+            libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libglvnd-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
           cmake --version | head -1
           node --version
 

@@ -118,6 +118,14 @@ if [ "${PLATFORM}" = "darwin" ] && [ ! -f "engine/third_party/angle-darwin-arm64
   ANGLE_PLATFORM=darwin-arm64 bash tools/angle-fetch.sh
 fi
 
+# GLFW backs the windowed host, which CMake builds by default (RNI_WITH_WINDOW).
+# Fetch it the same way as the SDK and ANGLE above. Without this, a fresh clone
+# or a cold CI cache fails in CMake with "GLFW not found", which is how CI on
+# the public repo went red on its very first run.
+if [ ! -f "engine/third_party/glfw/install/lib/libglfw3.a" ]; then
+  bash tools/glfw-fetch.sh
+fi
+
 # ⛔ ORDER IS LOAD-BEARING: THE RN PIN INSTALLS BEFORE HERMES BUILDS.
 # hermes-build.sh reads the Hermes tag from
 # engine/rn/node_modules/react-native/sdks/.hermesversion — deriving it from RN
