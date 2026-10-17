@@ -7,14 +7,9 @@
 # on any pull request that touches the engine or how it is built, so a change
 # that breaks the macOS build shows up in review instead of on a version tag.
 #
-# ⛔ WINDOWS IS NOT IN THE MATRIX YET, AND A RELEASE FAILS BECAUSE OF IT.
-# The Windows engine has only ever been built by hand on one machine
-# (tools/win/engine-build-win.bat, with a Hermes built outside this repo), so
-# there is no script a hosted runner could call. Until there is, the release
-# job's binary check fails naming engine-win32-x64. That is the intended
-# outcome: the main package pins all three engines, and npm skips a missing
-# optional dependency silently, so publishing without it would give every
-# Windows user a clean install with no engine.
+# Windows builds natively under Git Bash with the MSVC environment loaded
+# (tools/engine-build-win-native.sh). It used to be built only by hand on one
+# machine, from WSL through cmd.exe, so no release could include it.
 name: engines
 
 on:
@@ -28,6 +23,11 @@ on:
       - 'tools/hermes-build.sh'
       - 'tools/sdk-fetch.sh'
       - 'tools/sdk-fetch-darwin.sh'
+      - 'tools/sdk-fetch-win.sh'
+      - 'tools/engine-build-win-native.sh'
+      - 'tools/engine-build-win-stage.sh'
+      - 'tools/apply-win-patches.sh'
+      - '.gitattributes'
       - 'tools/sdk-fetch-custom.sh'
       - 'tools/angle-fetch.sh'
       - '.github/workflows/engines.yml'
@@ -58,9 +58,17 @@ jobs:
             platform: darwin
             arch: arm64
             os: macos-15
+          - triple: win32-x64
+            platform: win32
+            arch: x64
+            os: windows-2022
     runs-on: ${{ matrix.os }}
     # A cold run compiles Hermes from source. See the timeout note in ci.yml.
     timeout-minutes: 360
+    # Git Bash on Windows; the build scripts are bash on every platform.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -87,8 +95,26 @@ jobs:
           cmake --version | head -1
           ninja --version
 
+      # cl, link and dumpbin on PATH for the steps that follow. Pinned to the
+      # v1.13.0 commit: third-party code running in the job that produces a
+      # published binary.
+      - name: MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@a102174a2b586eec2ea151a69e6fd14404a8ce7c
+        with:
+          arch: x64
+
+      - name: System dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          command -v ninja >/dev/null || choco install ninja -y --no-progress
+          cmake --version | head -1
+          ninja --version
+          cl 2>&1 | head -1
+
       # The same key formula as ci.yml, so the Linux entry is shared with the
-      # gates job rather than built twice.
+      # gates job rather than built twice. Hermes's build output is
+      # OS-specific, and runner.os keeps the three entries apart.
       - name: Cache Hermes (source + build)
         uses: actions/cache@v4
         with:
@@ -102,8 +128,10 @@ jobs:
 
       - name: Show what was built
         run: |
-          file "packages-engine/engine-${{ matrix.triple }}/bin/rn-impeller"
           ls -la "packages-engine/engine-${{ matrix.triple }}/bin"
+          if command -v file >/dev/null; then
+            file "packages-engine/engine-${{ matrix.triple }}"/bin/rn-impeller*
+          fi
 
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
       # symlinks, so uploading the folder directly would hand the release job

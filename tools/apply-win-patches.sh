@@ -136,4 +136,39 @@ else:
     sys.exit("apply-win-patches: FAIL — BaseTextInputShadowNode.h anchor not found (RN moved it)")
 PY
 
+# ---------------------------------------------------------------------------
+# PATCH 4 — a header uses a std type without including its header.
+#
+# libstdc++ and libc++ pull <mutex> and friends in transitively, so these
+# compile on Linux and macOS and fail only under MSVC, e.g.
+#   jsinspector-modern/HostTarget.h(455): error C2039: 'mutex': is not a member of 'std'
+# Found the first time the Windows engine was built on a clean runner with
+# the current React Native pin. Each entry is anchor-checked: the file must
+# exist and use the symbol, and afterwards it must include the header.
+# ---------------------------------------------------------------------------
+python3 - "$RC" <<'PY'
+import sys, pathlib, re
+rc = pathlib.Path(sys.argv[1])
+NEEDS = [  # (file under ReactCommon, symbol it uses, header it must include)
+    ("jsinspector-modern/HostTarget.h", "std::mutex", "<mutex>"),
+]
+for rel, symbol, header in NEEDS:
+    f = rc / rel
+    if not f.is_file():
+        sys.exit(f"apply-win-patches: FAIL — {rel} not found (RN moved it)")
+    text = f.read_text(encoding="utf-8")
+    if symbol not in text:
+        sys.exit(f"apply-win-patches: FAIL — {rel} no longer uses {symbol}; drop or re-anchor this entry")
+    inc = f"#include {header}"
+    if inc in text:
+        print(f"apply-win-patches: {rel} {header} — nothing to do (already included)")
+        continue
+    m = re.search(r"^#include [<\"].*$", text, re.M)
+    if not m:
+        sys.exit(f"apply-win-patches: FAIL — {rel} has no #include to anchor on")
+    text = text[:m.end()] + "\n" + inc + text[m.end():]
+    f.write_text(text, encoding="utf-8")
+    print(f"apply-win-patches: {rel} — added {inc}")
+PY
+
 echo "APPLY_WIN_PATCHES_OK"

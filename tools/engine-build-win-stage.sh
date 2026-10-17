@@ -20,7 +20,9 @@ ROOT="$PWD"
 ARCH="${1:-x64}"
 TRIPLE="win32-${ARCH}"
 PKG="packages-engine/engine-${TRIPLE}"
-VERSION="$(node -p "require('${ROOT}/package/package.json').version")"
+# Relative to the cwd (the repo root): node.exe cannot read a Git Bash /d/...
+# path inside a JS string, and this script also runs natively under Git Bash.
+VERSION="$(node -p "require('./package/package.json').version")"
 
 WIN_BUILD='C:\Devel\rni-win-build'
 WSL_STAGE="/mnt/c/Devel/rni-win-build/stage/bin"
@@ -28,6 +30,14 @@ WSL_STAGE="/mnt/c/Devel/rni-win-build/stage/bin"
 fail() { echo "engine-build-win: FAIL — $*" >&2; exit 1; }
 
 [ "$ARCH" = "x64" ] || fail "only x64 is supported on Windows (asked for $ARCH)"
+# NATIVE: tools/engine-build-win-native.sh already built and installed the
+# engine under Git Bash, and hands over its stage dir. Everything from here on
+# (payload rules, the import-table check, package.json) is shared.
+if [ -n "${RNI_WIN_STAGE_DIR:-}" ]; then
+  NATIVE=1
+  WSL_STAGE="${RNI_WIN_STAGE_DIR}"
+else
+NATIVE=0
 # Non-login WSL shells (systemd units) do not append the Windows PATH.
 export PATH="$PATH:/mnt/c/Windows/System32"
 command -v cmd.exe >/dev/null || fail "cmd.exe not on PATH — this must run from WSL"
@@ -50,6 +60,7 @@ fi
 # through a chain of `call`s.
 grep -q '^BUILD_EXIT=0' "$BUILD_LOG" || fail "engine-build-win.bat did not report BUILD_EXIT=0"
 grep -q '^INSTALL_OK'   "$BUILD_LOG" || fail "engine-build-win.bat did not report INSTALL_OK"
+fi
 
 [ -f "$WSL_STAGE/rn-impeller.exe" ] || fail "no rn-impeller.exe at $WSL_STAGE after install"
 
@@ -83,6 +94,14 @@ STRAY_BIN="$(cd "${PKG}/bin" && ls -A | grep -viE "$ALLOWED" || true)"
 # -DUSE_WIN10_ICU and links the ICU that ships in Windows 10 1903+ (System32).
 # That is a genuine minimum-OS requirement, recorded in the package README, not
 # a missing file.
+if [ "$NATIVE" = "1" ]; then
+  # Native: dumpbin is on PATH and reads the package in place. Dash options,
+  # because Git Bash rewrites a leading-slash argument such as /dependents
+  # into a filesystem path before dumpbin ever sees it.
+  IMPORTS="$( dumpbin -nologo -dependents "$(cygpath -w "${PKG}/bin/rn-impeller.exe")" 2>/dev/null \
+              | tr -d '\r' | sed -n '/following dependencies/,/Summary/p' \
+              | grep -oiE '[A-Za-z0-9_.-]+\.dll' | tr 'A-Z' 'a-z' | sort -u )"
+else
 DUMPBIN="$(ls -d /mnt/c/Devel/VSBuildTools/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe 2>/dev/null | sort -V | tail -1 || true)"
 [ -n "$DUMPBIN" ] || fail "dumpbin.exe not found under the VS Build Tools — cannot verify the import table"
 WIN_DUMPBIN="$(printf '%s' "$DUMPBIN" | sed 's|^/mnt/c|C:|; s|/|\\|g')"
@@ -108,6 +127,7 @@ IMPORTS="$( cd /mnt/c && cmd.exe /c "$WIN_DUMPBIN /nologo /dependents $WIN_PROBE
             | tr -d '\r' | sed -n '/following dependencies/,/Summary/p' \
             | grep -oiE '[A-Za-z0-9_.-]+\.dll' | tr 'A-Z' 'a-z' | sort -u )"
 rm -rf "$PROBE_WSL"
+fi
 [ -n "$IMPORTS" ] || fail "dumpbin returned no imports — the check would silently pass"
 
 # Provided by Windows itself (System32). api-ms-win-* are the UCRT/API-set
@@ -125,6 +145,16 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 echo "engine-build-win: import table clean ($(echo "$IMPORTS" | wc -l) imports, all system or shipped)"
+
+# Native only: start it. The import table says what should resolve; a launch
+# says what does. A missing DLL exits before main() with no output at all,
+# so require the usage text, not just an exit code.
+if [ "$NATIVE" = "1" ]; then
+  LAUNCH_OUT="$(cd / && "${ROOT}/${PKG}/bin/rn-impeller.exe" --help 2>&1)" || true
+  grep -q '^usage: rn-impeller' <<<"$LAUNCH_OUT" \
+    || fail "the staged rn-impeller.exe did not start: $(echo "$LAUNCH_OUT" | head -3)"
+  echo "engine-build-win: launch check OK (rn-impeller.exe --help)"
+fi
 
 # R3 size budget: <60 MB unpacked per platform, same as Linux.
 UNPACKED_KB=$(du -sk "${PKG}/bin" | cut -f1)
@@ -177,7 +207,7 @@ mismatch because the engine C ABI is not stable across versions.
 
 Impeller SDK pin: \`$(cat engine/IMPELLER_SHA)\`
 ANGLE pin: \`$(cat engine/ANGLE_PIN 2>/dev/null || echo unknown)\`
-React Native (ReactCommon) pin: \`$(node -p "require('${ROOT}/engine/rn/node_modules/react-native/package.json').version")\`
+React Native (ReactCommon) pin: \`$(node -p "require('./engine/rn/node_modules/react-native/package.json').version")\`
 MD
 
 echo "engine-build-win: staged ${PKG} @ ${VERSION}"

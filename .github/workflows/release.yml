@@ -128,10 +128,10 @@ jobs:
       # packages-engine/*/bin is gitignored, so without the builds above this
       # job would publish engine packages holding only a README. The binary
       # check reads each binary's own header (right OS, right CPU), its exec
-      # bit, and what `npm pack` would actually ship. A platform with no CI
-      # build (Windows, for now) fails it by name, which is the point: the
-      # main package pins all three, and npm skips a missing optional
-      # dependency silently. tools/ci-workflows.sh (W15) keeps this step here.
+      # bit, and what `npm pack` would actually ship. A platform whose build
+      # is missing fails it by name, which is the point: the main package pins
+      # all three, and npm skips a missing optional dependency silently.
+      # tools/ci-workflows.sh (W15) keeps this step here.
       - name: Release metadata, with every engine binary required
         env:
           RNI_REQUIRE_ENGINE_BINARIES: '1'

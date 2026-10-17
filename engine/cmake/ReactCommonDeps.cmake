@@ -91,7 +91,14 @@ if(DEFINED OPENSSL_SSL_LIBRARY AND OPENSSL_USE_STATIC_LIBS)
     unset(OPENSSL_LIBRARIES CACHE)
   endif()
 endif()
-if(NOT ANDROID)
+# ⛔ WINDOWS NEVER PICKS UP AN OpenSSL FROM THE BUILD MACHINE.
+# A GitHub Windows runner has a shared OpenSSL 3 installed. find_package found
+# it, the engine linked libssl-3-x64.dll and libcrypto-3-x64.dll, and those
+# ship in no package, so the import-table check in engine-build-win-stage.sh
+# failed the build. On a user's machine that engine would die before main().
+# Windows builds without TLS (the branch below), the same on every machine,
+# until shipping OpenSSL and a CA story for Windows is a deliberate decision.
+if(NOT ANDROID AND NOT WIN32)
   find_package(OpenSSL QUIET)
 endif()
 if(OpenSSL_FOUND)

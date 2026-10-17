@@ -1,0 +1,10 @@
+# Git for Windows defaults to core.autocrlf=true, and so does a GitHub Windows
+# runner. These files are read by bash or hashed byte for byte, so a CRLF
+# checkout breaks them: bash stops at the first line with "$'\r': command not
+# found", a pin read with sed gains a trailing \r, and the custom SDK's
+# patch_sha256 stops matching (tools/sdk-fetch-custom.sh hashes the patches).
+*.sh text eol=lf
+engine/IMPELLER_SHA text eol=lf
+engine/IMPELLER_SDK_CUSTOM text eol=lf
+engine/ANGLE_PIN text eol=lf
+engine/impeller-sdk-patches/*.patch -text
