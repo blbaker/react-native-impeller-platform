@@ -379,10 +379,20 @@ fi
 
 cat > "${PKG}/package.json" <<JSON
 {
-  "name": "@react-native-impeller/engine-${TRIPLE}",
+  "name": "@blbaker/react-native-impeller-platform-engine-${TRIPLE}",
   "version": "${VERSION}",
-  "description": "Prebuilt Impeller engine host for ${TRIPLE} (installed automatically by @react-native-impeller/core)",
+  "description": "Prebuilt Impeller engine host for ${TRIPLE} (installed automatically by react-native-impeller-platform)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blbaker/react-native-impeller-platform.git",
+    "directory": "packages-engine/engine-${TRIPLE}"
+  },
+  "homepage": "https://github.com/blbaker/react-native-impeller-platform#readme",
+  "bugs": {
+    "url": "https://github.com/blbaker/react-native-impeller-platform/issues"
+  },
+  "author": "Brandon Baker",
   "files": ["bin", "README.md"],
   "publishConfig": {
     "access": "public"
@@ -393,12 +403,12 @@ cat > "${PKG}/package.json" <<JSON
 JSON
 
 cat > "${PKG}/README.md" <<MD
-# @react-native-impeller/engine-${TRIPLE}
+# @blbaker/react-native-impeller-platform-engine-${TRIPLE}
 
-Prebuilt engine binary for \`react-native-impeller\` on ${TRIPLE}.
+Prebuilt engine binary for \`react-native-impeller-platform\` on ${TRIPLE}.
 
 Installed automatically as an optional dependency — do not depend on it directly.
-Version is locked in step with \`react-native-impeller\`; the resolver refuses a
+Version is locked in step with \`react-native-impeller-platform\`; the resolver refuses a
 mismatch because the engine C ABI is not stable across versions.
 
 Impeller SDK pin: \`$(cat engine/IMPELLER_SHA)\`

@@ -15,17 +15,17 @@
         {
           "type": "json",
           "path": "package/package.json",
-          "jsonpath": "$.optionalDependencies['@react-native-impeller/engine-darwin-arm64']"
+          "jsonpath": "$.optionalDependencies['@blbaker/react-native-impeller-platform-engine-darwin-arm64']"
         },
         {
           "type": "json",
           "path": "package/package.json",
-          "jsonpath": "$.optionalDependencies['@react-native-impeller/engine-linux-x64']"
+          "jsonpath": "$.optionalDependencies['@blbaker/react-native-impeller-platform-engine-linux-x64']"
         },
         {
           "type": "json",
           "path": "package/package.json",
-          "jsonpath": "$.optionalDependencies['@react-native-impeller/engine-win32-x64']"
+          "jsonpath": "$.optionalDependencies['@blbaker/react-native-impeller-platform-engine-win32-x64']"
         },
         {
           "type": "json",

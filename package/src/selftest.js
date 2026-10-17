@@ -32,7 +32,7 @@ function check(name, fn) {
   }
 }
 
-console.log('@react-native-impeller/core selftest');
+console.log('react-native-impeller-platform selftest');
 
 check('host triple is platform-arch', () => {
   assert.strictEqual(hostTriple('linux', 'x64'), 'linux-x64');
@@ -42,7 +42,7 @@ check('host triple is platform-arch', () => {
 check('engine package name is derived from the triple', () => {
   assert.strictEqual(
     packageNameFor('linux-x64'),
-    '@react-native-impeller/engine-linux-x64'
+    '@blbaker/react-native-impeller-platform-engine-linux-x64'
   );
 });
 

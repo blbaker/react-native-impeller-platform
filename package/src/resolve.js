@@ -2,7 +2,7 @@
 // Locates the prebuilt Impeller engine binary for the current platform.
 //
 // Delivery model (PLAN D4): the main package declares every
-// `@react-native-impeller/engine-<platform>-<arch>` as an OPTIONAL dependency.
+// `@blbaker/react-native-impeller-platform-engine-<platform>-<arch>` as an OPTIONAL dependency.
 // npm installs only the one matching the host, so a consumer never compiles C++.
 //
 // Rules this file enforces:
@@ -22,7 +22,7 @@
 // TESTED: no gate ever ran the resolver through a symlinked package, so the
 // linked case was asserted in a comment and broken in fact.
 //
-// Under `file:`/`npm link`, node_modules/@react-native-impeller/core is a
+// Under `file:`/`npm link`, node_modules/react-native-impeller-platform is a
 // SYMLINK back to this source checkout. `__dirname` therefore lands in the
 // checkout, whose node_modules does NOT contain the engine package -- the
 // engine lives in the checkout's sibling `packages-engine/engine-<triple>/`,
@@ -71,7 +71,7 @@ function hostTriple(platform = process.platform, arch = process.arch) {
 }
 
 function packageNameFor(triple) {
-  return `@react-native-impeller/engine-${triple}`;
+  return `@blbaker/react-native-impeller-platform-engine-${triple}`;
 }
 
 function binaryFileName(platform = process.platform) {
@@ -91,7 +91,7 @@ function ownVersion() {
  * is reached ONLY when the __dirname walk found nothing -- i.e. only in the
  * case that used to throw.
  */
-function engineCandidates(pkgName, opts) {
+function engineCandidates(triple, opts) {
   const env = opts.env || process.env;
   const cwd = opts.cwd || process.cwd();
   const out = [];
@@ -115,7 +115,9 @@ function engineCandidates(pkgName, opts) {
   //     there and nothing ever installs it into a node_modules anywhere.
   out.push({
     kind: 'path',
-    dir: path.join(__dirname, '..', '..', 'packages-engine', pkgName.split('/').pop()),
+    // The directory is named by the triple, not the package: the npm name is
+    // scoped under a different prefix and does not match the folder.
+    dir: path.join(__dirname, '..', '..', 'packages-engine', `engine-${triple}`),
     source: 'linked-checkout',
   });
 
@@ -155,7 +157,7 @@ function resolveEngine(opts = {}) {
     // still documented under contributing — it is simply not the answer we hand
     // to someone whose install just failed.
     throw new Error(
-      `@react-native-impeller/core does not support ${triple} yet.\n` +
+      `react-native-impeller-platform does not support ${triple} yet.\n` +
         `Supported: ${[...SUPPORTED].join(', ')}\n\n` +
         'Track or request platform support:\n' +
         '    https://github.com/blbaker/react-native-impeller-platform/issues\n'
@@ -166,7 +168,7 @@ function resolveEngine(opts = {}) {
   let pkgJsonPath = null;
   let source = null;
   const tried = [];
-  for (const cand of engineCandidates(pkgName, {env, cwd: opts.cwd})) {
+  for (const cand of engineCandidates(triple, {env, cwd: opts.cwd})) {
     if (cand.kind === 'resolve') {
       tried.push(cand.from);
       try {
@@ -187,7 +189,7 @@ function resolveEngine(opts = {}) {
   if (!pkgJsonPath) {
     throw new Error(
       `Missing engine package "${pkgName}".\n` +
-        'It ships as an optional dependency of @react-native-impeller/core and should\n' +
+        'It ships as an optional dependency of react-native-impeller-platform and should\n' +
         'been installed automatically. Install it explicitly:\n\n' +
         `    npm install ${pkgName}@${ownVersion()}\n\n` +
         // ⛔ SAY WHERE WE LOOKED. The old message named the package but not the
@@ -204,7 +206,7 @@ function resolveEngine(opts = {}) {
   if (enginePkg.version !== expected) {
     throw new Error(
       `Engine version mismatch: ${pkgName}@${enginePkg.version} is installed but\n` +
-        `@react-native-impeller/core@${expected} requires exactly ${expected}.\n` +
+        `react-native-impeller-platform@${expected} requires exactly ${expected}.\n` +
         'The engine C ABI is versioned in lockstep; mixed versions crash at runtime.\n\n' +
         `    npm install ${pkgName}@${expected}`
     );

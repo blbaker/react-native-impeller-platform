@@ -8,10 +8,17 @@
 #   2. It cannot run before the gates: `needs: gates`, and `gates` is the SAME
 #      workflow a pull request runs, called rather than copied.
 #   3. It is DRY BY DEFAULT. `npm publish --dry-run` runs on every tag and
-#      exercises the whole path — auth, packing, file lists — without creating
-#      anything. The real publish is a separate step behind a repository
-#      variable, so arming the pipeline is a settings change with an audit
-#      trail, not a commit.
+#      exercises packing and file lists without creating anything. The real
+#      publish is a separate step behind a repository variable, so arming the
+#      pipeline is a settings change with an audit trail, not a commit.
+#   4. It holds NO npm token. The publish job authenticates with npm trusted
+#      publishing: GitHub mints a short-lived OIDC token for this workflow
+#      file, and npm exchanges it for a one-time publish credential. Provenance
+#      is attached automatically. There is no long-lived secret to leak.
+#   5. A publish is STAGED, not live. `npm stage publish` puts each version in
+#      npm's staging area, and it goes public only when a maintainer approves
+#      it with 2FA on npmjs.com (or `npm stage approve`). The trusted publisher
+#      for each package should allow staged publishing only.
 #
 # ⛔ PUBLISHING IS LOCKED, AND THE LOCK IS NOW THE ONLY THING HOLDING.
 # Baker's direction, 2026-08-15: the packages go PUBLIC, and NOTHING publishes
@@ -63,6 +70,11 @@ jobs:
     # reviewer. Then a publish pauses for an explicit approval click in
     # addition to the variable.
     environment: npm-publish
+    # Job-level, so only this job can mint an OIDC token. The trusted publisher
+    # on npmjs.com names this file (release.yml) and this environment.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -70,6 +82,13 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm 11.5.1+ and staged publishing 11.15.0+.
+      # The npm bundled with Node 24 can be older than that, so pin one.
+      - name: Pin npm for trusted and staged publishing
+        run: |
+          npm install -g npm@11.21.1
+          npm --version
 
       # ⛔ THE TAG MUST MATCH THE VERSION IN THE PACKAGE.
       # Publishing v0.1.0's artifact under the v0.2.0 tag is unrecoverable: the
@@ -96,11 +115,9 @@ jobs:
       - name: Release metadata
         run: bash tools/ci-release-meta.sh
 
-      # Always runs. Exercises auth, packing and the shipped file list on every
-      # tag, so the publish path cannot rot between releases while looking fine.
+      # Always runs. Exercises packing and the shipped file list on every tag,
+      # so the publish path cannot rot between releases while looking fine.
       - name: Publish (dry run)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm publish ./package --dry-run
           for p in packages-engine/*/; do
@@ -109,16 +126,19 @@ jobs:
 
       # The only step that changes the outside world. Two independent things
       # must be true: a version tag was pushed, AND someone set the repository
-      # variable. Neither alone is enough.
-      - name: Publish
+      # variable. Neither alone is enough, and even then nothing goes public
+      # until a maintainer approves each staged version with 2FA.
+      #
+      # Engines are staged before the main package, so they can be approved
+      # first: the main package pins them exactly, and approving it while its
+      # engines are still staged would give users an install with no engine.
+      - name: Publish (staged, approved by a maintainer on npmjs.com)
         if: vars.RNI_PUBLISH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm publish ./package
           for p in packages-engine/*/; do
-            npm publish "$p"
+            (cd "$p" && npm stage publish)
           done
+          (cd package && npm stage publish)
 
       - name: Publish is disabled
         if: vars.RNI_PUBLISH_ENABLED != 'true'

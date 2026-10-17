@@ -129,3 +129,41 @@ Those stay human actions.
 Versions are managed by [Release Please](https://github.com/googleapis/release-please)
 based on your commits' conventional-commit types. You don't bump version
 numbers by hand.
+
+### Publishing to npm
+
+Publishing uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers):
+the repo stores no npm token. A version tag runs `.github/workflows/release.yml`,
+which runs the gates, does a `npm publish --dry-run` of every package, and then,
+only when the repository variable `RNI_PUBLISH_ENABLED` is `true`, runs
+`npm stage publish` for each package with a short-lived OIDC credential. Staged
+versions are not public. A maintainer approves each one with 2FA on npmjs.com
+(Staged Packages tab) or with `npm stage approve <id>`. Approve the three engine
+packages before `react-native-impeller-platform`, because it pins them exactly.
+
+One-time setup, done by a maintainer with npm 11.15.0 or later and 2FA on:
+
+1. Each package has to exist on npm before a trusted publisher can be added.
+   For a name that doesn't exist yet, `npm stage publish` creates it with
+   npm's `0.0.0-stage` placeholder. Run it once in each package directory and
+   reject the staged version with `npm stage reject <id>`.
+2. Add the trusted publisher for each of the four packages:
+
+   ```bash
+   for p in react-native-impeller-platform \
+            @blbaker/react-native-impeller-platform-engine-darwin-arm64 \
+            @blbaker/react-native-impeller-platform-engine-linux-x64 \
+            @blbaker/react-native-impeller-platform-engine-win32-x64; do
+     npm trust github "$p" --repo blbaker/react-native-impeller-platform \
+       --file release.yml --env npm-publish --allow-stage-publish --yes
+     sleep 2
+   done
+   ```
+
+   A new trusted publisher expires if it isn't used within 2 days, so add it
+   right before the first tagged release.
+3. On npmjs.com, set each package's Settings → Publishing access to "Require
+   two-factor authentication and disallow tokens".
+
+`tools/ci-workflows.sh` enforces the workflow side: a real publish needs the
+guard variable, `id-token: write` on the publishing job only, and no npm token.

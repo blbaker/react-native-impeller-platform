@@ -58,7 +58,7 @@ echo "== 2. swap in the item 15 metro-logs fixture as the app entry =="
 cp "$FIXTURE/index.js" "$APP/index.js"
 cp "$FIXTURE/Swatch.js" "$APP/Swatch.js"
 npx --no-install react-native init-impeller > /dev/null 2>&1 || fail "init-impeller failed"
-RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" || fail "engine resolver failed"
+RESOLVED="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" || fail "engine resolver failed"
 
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/hmr-release.bundle \

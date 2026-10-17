@@ -7,7 +7,7 @@ APP="${CONCAVE_WORK:-/tmp/concave-imp}/ConcaveApp"
 FIX="$1"; W="${2:-700}"; H="${3:-400}"
 cd "$APP"
 cp "$FIX" "$APP/index.js"
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)"
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)"
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/fx.bundle >/dev/null 2>&1
 SHOT="/tmp/fx.ppm"

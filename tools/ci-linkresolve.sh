@@ -23,7 +23,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRIPLE="$(node -e 'process.stdout.write(process.platform+"-"+process.arch)')"
-PKG="@react-native-impeller/engine-${TRIPLE}"
+PKG="@blbaker/react-native-impeller-platform-engine-${TRIPLE}"
 ENGDIR="${ROOT}/packages-engine/engine-${TRIPLE}"
 
 # ⛔ REALPATH, NOT mktemp's WORD. On macOS `mktemp -d` hands back /var/folders/...
@@ -60,11 +60,11 @@ fail() { echo "LINKRESOLVE_FAIL: $*"; exit 1; }
 
 # ---------------------------------------------------------------- PASS 1: link
 LAPP="${WORK}/linked/apps/hostapp"
-mkdir -p "${LAPP}/node_modules/@react-native-impeller"
+mkdir -p "${LAPP}/node_modules/@blbaker"
 printf '{"name":"hostapp","version":"1.0.0"}' > "${LAPP}/package.json"
-ln -s "${ROOT}/package" "${LAPP}/node_modules/@react-native-impeller/core"
-ln -s "${ENGDIR}"       "${LAPP}/node_modules/@react-native-impeller/engine-${TRIPLE}"
-LCORE="${LAPP}/node_modules/@react-native-impeller/core"
+ln -s "${ROOT}/package" "${LAPP}/node_modules/react-native-impeller-platform"
+ln -s "${ENGDIR}"       "${LAPP}/node_modules/@blbaker/react-native-impeller-platform-engine-${TRIPLE}"
+LCORE="${LAPP}/node_modules/react-native-impeller-platform"
 
 echo "== 1. linked consumer, cwd = the app =="
 r="$(ask "$LCORE" "$LAPP")"; echo "   $r"
@@ -81,12 +81,12 @@ r="$(ask "$LCORE" "$WORK")"; echo "   $r"
 
 # ------------------------------------------------------------- PASS 2: install
 IAPP="${WORK}/installed/app"
-mkdir -p "${IAPP}/node_modules/@react-native-impeller"
+mkdir -p "${IAPP}/node_modules/@blbaker"
 printf '{"name":"installed","version":"1.0.0"}' > "${IAPP}/package.json"
-cp -r "${ROOT}/package" "${IAPP}/node_modules/@react-native-impeller/core"
-cp -r "${ENGDIR}"       "${IAPP}/node_modules/@react-native-impeller/engine-${TRIPLE}"
-ICORE="${IAPP}/node_modules/@react-native-impeller/core"
-IEXPECT="${IAPP}/node_modules/@react-native-impeller/engine-${TRIPLE}"
+cp -r "${ROOT}/package" "${IAPP}/node_modules/react-native-impeller-platform"
+cp -r "${ENGDIR}"       "${IAPP}/node_modules/@blbaker/react-native-impeller-platform-engine-${TRIPLE}"
+ICORE="${IAPP}/node_modules/react-native-impeller-platform"
+IEXPECT="${IAPP}/node_modules/@blbaker/react-native-impeller-platform-engine-${TRIPLE}"
 
 echo "== 4. installed consumer resolves from __dirname =="
 r="$(ask "$ICORE" "$IAPP")"; echo "   $r"
@@ -98,10 +98,10 @@ r="$(ask "$ICORE" "$IAPP")"; echo "   $r"
 # __dirname is index 0.
 echo "== 5. decoy engine in CWD must NOT outrank the installed one =="
 DECOY="${WORK}/decoy"
-mkdir -p "${DECOY}/node_modules/@react-native-impeller/engine-${TRIPLE}/bin"
+mkdir -p "${DECOY}/node_modules/@blbaker/react-native-impeller-platform-engine-${TRIPLE}/bin"
 node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({name:process.argv[2],version:require(process.argv[3]).version}))' \
-  "${DECOY}/node_modules/@react-native-impeller/engine-${TRIPLE}/package.json" "$PKG" "${ROOT}/package/package.json"
-cp "${ENGDIR}/bin/rn-impeller"* "${DECOY}/node_modules/@react-native-impeller/engine-${TRIPLE}/bin/" 2>/dev/null || true
+  "${DECOY}/node_modules/@blbaker/react-native-impeller-platform-engine-${TRIPLE}/package.json" "$PKG" "${ROOT}/package/package.json"
+cp "${ENGDIR}/bin/rn-impeller"* "${DECOY}/node_modules/@blbaker/react-native-impeller-platform-engine-${TRIPLE}/bin/" 2>/dev/null || true
 r="$(ask "$ICORE" "$DECOY" "$DECOY")"; echo "   $r"
 [[ "$r" == package\ ${IEXPECT}/* ]] || fail "CWD decoy outranked the installed engine -- candidate order is inverted: $r"
 

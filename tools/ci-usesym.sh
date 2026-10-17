@@ -52,7 +52,7 @@ echo "== 2. swap in the use/symbol fixture =="
 cp "$ROOT/fixtures/p9-usesym/index.js" "$APP/index.js"
 
 npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
 
 echo "== 3. bundle --platform impeller =="

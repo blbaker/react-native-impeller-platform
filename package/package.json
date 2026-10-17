@@ -1,8 +1,29 @@
 {
-  "name": "@react-native-impeller/core",
+  "name": "react-native-impeller-platform",
   "version": "0.0.1",
   "description": "Out-of-tree React Native platform rendered with Flutter's Impeller engine",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blbaker/react-native-impeller-platform.git",
+    "directory": "package"
+  },
+  "homepage": "https://github.com/blbaker/react-native-impeller-platform#readme",
+  "bugs": {
+    "url": "https://github.com/blbaker/react-native-impeller-platform/issues"
+  },
+  "author": "Brandon Baker",
+  "keywords": [
+    "react-native",
+    "react-native-platform",
+    "out-of-tree-platform",
+    "impeller",
+    "flutter",
+    "desktop",
+    "linux",
+    "macos",
+    "windows"
+  ],
   "main": "src/index.js",
   "files": [
     "src",
@@ -20,9 +41,9 @@
     "react-native": ">=0.86.0"
   },
   "optionalDependencies": {
-    "@react-native-impeller/engine-darwin-arm64": "0.0.1",
-    "@react-native-impeller/engine-linux-x64": "0.0.1",
-    "@react-native-impeller/engine-win32-x64": "0.0.1"
+    "@blbaker/react-native-impeller-platform-engine-darwin-arm64": "0.0.1",
+    "@blbaker/react-native-impeller-platform-engine-linux-x64": "0.0.1",
+    "@blbaker/react-native-impeller-platform-engine-win32-x64": "0.0.1"
   },
   "publishConfig": {
     "access": "public"

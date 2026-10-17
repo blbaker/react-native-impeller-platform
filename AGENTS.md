@@ -17,7 +17,7 @@ here.
 
 - `engine/`: the C++ Impeller host (scene graph, Fabric mounting, native
   modules, platform surfaces).
-- `package/`: the `@react-native-impeller/core` JS package.
+- `package/`: the `react-native-impeller-platform` JS package.
 - `packages-engine/engine-<platform>-<arch>/`: prebuilt engine binaries,
   one package per platform, versioned in lockstep with `package/`.
 - `tools/`: build scripts and CI gates. `ci-*.sh` is a gate;

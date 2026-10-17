@@ -4,7 +4,7 @@
 <!-- darwin-arm64, linux-x64, or win32-x64 -->
 
 **Engine version / commit**
-<!-- the version of @react-native-impeller/engine-<platform> you installed,
+<!-- the version of @blbaker/react-native-impeller-platform-engine-<platform> you installed,
      or the engine commit SHA if you built from source -->
 
 **React Native version**

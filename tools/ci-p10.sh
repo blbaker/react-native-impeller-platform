@@ -163,7 +163,7 @@ npm install --no-audit --no-fund --silent "$WORK/$ENGINE_TGZ" "$WORK/$MAIN_TGZ" 
 # Libraries/Network/RCTNetworking.js to a self-referencing stub on this
 # platform, and the NATIVE module can be perfect while fetch is 100% broken —
 # the JS never reaches native at all.
-INSTALLED_SHIM="$APP/node_modules/@react-native-impeller/core/src/metro-shims/index.js"
+INSTALLED_SHIM="$APP/node_modules/react-native-impeller-platform/src/metro-shims/index.js"
 [ -f "$INSTALLED_SHIM" ] || fail "react-native-impeller is not installed in the consumer app"
 grep -q 'Network/RCTNetworking.js' "$INSTALLED_SHIM" \
   || fail "installed shim is STALE — no redirect for Network/RCTNetworking.js; fetch would resolve to a self-referencing stub"
@@ -214,7 +214,7 @@ echo "== 5. swap in the P10 fixture and bundle --platform impeller =="
 cp "$FIXTURE/index.js" "$APP/index.js"
 cp "$RUNTIME_FIXTURE" "$APP/fixture.json"
 npx --no-install react-native init-impeller 2>&1 | sed 's/^/   /' || fail "init-impeller failed"
-RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" || fail "engine resolver failed"
+RESOLVED="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" || fail "engine resolver failed"
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/index.impeller.bundle \
     2>&1 | tail -3 | sed 's/^/   /'

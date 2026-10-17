@@ -67,7 +67,7 @@ npm install --no-audit --no-fund --silent "$WORK/$ENGINE_TGZ" "$WORK/$MAIN_TGZ" 
   || fail "npm install of the tarballs failed"
 cp "$FIXTURE/index.js" "$APP/index.js"
 npx --no-install react-native init-impeller > /dev/null 2>&1 || fail "init-impeller failed"
-BIN="${RNI_BIN:-$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)}" \
+BIN="${RNI_BIN:-$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)}" \
   || fail "engine resolver failed"
 cd "$ROOT"
 

@@ -251,6 +251,44 @@ s = s.replace("      - name: Publish (dry run)",
 p.write_text(s)
 '
 
+# ── W8 for staged publishing: the stage step loses its guard.
+# `npm stage publish` is a different command string from `npm publish`, so a
+# gate that only matched the latter would never see the real publish at all.
+mutate "staged publish runs without the guard variable" W8 '
+import sys, pathlib
+p = pathlib.Path(sys.argv[1], "release.yml")
+s = p.read_text()
+s = s.replace("        if: vars.RNI_PUBLISH_ENABLED == \x27true\x27 && startsWith(github.ref, \x27refs/tags/v\x27)\n        run: |\n          for p in packages-engine",
+              "        run: |\n          for p in packages-engine")
+p.write_text(s)
+'
+
+# ── W13: the publish job loses its OIDC permission.
+# Without id-token the publish falls back to whatever token npm can find, or
+# fails on the runner after the version tag already exists.
+mutate "publish job no longer grants id-token" W13 '
+import sys, pathlib
+p = pathlib.Path(sys.argv[1], "release.yml")
+p.write_text(p.read_text().replace("      id-token: write\n", ""))
+'
+
+# ── W13: a long-lived npm token comes back next to trusted publishing.
+mutate "npm token reintroduced on the publish step" W13 '
+import sys, pathlib
+p = pathlib.Path(sys.argv[1], "release.yml")
+s = p.read_text().replace("          (cd package && npm stage publish)\n",
+                          "          (cd package && npm stage publish)\n        env:\n          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}\n")
+p.write_text(s)
+'
+
+# ── W14: id-token granted to every job in the release workflow.
+mutate "id-token granted at the workflow top level" W14 '
+import sys, pathlib
+p = pathlib.Path(sys.argv[1], "release.yml")
+s = p.read_text().replace("permissions:\n  contents: read\n", "permissions:\n  contents: read\n  id-token: write\n", 1)
+p.write_text(s)
+'
+
 # ── W1: the workflow directory is emptied.
 # "The gates run on every PR" with nothing implementing it. A gate that treats
 # no-workflows as nothing-to-check would pass here, which is the silent-skip

@@ -1,4 +1,4 @@
-# react-native-impeller
+# react-native-impeller-platform
 
 An out-of-tree React Native platform whose renderer is
 [Impeller](https://github.com/flutter/engine/tree/main/impeller), Flutter's
@@ -18,7 +18,7 @@ platforms" before installing.
 > a packed tarball. The command below will work once a version ships.
 
 ```bash
-npm install @react-native-impeller/core
+npm install react-native-impeller-platform
 ```
 
 The engine binary is not in this package. It installs automatically as an
@@ -28,9 +28,9 @@ optional dependency matching your platform and architecture.
 
 | Platform | Engine package | Status |
 |---|---|---|
-| linux-x64 | `@react-native-impeller/engine-linux-x64` | builds + renders |
-| win32-x64 | `@react-native-impeller/engine-win32-x64` | builds + renders |
-| darwin-arm64 | `@react-native-impeller/engine-darwin-arm64` | builds + renders |
+| linux-x64 | `@blbaker/react-native-impeller-platform-engine-linux-x64` | builds + renders |
+| win32-x64 | `@blbaker/react-native-impeller-platform-engine-win32-x64` | builds + renders |
+| darwin-arm64 | `@blbaker/react-native-impeller-platform-engine-darwin-arm64` | builds + renders |
 | darwin-x64, linux-arm64 | — | not started |
 
 Nothing is on npm yet — see Install. "builds + renders" means the engine
@@ -53,7 +53,7 @@ package.** Compiling Hermes from source, installing Xcode and cmake, packing
 tarballs by hand, or running a local registry are all things a *contributor to
 this repo* does. A consumer runs `npm install` and nothing else.
 
-If you want to use `@react-native-impeller/core` in an app today, the honest
+If you want to use `react-native-impeller-platform` in an app today, the honest
 answer is: wait for the release. The install above is the entire intended
 experience, and it is one command deliberately — the engine arrives as an
 optional dependency selected by your platform, with no build step, no native
@@ -67,13 +67,13 @@ that is a bug worth reporting.
 
 # Contributing to this repo
 
-Everything below is for working ON react-native-impeller. None of it is
+Everything below is for working ON react-native-impeller-platform. None of it is
 required — or appropriate — for using the published package.
 
 ## Installing it locally, before the first npm release
 
 You can consume the package on this machine exactly the way a published install
-works — `npm install @react-native-impeller/core`, no flags, no env vars, no
+works — `npm install react-native-impeller-platform`, no flags, no env vars, no
 build step in the consuming app — with a throwaway local registry:
 
 ```bash
@@ -83,20 +83,14 @@ cd ../packages-engine/engine-$(node -p 'process.platform+"-"+process.arch') \
   && npm publish --registry http://127.0.0.1:4873
 
 # in a scratch app — exactly what a published install will look like
-npm install @react-native-impeller/core --registry http://127.0.0.1:4873
+npm install react-native-impeller-platform --registry http://127.0.0.1:4873
 ```
 
-Point only that one app's `.npmrc` at the local registry (a **scoped** line),
-never a global `registry=`:
-
-```
-@react-native-impeller:registry=http://127.0.0.1:4873
-```
-
-⛔ Scoped, never global. Everything else — React, React Native, the whole rest
-of the tree — keeps resolving from npmjs. A global redirect routes an app's
-entire dependency graph through a throwaway server, which is a supply-chain
-change nobody asked for.
+Keep `--registry` on that one command instead of writing it into the app's
+`.npmrc`. A global `registry=` line routes the app's entire dependency graph
+through a throwaway server, which is a supply-chain change nobody asked for. A
+scoped line (`@blbaker:registry=http://127.0.0.1:4873`)
+only covers the engine packages, because the main package is unscoped.
 
 Bump the version in every `package.json` before re-publishing; a registry
 refuses to overwrite an existing version, the same as npmjs.
@@ -154,8 +148,8 @@ the same version**, and the resolver refuses a mismatched pair rather than
 letting it fail at runtime:
 
 ```
-Engine version mismatch: @react-native-impeller/engine-linux-x64@0.0.2 is installed
-but react-native-impeller@0.0.1 requires exactly 0.0.1.
+Engine version mismatch: @blbaker/react-native-impeller-platform-engine-linux-x64@0.0.2 is installed
+but react-native-impeller-platform@0.0.1 requires exactly 0.0.1.
 ```
 
 The engine exposes a C ABI that is not stable across versions, so this is a hard

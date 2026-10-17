@@ -18,7 +18,7 @@
 #
 # So a macOS user would get a clean, quiet install and no engine at all. They
 # would then hit resolve.js's "Missing engine package" error, which tells them
-# to run `npm install @react-native-impeller/engine-darwin-arm64@0.0.1` — a
+# to run `npm install @blbaker/react-native-impeller-platform-engine-darwin-arm64@0.0.1` — a
 # command that CANNOT succeed, because that package does not exist. Good error
 # message, impossible instruction. A declared-but-unbuildable target is worse
 # than an undeclared one: it converts "unsupported platform" into "broken
@@ -93,7 +93,7 @@ src = open("package/src/resolve.js").read()
 m = re.search(r"const SUPPORTED = new Set\(\[(.*?)\]\)", src, re.S)
 supported = set(re.findall(r"'([^']+)'", m.group(1))) if m else set()
 for triple in sorted(supported):
-    name = f"@react-native-impeller/engine-{triple}"
+    name = f"@blbaker/react-native-impeller-platform-engine-{triple}"
     if name not in built:
         print(f"RELEASE_META_FAIL: resolve.js lists '{triple}' as SUPPORTED but"
               f" {name} does not exist.", file=sys.stderr)
@@ -205,9 +205,18 @@ bad = False
 for p in ["package/package.json"] + sorted(glob.glob("packages-engine/*/package.json")):
     d = json.load(open(p))
     name = d["name"]
-    if not name.startswith("@"):
-        continue  # unscoped packages cannot be restricted at all
     access = (d.get("publishConfig") or {}).get("access")
+    if not name.startswith("@"):
+        # Unscoped packages are always public, and npm refuses to publish one
+        # that declares access=restricted, so that value is the only error here.
+        if access == "restricted":
+            print(f"RELEASE_META_FAIL: {name} is unscoped but declares"
+                  " publishConfig.access='restricted'; npm refuses that publish"
+                  " (unscoped packages are always public).", file=sys.stderr)
+            bad = True
+        else:
+            print(f"  OK {name} is unscoped (always public)")
+        continue
     if access != want:
         print(f"RELEASE_META_FAIL: {name} has publishConfig.access={access!r},"
               f" expected {want!r}. Publish visibility is a deliberate decision;"

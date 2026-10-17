@@ -89,11 +89,11 @@ fs.writeFileSync("app.json", JSON.stringify(a,null,2));
 '
 npm install --no-audit --no-fund --silent "$ENGINE_TGZ" "$MAIN_TGZ" \
   || fail "npm install of the tarballs failed"
-[ -d node_modules/@react-native-impeller/core ] || fail "main package not installed"
-[ -d "node_modules/@react-native-impeller/engine-${RNI_TRIPLE}" ] || fail "engine package not installed"
+[ -d node_modules/react-native-impeller-platform ] || fail "main package not installed"
+[ -d "node_modules/@blbaker/react-native-impeller-platform-engine-${RNI_TRIPLE}" ] || fail "engine package not installed"
 
 echo "== 4. resolver finds the engine from the CONSUMER's node_modules =="
-RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)" \
+RESOLVED="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
 # ⛔ COMPARE REALPATHS, NOT THE STRINGS THE SHELL HAPPENS TO HOLD.
 # On macOS $TMPDIR lives under /var, which is a symlink to /private/var. mktemp
@@ -106,7 +106,7 @@ RESOLVED="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js
 APP_REAL="$(cd "$APP" && pwd -P)"
 RESOLVED_REAL="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$RESOLVED")"
 case "$RESOLVED_REAL" in
-  "$APP_REAL"/node_modules/@react-native-impeller/*) echo "   $RESOLVED" ;;
+  "$APP_REAL"/node_modules/@blbaker/*) echo "   $RESOLVED" ;;
   *) fail "resolver returned an out-of-app path: $RESOLVED_REAL (app=$APP_REAL)" ;;
 esac
 

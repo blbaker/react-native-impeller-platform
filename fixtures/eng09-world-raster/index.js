@@ -23,7 +23,7 @@
 import React from 'react';
 import {AppRegistry, View} from 'react-native';
 import * as NativeComponentRegistry from 'react-native/Libraries/NativeComponent/NativeComponentRegistry';
-import WorldRaster from '@react-native-impeller/core/src/worldraster';
+import WorldRaster from 'react-native-impeller-platform/src/worldraster';
 import {COLS, ROWS, TILE, WIDTH, HEIGHT, levelForTile} from './pattern';
 
 // <world> is a plain host component (engine/fabric/WorldShadowNode.h);

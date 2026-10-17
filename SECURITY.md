@@ -26,7 +26,7 @@ on turnaround.
 
 ## Scope
 
-In scope: the `@react-native-impeller/core` package, the prebuilt engine
+In scope: the `react-native-impeller-platform` package, the prebuilt engine
 packages, and the engine source under `engine/`. Vulnerabilities in upstream
 dependencies (React Native, Impeller/Flutter, GLFW, ANGLE, Hermes) should be
 reported to those projects directly; feel free to also flag them here if this

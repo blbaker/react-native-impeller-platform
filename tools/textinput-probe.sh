@@ -28,6 +28,6 @@ cp "$ROOT/fixtures/p9-textinput/index.js" "$APP/index.js"
 npx --no-install react-native init-impeller >/dev/null 2>&1
 npx --no-install react-native bundle --platform impeller --dev false \
     --entry-file index.js --bundle-output impeller/build/ti.bundle >/dev/null 2>&1
-ENGINE="$(node node_modules/@react-native-impeller/core/src/bin/engine-path.js)"
+ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)"
 "$ENGINE" --bundle "$APP/impeller/build/ti.bundle" --app-name P9TextInput \
   --headless --probe-banner off --screenshot "$OUT/ti.ppm" 2>&1 | tail -40

@@ -20,7 +20,7 @@
  */
 import React from 'react';
 import {AppRegistry, Image, Linking, Text, View} from 'react-native';
-import {captureRef, captureScreen, releaseCapture} from '@react-native-impeller/core/src/viewshot';
+import {captureRef, captureScreen, releaseCapture} from 'react-native-impeller-platform/src/viewshot';
 
 function parse(url) {
   const q = {};

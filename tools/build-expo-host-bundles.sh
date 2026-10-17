@@ -3,7 +3,7 @@
 #
 # The fixture IS the Mac's probe (package.json pins expo 57.0.27, RN 0.86.3,
 # React 19.2.3; index.js/App.js/metro.config.js verbatim), installed fresh from
-# npm with @react-native-impeller/core packed from THIS tree, so the bundles
+# npm with react-native-impeller-platform packed from THIS tree, so the bundles
 # carry the shims this checkout ships. Two entries:
 #   index.js     -> expo-probe.bundle     (registerRootComponent from 'expo')
 #   contract.js  -> expo-contract.bundle  (globalThis.expo contract checks)
@@ -29,7 +29,7 @@ cd "$APP"
 node -e '
 const fs = require("fs");
 const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
-p.dependencies["@react-native-impeller/core"] = "file:" + process.argv[1];
+p.dependencies["react-native-impeller-platform"] = "file:" + process.argv[1];
 fs.writeFileSync("package.json", JSON.stringify(p, null, 2));
 ' "$WORK/$CORE_TGZ"
 # --omit=optional: the engine packages are optional deps of core and are not

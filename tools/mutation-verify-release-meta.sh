@@ -75,7 +75,7 @@ mutate "optionalDependency pinned with a caret range" '
 import json
 p="package/package.json"
 d=json.load(open(p))
-d["optionalDependencies"]["@react-native-impeller/engine-linux-x64"]="^0.0.1"
+d["optionalDependencies"]["@blbaker/react-native-impeller-platform-engine-linux-x64"]="^0.0.1"
 json.dump(d,open(p,"w"),indent=2)
 ' "must be exactly"
 
@@ -86,7 +86,7 @@ mutate "optionalDependency declared for an unbuilt platform" '
 import json
 p="package/package.json"
 d=json.load(open(p))
-d["optionalDependencies"]["@react-native-impeller/engine-darwin-arm64"]="0.0.1"
+d["optionalDependencies"]["@blbaker/react-native-impeller-platform-engine-linux-arm64"]="0.0.1"
 json.dump(d,open(p,"w"),indent=2)
 ' "no package exists in packages-engine"
 
@@ -97,7 +97,7 @@ mutate "resolve.js SUPPORTS a triple with no package" '
 import re
 p="package/src/resolve.js"
 s=open(p).read()
-s=s.replace("  '"'"'win32-x64'"'"',\n", "  '"'"'win32-x64'"'"',\n  '"'"'darwin-arm64'"'"',\n")
+s=s.replace("  '"'"'win32-x64'"'"',\n", "  '"'"'win32-x64'"'"',\n  '"'"'linux-arm64'"'"',\n")
 open(p,"w").write(s)
 ' "SUPPORTED but"
 
@@ -161,7 +161,7 @@ json.dump(d,open(p,"w"),indent=2)
 # whatever is declared, so this stays honest if the decision moves again.
 mutate "publish access flipped away from the declared value" '
 import json
-p="package/package.json"
+p="packages-engine/engine-linux-x64/package.json"
 d=json.load(open(p)); d["publishConfig"]={"access":"restricted"}; json.dump(d,open(p,"w"),indent=2)
 ' "expected 'public'"
 
@@ -175,9 +175,17 @@ d=json.load(open(p)); d["publishConfig"]={"access":"restricted"}; json.dump(d,op
 # assertion, and it went from documentary to load-bearing.
 mutate "publishConfig removed (now a genuinely wrong artifact)" '
 import json
-p="package/package.json"
+p="packages-engine/engine-linux-x64/package.json"
 d=json.load(open(p)); d.pop("publishConfig",None); json.dump(d,open(p,"w"),indent=2)
 ' "expected 'public'"
+
+# M11: the main package is unscoped. npm refuses to publish an unscoped package
+# that declares access=restricted, so the gate must fail it rather than skip it.
+mutate "unscoped main package declares restricted access" '
+import json
+p="package/package.json"
+d=json.load(open(p)); d["publishConfig"]={"access":"restricted"}; json.dump(d,open(p,"w"),indent=2)
+' "is unscoped but declares"
 
 echo
 if [ "$CAUGHT" -eq "$TOTAL" ]; then
