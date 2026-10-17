@@ -67,12 +67,18 @@ if [ "${PLATFORM}" != "win32" ] && [ "${PLATFORM}" != "${HOST_PLATFORM}" ]; then
   echo "  Run it on a ${PLATFORM} host, or drop the argument to build for this one." >&2
   exit 1
 fi
-VERSION="$(node -p "require('${ROOT}/package/package.json').version")"
+# Relative to the cwd (the repo root), so it also works under Git Bash, where
+# node.exe cannot read a /d/... path inside a JS string.
+VERSION="$(node -p "require('./package/package.json').version")"
 
 case "${PLATFORM}" in
   linux)  ;;
   darwin) ;;
-  win32) exec bash tools/engine-build-win-stage.sh "${ARCH}" ;;
+  win32)
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*) exec bash tools/engine-build-win-native.sh "${ARCH}" ;;
+      *)                    exec bash tools/engine-build-win-stage.sh "${ARCH}" ;;
+    esac ;;
   *) echo "engine-build: ${PLATFORM} is not supported yet" >&2; exit 1 ;;
 esac
 

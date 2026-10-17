@@ -40,7 +40,7 @@ PIN="engine/IMPELLER_SDK_CUSTOM"
 BASE="${RNI_SDK_CUSTOM_BASE_URL:-https://github.com/blbaker/react-native-impeller-platform/releases/download}"
 
 fail() { echo "sdk-fetch-custom: FAIL — $*" >&2; exit 1; }
-pin() { sed -n "s/^$1=//p" "$PIN" | head -1; }
+pin() { sed -n "s/^$1=//p" "$PIN" | tr -d '\r' | head -1; }
 sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -c1-64
   else shasum -a 256 "$1" | cut -c1-64; fi
