@@ -30,6 +30,8 @@ engine/third_party/impeller-sdk-custom/
 engine/third_party/impeller-sdk-custom-darwin/
 engine/third_party/impeller-sdk-custom-win/
 engine/third_party/impeller-sdk-custom-android/
+# Fetched by tools/sdk-fetch-custom.sh (or built by impeller-sdk-custom-build*.sh).
+engine/third_party/impeller-sdk-custom-parity*/
 engine/build-android-*.log
 # fetched by tools/sdk-fetch-win.sh, never committed
 engine/third_party/impeller-sdk-win/

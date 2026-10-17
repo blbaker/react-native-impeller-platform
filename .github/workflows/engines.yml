@@ -28,6 +28,7 @@ on:
       - 'tools/hermes-build.sh'
       - 'tools/sdk-fetch.sh'
       - 'tools/sdk-fetch-darwin.sh'
+      - 'tools/sdk-fetch-custom.sh'
       - 'tools/angle-fetch.sh'
       - '.github/workflows/engines.yml'
 

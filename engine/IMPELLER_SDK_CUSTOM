@@ -1,0 +1,9 @@
+# Prebuilt custom Impeller SDK: engine/IMPELLER_SHA plus engine/impeller-sdk-patches.
+# Fetched and verified by tools/sdk-fetch-custom.sh. When the patches change,
+# rebuild each platform (tools/impeller-sdk-custom-build.sh, -build-win.sh),
+# upload the archives to a new release, and update every line below.
+release=impeller-sdk-custom-3fa60ac11bf5
+patch_sha256=3fa60ac11bf52d580b2a08e4ab2f45e55959ff7a726b40637a3f422996194864
+linux-x64=6732fa0c7f31a152aee36a0a82c9d4e77ff878c3b31e28c1c56769b2a2b50863
+darwin-arm64=5f9054fc6f35e0ce349f2206e24ab3ab065d33dc842d8c9bce799b45f8fa440c
+win32-x64=6f794013925efe37edc64a3fb10a0f0321e1be1a00db83d7f919cfe34352f8c9
