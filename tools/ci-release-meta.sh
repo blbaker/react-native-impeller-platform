@@ -229,6 +229,88 @@ sys.exit(1 if bad else 0)
 PY
 [ $? -eq 0 ] || FAIL=1
 
+# 6. EVERY ENGINE PACKAGE CARRIES ITS ENGINE — only when a publish is about to
+#    happen (RNI_REQUIRE_ENGINE_BINARIES=1, set by release.yml after it unpacks
+#    the per-OS builds).
+#
+#    packages-engine/*/bin is gitignored, so a fresh checkout has package.json
+#    and README.md and nothing else. Everything above passes on that tree, and
+#    `npm publish` happily ships it: a package that installs cleanly and holds
+#    no engine. Off by default, because a laptop or the gates job has at most
+#    its own platform's build and that is not a defect there.
+#
+#    Three ways the binary can be "there" and still wrong, each checked:
+#      - missing, or not executable (a lost exec bit is an EACCES at spawn);
+#      - built for the wrong OS or CPU (an artifact unpacked into the wrong
+#        folder installs fine and fails at exec with an unrelated error) —
+#        read from the file's own header, not from where it sits;
+#      - present on disk but left out of the tarball (`files`, .npmignore) —
+#        asked of `npm pack --dry-run`, which is what publish actually ships.
+if [ "${RNI_REQUIRE_ENGINE_BINARIES:-0}" = "1" ]; then
+python3 - <<'PY'
+import glob, json, os, subprocess, sys
+
+FORMAT = {"linux": "ELF", "darwin": "Mach-O", "win32": "PE"}
+
+def ident(path):
+    with open(path, "rb") as f:
+        h = f.read(4096)
+    if h[:4] == b"\x7fELF":
+        order = "little" if h[5] == 1 else "big"
+        m = int.from_bytes(h[18:20], order)
+        return "ELF", {0x3E: "x64", 0xB7: "arm64"}.get(m, hex(m))
+    if h[:4] == b"\xcf\xfa\xed\xfe":
+        c = int.from_bytes(h[4:8], "little")
+        return "Mach-O", {0x01000007: "x64", 0x0100000C: "arm64"}.get(c, hex(c))
+    if h[:2] == b"MZ" and len(h) >= 0x40:
+        off = int.from_bytes(h[0x3C:0x40], "little")
+        if h[off:off + 4] == b"PE\0\0":
+            m = int.from_bytes(h[off + 4:off + 6], "little")
+            return "PE", {0x8664: "x64", 0xAA64: "arm64"}.get(m, hex(m))
+    return "unrecognised", None
+
+bad = False
+def fail(msg):
+    global bad
+    print(f"RELEASE_META_FAIL: {msg}", file=sys.stderr)
+    bad = True
+
+for pj in sorted(glob.glob("packages-engine/*/package.json")):
+    pkg = os.path.dirname(pj)
+    name = json.load(open(pj))["name"]
+    triple = os.path.basename(pkg).removeprefix("engine-")
+    os_, cpu = triple.split("-", 1)
+    exe = "rn-impeller.exe" if os_ == "win32" else "rn-impeller"
+    path = os.path.join(pkg, "bin", exe)
+    if not os.path.isfile(path):
+        fail(f"{name} has no engine binary (bin/{exe}). Publishing it would ship"
+             " a package that installs cleanly and contains no engine.")
+        continue
+    fmt, arch = ident(path)
+    if (fmt, arch) != (FORMAT.get(os_), cpu):
+        fail(f"{name}: bin/{exe} is a {fmt} {arch} binary, expected"
+             f" {FORMAT.get(os_)} {cpu} for {triple}")
+        continue
+    if os_ != "win32" and not os.access(path, os.X_OK):
+        fail(f"{name}: bin/{exe} is not executable (the exec bit was lost in transit)")
+        continue
+    out = subprocess.run(["npm", "pack", "--dry-run", "--json", "--ignore-scripts"],
+                         cwd=pkg, capture_output=True, text=True)
+    try:
+        shipped = {f["path"] for f in json.loads(out.stdout)[0]["files"]}
+    except (ValueError, IndexError, KeyError):
+        fail(f"{name}: could not read `npm pack --dry-run --json` output: {out.stderr.strip()[:200]}")
+        continue
+    if f"bin/{exe}" not in shipped:
+        fail(f"{name}: bin/{exe} exists but `npm pack` would not ship it"
+             " (check 'files' and .npmignore)")
+        continue
+    print(f"  OK {name} ships bin/{exe} ({fmt} {arch}, {len(shipped)} files)")
+sys.exit(1 if bad else 0)
+PY
+[ $? -eq 0 ] || FAIL=1
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   echo "RELEASE_META_FAIL"
   exit "$FAIL"

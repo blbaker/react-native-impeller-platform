@@ -118,6 +118,14 @@ if [ "${PLATFORM}" = "darwin" ] && [ ! -f "engine/third_party/angle-darwin-arm64
   ANGLE_PLATFORM=darwin-arm64 bash tools/angle-fetch.sh
 fi
 
+# GLFW backs the windowed host, which CMake builds by default (RNI_WITH_WINDOW).
+# Fetch it the same way as the SDK and ANGLE above. Without this, a fresh clone
+# or a cold CI cache fails in CMake with "GLFW not found", which is how CI on
+# the public repo went red on its very first run.
+if [ ! -f "engine/third_party/glfw/install/lib/libglfw3.a" ]; then
+  bash tools/glfw-fetch.sh
+fi
+
 # ⛔ ORDER IS LOAD-BEARING: THE RN PIN INSTALLS BEFORE HERMES BUILDS.
 # hermes-build.sh reads the Hermes tag from
 # engine/rn/node_modules/react-native/sdks/.hermesversion — deriving it from RN
@@ -183,13 +191,30 @@ echo "engine-build: configuring + compiling ${TRIPLE} host (cmake)"
 # FP-22: an SDK rebuilt with this tree's patches (0003 context flags) lives in
 # a real per-worktree dir, never in the shared impeller-sdk-custom*; it wins
 # when present. RNI_IMPELLER_SDK_DIR set by the caller still overrides.
+#
+# ⛔ A CHECKOUT WITHOUT THAT SDK FETCHES IT; IT NEVER FALLS BACK TO STOCK.
+# The fallback to the stock SDK was silent. It compiles and links, and then
+# paints no underline and no letter spacing, so CI (which has no local SDK)
+# built a different engine from every developer machine, and that is the
+# engine a release would have published. tools/sdk-fetch-custom.sh downloads
+# the prebuilt SDK for this tree's patches, or fails saying why.
+# RNI_STOCK_IMPELLER_SDK=1 builds against the stock SDK on purpose.
 if [ -z "${RNI_IMPELLER_SDK_DIR:-}" ]; then
   case "${PLATFORM}" in
     darwin) PARITY_SDK="engine/third_party/impeller-sdk-custom-parity-darwin" ;;
     *)      PARITY_SDK="engine/third_party/impeller-sdk-custom-parity" ;;
   esac
+  if [ ! -f "${PARITY_SDK}/include/impeller.h" ]; then
+    if [ "${RNI_STOCK_IMPELLER_SDK:-0}" = "1" ]; then
+      echo "engine-build: RNI_STOCK_IMPELLER_SDK=1 — building against the STOCK SDK" \
+           "(no text spacing, font features or decorations)"
+    else
+      bash tools/sdk-fetch-custom.sh "${TRIPLE}" "${PARITY_SDK}"
+    fi
+  fi
   [ ! -f "${PARITY_SDK}/include/impeller.h" ] || export RNI_IMPELLER_SDK_DIR="${PARITY_SDK}"
 fi
+echo "engine-build: Impeller SDK = ${RNI_IMPELLER_SDK_DIR:-stock}"
 cmake -S engine -B engine/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       -DCMAKE_INSTALL_PREFIX="${ROOT}/${PKG}" > /dev/null

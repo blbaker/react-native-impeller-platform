@@ -92,7 +92,16 @@ p.write_text(s)
 mutate "publish no longer needs the gates" W5 '
 import sys, pathlib
 p = pathlib.Path(sys.argv[1], "release.yml")
-p.write_text(p.read_text().replace("    needs: gates\n", ""))
+p.write_text(p.read_text().replace("    needs: [gates, engines]\n", ""))
+'
+
+# ── W5: the publish job keeps waiting for the engine builds but not the gates.
+# needs is still non-empty and still names a real job, so a check that only
+# asked "does it wait for something" would pass this.
+mutate "publish waits for the engines but not the gates" W5 '
+import sys, pathlib
+p = pathlib.Path(sys.argv[1], "release.yml")
+p.write_text(p.read_text().replace("    needs: [gates, engines]\n", "    needs: [engines]\n"))
 '
 
 # ── W8: the dry-run flag is dropped from the always-on publish step.
@@ -286,6 +295,30 @@ mutate "id-token granted at the workflow top level" W14 '
 import sys, pathlib
 p = pathlib.Path(sys.argv[1], "release.yml")
 s = p.read_text().replace("permissions:\n  contents: read\n", "permissions:\n  contents: read\n  id-token: write\n", 1)
+p.write_text(s)
+'
+
+# ── W15: the binary check loses the variable that makes it require binaries.
+# ci-release-meta.sh still runs and still passes, on engine packages that hold
+# only a README, so this is the edit nothing else would notice.
+mutate "release-meta step no longer requires engine binaries" W15 '
+import sys, pathlib
+p = pathlib.Path(sys.argv[1], "release.yml")
+s = p.read_text()
+s = s.replace("        env:\n          RNI_REQUIRE_ENGINE_BINARIES: \x271\x27\n        run: bash tools/ci-release-meta.sh",
+              "        run: bash tools/ci-release-meta.sh")
+p.write_text(s)
+'
+
+# ── W15: the binary check moved after the publish, where it can only report.
+mutate "binary check runs after the publish step" W15 '
+import sys, pathlib, re
+p = pathlib.Path(sys.argv[1], "release.yml")
+s = p.read_text()
+m = re.search(r"      - name: Release metadata, with every engine binary required\n(?:        .*\n|          .*\n)+", s)
+block = m.group(0)
+s = s.replace(block, "")
+s = s.rstrip("\n") + "\n\n" + block
 p.write_text(s)
 '
 
