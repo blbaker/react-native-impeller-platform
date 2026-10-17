@@ -1,0 +1,27 @@
+# Changelog
+
+## [0.1.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.0.1...v0.1.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* install react-native-impeller-platform instead of @react-native-impeller/core. Nothing was published under the old names.
+
+### Features
+
+* add Release Please config and the open-source readiness audit ([f8b08be](https://github.com/blbaker/react-native-impeller-platform/commit/f8b08be8a3d211b1fd2272276c0f5c02f29c4b75))
+* **ENG-31:** globalThis.crypto.getRandomValues on the OS CSPRNG ([e89d023](https://github.com/blbaker/react-native-impeller-platform/commit/e89d0232336a5e2af96849dcd315406ec7a7b101))
+* **expo-host:** vend ExponentConstants and ExpoFetchModule (SC-44) ([51a6032](https://github.com/blbaker/react-native-impeller-platform/commit/51a6032f34e95780c29611761fb83537f68c9d01))
+* publish as react-native-impeller-platform ([5a7419e](https://github.com/blbaker/react-native-impeller-platform/commit/5a7419ed11086324cf5399225f3cdf2ae483cff5))
+
+
+### Bug Fixes
+
+* **build:** fetch the custom Impeller SDK instead of falling back to stock ([2e36857](https://github.com/blbaker/react-native-impeller-platform/commit/2e36857bf8399c9aa84ed246f98cf3520be989c4))
+* **ci:** fetch GLFW on a fresh checkout ([8f1bba7](https://github.com/blbaker/react-native-impeller-platform/commit/8f1bba782fd7a587bae776c69e7ce632cf0c5fd5))
+* **ci:** fetch GLFW, and build the engines before any publish ([c31fe57](https://github.com/blbaker/react-native-impeller-platform/commit/c31fe57cc4c6f565928c686bca59f2b81410d67e))
+* **ci:** give the text gates the font they were measured with ([44c4f66](https://github.com/blbaker/react-native-impeller-platform/commit/44c4f66f52e12504f3355198374df3d8936652ea))
+* **ci:** install the Ubuntu font the text gates were measured with ([1036210](https://github.com/blbaker/react-native-impeller-platform/commit/10362103ae9186db770341d87b4986c99a2a16c4))
+* **merge:** build lane A's FP-42/43/44 sources into rni-scenegraph-tests ([0357898](https://github.com/blbaker/react-native-impeller-platform/commit/035789882f535b3da6569c44216520455ecdbbe9))
+* **win:** don't link whatever OpenSSL the build machine has ([3e40417](https://github.com/blbaker/react-native-impeller-platform/commit/3e404171d9991e3a7995362018bdf21b11a1a266))
+* **win:** include &lt;mutex&gt; where React Native's HostTarget.h uses std::mutex ([ae1b0b0](https://github.com/blbaker/react-native-impeller-platform/commit/ae1b0b0d75094fef0f506dc4e6f4eef949793ede))
