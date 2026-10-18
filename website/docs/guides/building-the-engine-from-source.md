@@ -1,8 +1,8 @@
 ---
-title: Building the engine from source
+title: Build the engine from source
 ---
 
-# Building the engine from source
+# Build the engine from source
 
 You only need this if you're developing the engine itself. If you're
 consuming the published package in an app, npm install already gives you

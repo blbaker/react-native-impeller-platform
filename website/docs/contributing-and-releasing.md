@@ -25,7 +25,7 @@ cd react-native-impeller-platform
 
 For more information about the GLFW fetch step, the per-OS build
 commands, and platform notes, see
-[Building the engine from source](./guides/building-the-engine-from-source).
+[Build the engine from source](./guides/building-the-engine-from-source).
 
 ## Run the gates
 

@@ -68,7 +68,7 @@ resolution:
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `IMPELLER_ENGINE_BINARY` | path | unset | Points the resolver at a binary you built yourself. Takes priority over the installed engine package. For engine development; see [Building the engine from source](../guides/building-the-engine-from-source). |
+| `IMPELLER_ENGINE_BINARY` | path | unset | Points the resolver at a binary you built yourself. Takes priority over the installed engine package. For engine development; see [Build the engine from source](../guides/building-the-engine-from-source). |
 
 For more information about what the resolver prints when resolution fails
 at each of these steps, see [Debugging](../guides/debugging).

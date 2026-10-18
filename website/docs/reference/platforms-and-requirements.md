@@ -59,4 +59,4 @@ engine is future work. Nothing is published for it today.
 ## Build an engine for any of these platforms
 
 For more information about the setup and build commands, see
-[Building the engine from source](../guides/building-the-engine-from-source).
+[Build the engine from source](../guides/building-the-engine-from-source).
