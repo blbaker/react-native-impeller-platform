@@ -19,6 +19,8 @@ on:
       - 'engine/**'
       - 'packages-engine/**'
       - 'tools/engine-build.sh'
+      - 'tools/ci-engine-pack.sh'
+      - 'tools/mutation-verify-engine-pack.sh'
       - 'tools/glfw-fetch.sh'
       - 'tools/hermes-build.sh'
       - 'tools/sdk-fetch.sh'
@@ -133,10 +135,20 @@ jobs:
             file "packages-engine/engine-${{ matrix.triple }}"/bin/rn-impeller*
           fi
 
+      # engine-build.sh already ran tools/ci-engine-pack.sh on the package.
+      # This proves that gate can still fail on this runner: the 0.1.0 shape
+      # (hermesvm.framework, symlinks dropped by npm pack) must fail codesign
+      # inside an .app, and a missing or misnamed dylib must fail the
+      # dependency arm. Works on a copy; the staged package is not touched.
+      - name: Prove the pack gate can fail (macOS)
+        if: runner.os == 'macOS'
+        run: bash tools/mutation-verify-engine-pack.sh "packages-engine/engine-${{ matrix.triple }}"
+
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
       # symlinks, so uploading the folder directly would hand the release job
-      # an rn-impeller with no exec bit (EACCES at spawn) and, on macOS, a
-      # hermesvm.framework with its links flattened. A tarball keeps both.
+      # an rn-impeller with no exec bit (EACCES at spawn). A tarball keeps the
+      # mode. (Hermes ships as a flat dylib, so the darwin package has no
+      # symlinks to lose; tools/ci-engine-pack.sh keeps it that way.)
       - name: Pack the staged engine package
         run: tar -C packages-engine -czf "engine-${{ matrix.triple }}.tgz" "engine-${{ matrix.triple }}"
 

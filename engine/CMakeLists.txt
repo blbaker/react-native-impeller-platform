@@ -703,28 +703,17 @@ if(WIN32)
 elseif(APPLE)
   # macOS DOES have an rpath (@loader_path, set above), so unlike Windows the
   # libraries do not have to sit beside the binary for the loader to find
-  # them — but they DO have to ship, and their install names have to be fixed.
+  # them, but they DO have to ship, and their install names have to be fixed.
   #
-  # ⛔ HERMES BUILDS A FRAMEWORK ON macOS, NOT A .dylib.
-  # The artifact is lib/hermesvm.framework/Versions/0/hermesvm — there is no
-  # libhermesvm.dylib anywhere in the tree. Measured after the first real Mac
-  # build; assuming the Linux name here yields "file INSTALL cannot find".
-  # ⛔ HERMES IS A FRAMEWORK ON macOS, AND ITS *STRUCTURE* MUST SHIP.
-  # The artifact is lib/hermesvm.framework/Versions/0/hermesvm, and the linked
-  # executable references it as
-  #   @rpath/hermesvm.framework/Versions/0/hermesvm
-  # — a PATH, not a bare name. Staging the framework's binary as a flat file
-  # called `hermesvm` therefore produced a package that linked cleanly and died
-  # at dyld:
-  #
-  #   Library not loaded: @rpath/hermesvm.framework/Versions/0/hermesvm
-  #   tried: .../bin/hermesvm.framework/Versions/0/hermesvm (no such file)
-  #
-  # Copy the framework DIRECTORY so the path the binary asks for exists
-  # relative to @loader_path.
-  install(DIRECTORY "${HERMES_BUILD}/lib/hermesvm.framework"
-          DESTINATION bin COMPONENT engine
-          USE_SOURCE_PERMISSIONS)
+  # ⛔ HERMES BUILDS A FRAMEWORK ON macOS, AND THE FRAMEWORK MUST NOT SHIP.
+  # The artifact is lib/hermesvm.framework/Versions/0/hermesvm; there is no
+  # libhermesvm.dylib in the Hermes build tree. A framework's top-level entries
+  # are symlinks, and `npm pack` drops symlinks, so 0.1.0 shipped a framework
+  # that no .app could sign. Install the framework's BINARY as a flat
+  # libhermesvm.dylib instead; cmake/StageDarwinEngine.cmake repoints
+  # rn-impeller at it and explains the failure in full.
+  install(FILES "${HERMES_BUILD}/lib/hermesvm.framework/Versions/0/hermesvm"
+          DESTINATION bin RENAME libhermesvm.dylib COMPONENT engine)
   install(FILES
     "${IMPELLER_RUNTIME}"
     "${ANGLE_DIR}/libEGL.dylib"
@@ -732,59 +721,10 @@ elseif(APPLE)
     "${ANGLE_DIR}/LICENSE.electron"
     DESTINATION bin COMPONENT engine)
 
-  # ⛔ REWRITE THE INSTALL NAMES, OR THE PACKAGE ONLY RUNS FROM ITS OWN bin/.
-  # ANGLE ships with install name `./libEGL.dylib` (Electron's convention,
-  # confirmed with `otool -D`), and the Impeller SDK ships `./libimpeller.dylib`
-  # the same way — dyld resolves those against the PROCESS WORKING DIRECTORY.
-  # A consumer launching the engine from their app root would get "image not
-  # found" for a file sitting right next to the binary.
-  #
-  # This was NOT predicted: the engine-build gate caught it on the first
-  # successful darwin link ("staged binary links non-relocatable paths:
-  # ./libimpeller.dylib"), which is exactly the delivery defect that gate
-  # exists to find. Every shipped dylib gets its ID rewritten, and every
-  # reference inside the executable is repointed at @loader_path.
-  install(CODE "
-    set(_bin \"\${CMAKE_INSTALL_PREFIX}/bin\")
-    foreach(_lib libEGL.dylib libGLESv2.dylib libimpeller.dylib)
-      execute_process(COMMAND install_name_tool -id \"@loader_path/\${_lib}\" \"\${_bin}/\${_lib}\")
-    endforeach()
-    execute_process(COMMAND install_name_tool -id \"@loader_path/hermesvm.framework/Versions/0/hermesvm\" \"\${_bin}/hermesvm.framework/Versions/0/hermesvm\")
-    execute_process(COMMAND install_name_tool
-      -change \"./libEGL.dylib\"      \"@loader_path/libEGL.dylib\"
-      -change \"./libGLESv2.dylib\"   \"@loader_path/libGLESv2.dylib\"
-      -change \"./libimpeller.dylib\" \"@loader_path/libimpeller.dylib\"
-      \"\${_bin}/rn-impeller\")
-    # libGLESv2 references libEGL by the same relative name.
-    execute_process(COMMAND install_name_tool
-      -change \"./libEGL.dylib\" \"@loader_path/libEGL.dylib\"
-      \"\${_bin}/libGLESv2.dylib\")
-
-    # ⛔ RE-SIGN, OR arm64 KILLS THE PROCESS WITH NO DIAGNOSTIC.
-    # Every install_name_tool write invalidates the Mach-O code signature.
-    # On Apple silicon a signature is MANDATORY -- an unsigned or
-    # stale-signature image is refused by the kernel, and the process dies on
-    # SIGKILL (9) or `Abort trap: 6` with nothing on stderr explaining why.
-    # That is indistinguishable from the relative-install-name crash this same
-    # block exists to prevent, so fixing one without the other just swaps a
-    # silent abort for a different silent abort.
-    #
-    # cctools' install_name_tool re-signs ad-hoc BY ITSELF in most cases, which
-    # is precisely why this is dangerous to leave implicit: it works on the
-    # build box and rots on a toolchain bump. Sign explicitly. `-` is the
-    # ad-hoc identity, which is all a non-distributed CLI binary needs.
-    foreach(_m libEGL.dylib libGLESv2.dylib libimpeller.dylib rn-impeller
-               hermesvm.framework/Versions/0/hermesvm)
-      execute_process(COMMAND codesign --force --sign - \"\${_bin}/\${_m}\"
-                      RESULT_VARIABLE _cs_rc ERROR_QUIET OUTPUT_QUIET)
-      if(NOT _cs_rc EQUAL 0)
-        message(FATAL_ERROR
-          \"codesign failed on \${_m} (rc=\${_cs_rc}). Shipping an image with an \"
-          \"install_name_tool-invalidated signature produces an unexplained \"
-          \"Abort trap: 6 on every arm64 consumer.\")
-      endif()
-    endforeach()
-  " COMPONENT engine)
+  # Install names to @loader_path, Hermes repointed, everything re-signed.
+  # Runs after the FILES rules above: install rules run in declaration order.
+  install(SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/StageDarwinEngine.cmake"
+          COMPONENT engine)
 else()
   install(FILES
     "${IMPELLER_RUNTIME}"

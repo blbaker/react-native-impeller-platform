@@ -255,11 +255,12 @@ fi
 # every consumer, and npm pack would not complain.
 STRAY="$(cd "${PKG}" && ls -A | grep -vE '^(bin|package\.json|README\.md)$' || true)"
 [ -z "$STRAY" ] || { echo "engine-build: FAIL — stray files staged into the package:"; echo "$STRAY"; exit 1; }
-# ANGLE ships two extra dylibs on darwin, plus its LICENSE, and Hermes' macOS
-# artifact is the FRAMEWORK BINARY named `hermesvm` — not libhermesvm.dylib.
+# ANGLE ships two extra dylibs on darwin, plus its LICENSE. Hermes ships as a
+# flat libhermesvm.dylib, never as hermesvm.framework: npm pack drops the
+# framework's symlinks (engine/cmake/StageDarwinEngine.cmake has the story).
 # All payload, not strays. (Windows stages its own set via the win script.)
 case "${PLATFORM}" in
-  darwin) ALLOWED_BIN='^(rn-impeller|libimpeller\.dylib|hermesvm\.framework|libEGL\.dylib|libGLESv2\.dylib|LICENSE\.electron)$' ;;
+  darwin) ALLOWED_BIN='^(rn-impeller|libimpeller\.dylib|libhermesvm\.dylib|libEGL\.dylib|libGLESv2\.dylib|LICENSE\.electron)$' ;;
   *)      ALLOWED_BIN='^(rn-impeller|libimpeller\.so|libhermesvm\.so)$' ;;
 esac
 STRAY_BIN="$(cd "${PKG}/bin" && ls -A | grep -vE "${ALLOWED_BIN}" || true)"
@@ -298,7 +299,7 @@ if [ "${PLATFORM}" = "darwin" ]; then
       | grep -vE '/usr/lib/|/System/Library/' || true)"
     [ -z "$_l" ] || BADLINK="${BADLINK}${_macho} -> ${_l}"$'\n'
   done < <(cd "${PKG}/bin" && find . -type f \
-             \( -name '*.dylib' -o -name 'rn-impeller' -o -name 'hermesvm' \) | sort)
+             \( -name '*.dylib' -o -name 'rn-impeller' \) | sort)
   [ -z "$BADLINK" ] || { echo "engine-build: FAIL — staged Mach-O links non-relocatable paths:"; echo "$BADLINK"; exit 1; }
 
   # ⛔ AND EVERY ONE OF THEM MUST STILL BE VALIDLY SIGNED.
@@ -313,7 +314,7 @@ if [ "${PLATFORM}" = "darwin" ]; then
       (cd "${PKG}/bin" && codesign --verify "${_macho}" 2>/dev/null) \
         || BADSIG="${BADSIG}  ${_macho}"$'\n'
     done < <(cd "${PKG}/bin" && find . -type f \
-               \( -name '*.dylib' -o -name 'rn-impeller' -o -name 'hermesvm' \) | sort)
+               \( -name '*.dylib' -o -name 'rn-impeller' \) | sort)
     [ -z "$BADSIG" ] || { echo "engine-build: FAIL — staged Mach-O has an invalid/absent signature:"; echo "$BADSIG"; exit 1; }
   fi
 
@@ -445,5 +446,9 @@ mismatch because the engine C ABI is not stable across versions.
 Impeller SDK pin: \`$(cat engine/IMPELLER_SHA)\`
 React Native (ReactCommon) pin: \`$(node -p "require('${ROOT}/engine/rn/node_modules/react-native/package.json').version")\`
 MD
+
+# What npm pack ships must be what was staged: no symlinks, every file, and
+# (on a Mac) an .app embedding it must pass codesign --verify --deep --strict.
+bash tools/ci-engine-pack.sh "${PKG}"
 
 echo "engine-build: staged ${PKG} @ ${VERSION}"
