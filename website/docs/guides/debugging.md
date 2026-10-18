@@ -19,7 +19,7 @@ bash tools/glfw-fetch.sh
 ```
 
 Then build the engine as usual. For more information, see
-[Building the engine from source](./building-the-engine-from-source).
+[Build the engine from source](./building-the-engine-from-source).
 
 ## Unsupported platform or architecture
 

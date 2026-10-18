@@ -100,12 +100,15 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
 .header-github-link {
   display: inline-flex; align-items: center; justify-content: center;
   width: 2.25rem; height: 2.25rem; margin-left: 4px; border-radius: var(--radius-sm);
+  /* Infima's .navbar__link padding (12px a side) left a 12px content box in
+     this 36px square, and the flex item shrank the icon to 12px wide. */
+  padding: 0;
   color: var(--ink-2);
 }
 .header-github-link:hover { color: var(--ink); background: var(--tier-1); }
 .header-github-link:before {
   content: '';
-  width: 20px; height: 20px;
+  width: 20px; height: 20px; flex: none;
   background-color: currentColor;
   -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   -webkit-mask-size: contain; mask-size: contain;

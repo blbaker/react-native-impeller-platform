@@ -172,7 +172,7 @@ cat > "${PKG}/package.json" <<JSON
     "url": "git+https://github.com/blbaker/react-native-impeller-platform.git",
     "directory": "packages-engine/engine-${TRIPLE}"
   },
-  "homepage": "https://github.com/blbaker/react-native-impeller-platform#readme",
+  "homepage": "https://blbaker.github.io/react-native-impeller-platform/",
   "bugs": {
     "url": "https://github.com/blbaker/react-native-impeller-platform/issues"
   },
