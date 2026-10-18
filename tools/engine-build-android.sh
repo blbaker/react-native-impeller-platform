@@ -15,14 +15,37 @@ NDK="$ANDROID_HOME/ndk/${NDK_VER:-27.1.12297006}"
 TC="$NDK/build/cmake/android.toolchain.cmake"
 BIN_TOOLS="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
 API="${API:-29}"
-SDK="${RNI_ANDROID_IMPELLER_SDK_DIR:-$ROOT/engine/third_party/impeller-sdk-custom-android}"
 HB="$ROOT/engine/build-android-arm64-hermes"
 EB="$ROOT/engine/build-android-arm64-engine"
 OUT="$ROOT/engine/build/android-stage/bin"
 JOBS="${JOBS:-$(nproc)}"
 fail() { echo "engine-build-android: $*" >&2; exit 1; }
 [ -f "$TC" ] || fail "NDK toolchain missing: $TC"
-[ -f "$SDK/include/impeller.h" ] || fail "no android Impeller SDK at $SDK (RNI_SDK_TARGET=android-arm64 bash tools/impeller-sdk-custom-build.sh)"
+
+# ⛔ A CHECKOUT WITHOUT THE CUSTOM ANDROID SDK FETCHES IT; IT NEVER FALLS BACK
+# TO STOCK SILENTLY. Same reasoning as tools/engine-build.sh's desktop fetch:
+# the stock SDK compiles and links fine and then paints no underline, no
+# letter spacing — a silent fallback here would mean a device engine built
+# from a different SDK than every host build. RNI_STOCK_IMPELLER_SDK=1 is the
+# same opt-out the desktop build offers, for when the custom SDK cannot be
+# fetched (offline dev box, etc).
+if [ -n "${RNI_ANDROID_IMPELLER_SDK_DIR:-}" ]; then
+  SDK="$RNI_ANDROID_IMPELLER_SDK_DIR"
+else
+  PARITY_SDK="$ROOT/engine/third_party/impeller-sdk-custom-parity-android"
+  if [ ! -f "$PARITY_SDK/include/impeller.h" ]; then
+    if [ "${RNI_STOCK_IMPELLER_SDK:-0}" = "1" ]; then
+      echo "engine-build-android: RNI_STOCK_IMPELLER_SDK=1 — building against the" \
+           "STOCK SDK (no letter/word spacing, font features or decorations)"
+      RNI_SDK_PLATFORM=android-arm64 bash tools/sdk-fetch.sh "$ROOT/engine/third_party/impeller-sdk-android"
+      PARITY_SDK="$ROOT/engine/third_party/impeller-sdk-android"
+    else
+      bash tools/sdk-fetch-custom.sh android-arm64 "$PARITY_SDK"
+    fi
+  fi
+  SDK="$PARITY_SDK"
+fi
+[ -f "$SDK/include/impeller.h" ] || fail "no android Impeller SDK at $SDK (RNI_SDK_TARGET=android-arm64 bash tools/impeller-sdk-custom-build.sh, or tools/sdk-fetch-custom.sh android-arm64)"
 [ -f engine/third_party/hermes-build/ImportHostCompilers.cmake ] || bash tools/hermes-build.sh
 COMMON=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$TC"
         -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$API" -DANDROID_STL=c++_shared)

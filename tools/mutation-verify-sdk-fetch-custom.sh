@@ -16,24 +16,30 @@ sha() { sha256sum "$1" 2>/dev/null | cut -c1-64 || shasum -a 256 "$1" | cut -c1-
 ENGINE_SHA="$(tr -d '[:space:]' < engine/IMPELLER_SHA)"
 PATCH_SUM="$(cat engine/impeller-sdk-patches/*.patch | sha256sum | cut -c1-64)"
 
-# world <dir> [stamp-patch-sum]: a scratch checkout + an archive served at
-# file://<dir>/srv/<release>/, pinned correctly unless a mutant says otherwise.
+# world <dir> [stamp-patch-sum] [plat]: a scratch checkout + an archive served
+# at file://<dir>/srv/<release>/, pinned correctly unless a mutant says
+# otherwise. plat defaults to linux-x64; android-arm64 exercises the same
+# path with no linux-specific behaviour (sdk-fetch-custom.sh is platform-
+# agnostic beyond its case statement, so one real platform plus one cross
+# platform is enough to show the pin/stamp logic isn't linux-only).
 world() {
-  local d="$1" stamp_patch="${2:-$PATCH_SUM}"
+  local d="$1" stamp_patch="${2:-$PATCH_SUM}" plat="${3:-linux-x64}"
   mkdir -p "$d/tools" "$d/engine" "$d/sdk/include" "$d/srv/rel-test"
   cp tools/sdk-fetch-custom.sh "$d/tools/"
   cp engine/IMPELLER_SHA "$d/engine/"
   cp -r engine/impeller-sdk-patches "$d/engine/"
   echo '/* synthetic */' > "$d/sdk/include/impeller.h"
   printf 'sha=%s\npatch_sha256=%s\n' "$ENGINE_SHA" "$stamp_patch" > "$d/sdk/.stamp"
-  tar -C "$d/sdk" -czf "$d/srv/rel-test/impeller-sdk-custom-linux-x64.tar.gz" .
-  printf 'release=rel-test\npatch_sha256=%s\nlinux-x64=%s\n' "$PATCH_SUM" \
-    "$(sha "$d/srv/rel-test/impeller-sdk-custom-linux-x64.tar.gz")" > "$d/engine/IMPELLER_SDK_CUSTOM"
+  tar -C "$d/sdk" -czf "$d/srv/rel-test/impeller-sdk-custom-$plat.tar.gz" .
+  printf 'release=rel-test\npatch_sha256=%s\n%s=%s\n' "$PATCH_SUM" "$plat" \
+    "$(sha "$d/srv/rel-test/impeller-sdk-custom-$plat.tar.gz")" > "$d/engine/IMPELLER_SDK_CUSTOM"
 }
-run() { (cd "$1" && RNI_SDK_CUSTOM_BASE_URL="file://$1/srv" bash tools/sdk-fetch-custom.sh linux-x64 out 2>&1); }
-check() {  # name, dir, expected-substring
+run() {  # dir [plat]
+  (cd "$1" && RNI_SDK_CUSTOM_BASE_URL="file://$1/srv" bash tools/sdk-fetch-custom.sh "${2:-linux-x64}" out 2>&1)
+}
+check() {  # name, dir, expected-substring, [plat]
   TOTAL=$((TOTAL + 1))
-  local out rc; out="$(run "$2")"; rc=$?
+  local out rc; out="$(run "$2" "${4:-linux-x64}")"; rc=$?
   if [ "$rc" -ne 0 ] && grep -q -- "$3" <<<"$out"; then
     echo "  M$TOTAL $1 -> caught"; CAUGHT=$((CAUGHT + 1))
   else
@@ -75,6 +81,23 @@ if grep -q "downloading" <<<"$out" && grep -qx "patch_sha256=$PATCH_SUM" "$WORK/
 else
   echo "  M$TOTAL stale SDK on disk is replaced -> NOT caught (it was reused)"
 fi
+
+# Positive control: android-arm64 fetches through the exact same path as
+# linux-x64 — the platform cases differ only in their default dest, so one
+# cross-platform run is enough to show the pin/stamp logic isn't linux-only.
+world "$WORK/control-android" "$PATCH_SUM" android-arm64
+out="$(run "$WORK/control-android" android-arm64)"
+if [ $? -ne 0 ] || [ ! -f "$WORK/control-android/out/include/impeller.h" ]; then
+  echo "MUTATION_VERIFY_SDK_FETCH_CUSTOM_FAIL (android-arm64 control did not fetch)"
+  echo "$out" | tail -3; exit 1
+fi
+echo "control: android-arm64 fetches through the same path as linux-x64"
+
+# M5: android-arm64 is requested but the pin file carries no archive line for
+# it (the desktop platforms' lines were updated and android's forgotten).
+world "$WORK/m5" "$PATCH_SUM" android-arm64
+sed -i '/^android-arm64=/d' "$WORK/m5/engine/IMPELLER_SDK_CUSTOM"
+check "android-arm64 requested, nothing pinned for it" "$WORK/m5" "pins no archive for android-arm64" android-arm64
 
 echo
 if [ "$CAUGHT" -eq "$TOTAL" ]; then echo "MUTATION_VERIFY_SDK_FETCH_CUSTOM_PASS ($CAUGHT/$TOTAL)"; exit 0; fi
