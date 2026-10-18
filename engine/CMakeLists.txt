@@ -297,6 +297,7 @@ add_executable(rn-impeller
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm>
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
+  runtime/EngineSession.cpp
   runtime/InspectorHost.cpp
   runtime/DevToolsTracing.cpp
   modules/PlatformModules.cpp
