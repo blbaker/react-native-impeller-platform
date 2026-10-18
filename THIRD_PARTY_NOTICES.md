@@ -24,6 +24,13 @@ rendering in CI (not shipped to consumers of the published packages):
 |---|---|
 | Geist, Geist Mono | SIL Open Font License 1.1 |
 
+The documentation site (`website/`) serves these fonts to its readers:
+
+| Font | License |
+|---|---|
+| Geist, Geist Mono | SIL Open Font License 1.1 |
+| Bricolage Grotesque | SIL Open Font License 1.1 |
+
 ## Build tooling
 
 | Project | License | Role |

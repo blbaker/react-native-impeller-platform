@@ -1,0 +1,129 @@
+/* Design tokens, values copied from Brandon Baker's personal-site design
+   system CSS, re-scoped from that project's [data-scheme] attribute to
+   Docusaurus's own [data-theme] attribute. The RGB triples and every
+   comment measurement below are quoted from that source, not invented here.
+
+   Docusaurus sets data-theme="light" / "dark" on <html>. :root carries the
+   light values so the page never flashes unstyled before hydration. */
+
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+
+  --primary: 204 0 0;                 /* #CC0000  5.89:1 on background */
+  --primary-foreground: 255 255 255;  /* #FFFFFF  5.89:1 on primary */
+
+  --background: 255 255 255;          /* #FFFFFF  canvas,   tier 0 */
+  --card: 245 245 245;                /* #F5F5F5  surface,  tier 1 */
+  --secondary: 238 238 238;           /* #EEEEEE  surface-2, tier 2 */
+  --popover: 255 255 255;             /* #FFFFFF */
+  --popover-foreground: 31 31 31;     /* #1F1F1F  16.48:1 on popover */
+
+  --foreground: 0 0 0;                /* #000000  21.00:1 on background */
+  --secondary-foreground: 31 31 31;   /* #1F1F1F  14.21:1 on secondary */
+  --muted-foreground: 98 98 98;       /* #626262  clears 4.5:1 on all 4 tiers */
+
+  --destructive: 220 38 38;           /* #DC2626  4.83:1 on background */
+
+  --border: 200 200 200;              /* #C8C8C8  1.67 on background */
+  --input: 136 136 136;               /* #888888  3.54 on background */
+  --ring: 41 98 255;                  /* #2962FF  4.90:1 on background */
+
+  --accent-hover: 163 0 0;       /* #A30000 */
+  --accent-press: 128 0 0;       /* #800000 */
+  --accent-ink: 204 0 0;        /* #CC0000  5.89:1 ink on background */
+
+  --surface-3: 224 224 224;       /* #E0E0E0 */
+  --fg-1: 31 31 31;               /* #1F1F1F  16.48:1 on background */
+  --fg-2: 66 66 66;               /* #424242  10.05:1 on background */
+  --fg-muted: 158 158 158;        /* #9E9E9E  disabled text only */
+
+  --border-strong: 172 172 172;   /* #ACACAC  2.27 on background */
+  --border-faint: 232 232 232;    /* #E8E8E8  1.23 on background */
+
+  --link-accent: 41 98 255;              /* #2962FF */
+  --link-text: 30 79 219;         /* #1E4FDB  5.91:1 on link tint */
+
+  --success: 18 138 61;           /* #128A3D */
+  --success-text: 16 129 56;      /* #108138 */
+  --warn: 176 122 12;             /* #B07A0C */
+  --warn-text: 141 97 7;          /* #8D6107 */
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --primary: 204 0 0;                 /* #CC0000, label stays white: 5.89:1 */
+  --primary-foreground: 255 255 255;
+
+  --background: 15 15 15;             /* #0F0F0F  canvas,    tier 0 */
+  --card: 20 20 20;                   /* #141414  surface,   tier 1 */
+  --secondary: 28 28 28;              /* #1C1C1C  surface-2, tier 2 */
+  --popover: 28 28 28;                /* #1C1C1C */
+  --popover-foreground: 240 240 240;  /* #F0F0F0  14.95:1 on popover */
+
+  --foreground: 240 240 240;          /* #F0F0F0  16.82:1 on background */
+  --secondary-foreground: 228 228 228;/* #E4E4E4  13.40:1 on secondary */
+  --muted-foreground: 154 154 154;    /* #9A9A9A */
+
+  --destructive: 242 101 101;         /* #F26565  6.23:1 on background */
+
+  --border: 56 56 56;                 /* #383838 */
+  --input: 104 104 104;               /* #686868 */
+  --ring: 127 160 255;                /* #7FA0FF  7.64:1 on background */
+
+  --accent-hover: 163 0 0;
+  --accent-press: 128 0 0;
+  --accent-ink: 255 71 71;      /* #FF4747  5.70:1 ink on dark background */
+
+  --surface-3: 38 38 38;          /* #262626 */
+  --fg-1: 228 228 228;            /* #E4E4E4  15.08:1 on background */
+  --fg-2: 196 196 196;            /* #C4C4C4  10.99:1 on background */
+  --fg-muted: 110 110 110;        /* #6E6E6E  disabled text only */
+
+  --border-strong: 76 76 76;      /* #4C4C4C */
+  --border-faint: 39 39 39;       /* #272727 */
+
+  --link-accent: 127 160 255;            /* #7FA0FF */
+  --link-text: 127 160 255;       /* #7FA0FF */
+
+  --success: 63 191 106;          /* #3FBF6A */
+  --success-text: 63 191 106;
+  --warn: 229 172 60;             /* #E5AC3C */
+  --warn-text: 229 172 60;
+}
+
+/* Scheme-independent tokens, from the same design-system source. */
+:root {
+  --font-display: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600; --fw-bold: 700;
+
+  --space-xs: 0.25rem; --space-sm: 0.5rem; --space-md: 0.75rem; --space-lg: 1rem;
+  --space-xl: 1.25rem; --space-2xl: 1.5rem; --space-3xl: 2rem; --space-4xl: 2.5rem;
+
+  --radius-xs: 4px; --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px; --radius-xl: 22px;
+
+  --dur-fast: 120ms; --dur-base: 200ms; --dur-mid: 320ms; --dur-slow: 560ms;
+  --ease-out-quint: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  --focus-ring: 0 0 0 2px rgb(var(--background)), 0 0 0 4px rgb(var(--ring));
+
+  /* Shorthand aliases used by the reading layer (post.css lineage). */
+  --ink: rgb(var(--foreground));
+  --ink-1: rgb(var(--fg-1));
+  --ink-2: rgb(var(--fg-2));
+  --ink-3: rgb(var(--muted-foreground));
+  --ink-4: rgb(var(--fg-muted));
+  --red: rgb(var(--accent-ink));
+  --paper: rgb(var(--background));
+  --tier-1: rgb(var(--card));
+  --tier-2: rgb(var(--secondary));
+  --tier-3: rgb(var(--surface-3));
+  --rule: rgb(var(--border));
+  --rule-strong: rgb(var(--border-strong));
+  --rule-faint: rgb(var(--border-faint));
+}

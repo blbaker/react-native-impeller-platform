@@ -1,0 +1,165 @@
+.hero {
+  padding-block: clamp(32px, 6vw, 72px) clamp(40px, 5vw, 56px);
+  border-bottom: 1px solid var(--rule);
+}
+
+.heroInner {
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+  display: grid;
+  gap: clamp(32px, 5vw, 56px);
+  align-items: center;
+}
+
+@media (min-width: 900px) {
+  .heroInner {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  }
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-bold);
+  font-size: clamp(2rem, 2.6vw + 1rem, 3.1rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.lede {
+  margin: 1.1em 0 0;
+  max-width: 34ch;
+  font-size: clamp(1.125rem, 0.5vw + 1rem, 1.3125rem);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.ctas {
+  margin-top: 1.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.ctaPrimary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--ink);
+  font-weight: var(--fw-semibold);
+  color: var(--ink) !important;
+  text-decoration: none !important;
+}
+.ctaPrimary:hover { color: rgb(var(--accent-ink)) !important; border-bottom-color: rgb(var(--accent-ink)); }
+
+.ctaSecondary {
+  color: var(--ink-3) !important;
+  text-decoration: underline !important;
+  text-decoration-color: var(--ink-4) !important;
+  text-underline-offset: 0.2em;
+}
+.ctaSecondary:hover { color: var(--ink) !important; text-decoration-color: var(--ink-3) !important; }
+
+.heroDiagram { min-width: 0; }
+.diagramSvg { width: 100%; height: auto; overflow: visible; }
+.diagramNode rect {
+  fill: var(--tier-1);
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.diagramNode[data-accent='true'] rect {
+  stroke: rgb(var(--accent-ink));
+}
+.diagramLabel {
+  font-family: var(--font-body);
+  font-weight: var(--fw-semibold);
+  font-size: 11px;
+  fill: var(--ink);
+}
+.diagramSub {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--ink-3);
+}
+.diagramArrow {
+  fill: none;
+  stroke: var(--ink-4);
+  stroke-width: 1.5;
+}
+.diagramArrowHead { fill: var(--ink-4); }
+
+.section {
+  max-width: 1120px;
+  margin-inline: auto;
+  padding: clamp(40px, 6vw, 72px) 1.5rem;
+}
+.section + .section { border-top: 1px solid var(--rule); }
+
+.sectionHead { max-width: 56ch; }
+.sectionTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--fw-semibold);
+  font-size: clamp(1.5rem, 1.4vw + 1rem, 2rem);
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+.sectionIntro {
+  margin: 0.6em 0 0;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.prose { margin-top: 1.75rem; max-width: 62ch; }
+.prose p {
+  font-size: clamp(1.0625rem, 0.25vw + 1rem, 1.1875rem);
+  line-height: 1.6;
+  color: var(--ink-1);
+}
+.prose p + p { margin-top: 1.1em; }
+
+.backendList {
+  margin: 1.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--ink);
+}
+.backendRow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  padding-block: 0.9rem;
+  border-bottom: 1px solid var(--rule-faint);
+}
+.backendOs {
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+}
+.backendDetail {
+  font-size: 0.9375rem;
+  color: var(--ink-3);
+}
+
+.docList {
+  margin: 1.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.docRow { border-bottom: 1px solid var(--rule-faint); }
+.docLink {
+  display: grid;
+  gap: 0.2rem;
+  padding-block: 0.9rem;
+  text-decoration: none !important;
+  color: inherit !important;
+  border-radius: 4px;
+}
+.docLink:hover .docTitle { text-decoration: underline; text-underline-offset: 3px; }
+.docTitle { font-weight: var(--fw-semibold); color: var(--ink); }
+.docDek { font-size: 0.9375rem; color: var(--ink-3); }

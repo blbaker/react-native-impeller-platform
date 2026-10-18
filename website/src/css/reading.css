@@ -1,0 +1,71 @@
+/* The docs reading layer. Adapted from Baker's blog post.css (the same
+   typography, links, lists, code blocks and rhythm as bbaker.dev/blog),
+   rescoped from `.prose` to Docusaurus's `.markdown` wrapper. Docusaurus
+   keeps its own column widths (sidebar + content + TOC); only the type,
+   color and spacing rules below are carried over. */
+
+.markdown {
+  --body: clamp(1.0625rem, 0.2vw + 1rem, 1.125rem);
+  --flow: var(--body);
+}
+
+.markdown p, .markdown li {
+  font-size: var(--body);
+  line-height: 1.65;
+  color: var(--ink-1);
+}
+.markdown strong { font-weight: var(--fw-semibold); color: var(--ink); }
+
+.markdown h1 { font-family: var(--font-display); font-weight: var(--fw-bold); letter-spacing: -0.02em; color: var(--ink); }
+.markdown h2 {
+  font-family: var(--font-display); font-weight: var(--fw-semibold);
+  font-size: clamp(1.375rem, 1vw + 1rem, 1.75rem); line-height: 1.2; letter-spacing: -0.015em;
+  color: var(--ink); margin-top: 2.5em; padding-top: 0.6em; border-top: 1px solid var(--rule);
+}
+.markdown h3 {
+  font-family: var(--font-display); font-weight: var(--fw-semibold);
+  font-size: 1.1875rem; line-height: 1.3; color: var(--ink); margin-top: 2em;
+}
+
+.markdown > *:first-child { margin-top: 0 !important; padding-top: 0 !important; border-top: none !important; }
+
+.markdown a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  text-decoration-color: var(--ink-3);
+  border-radius: 2px;
+}
+.markdown a:hover { text-decoration-color: var(--ink); }
+.markdown a:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.markdown ul, .markdown ol { display: grid; gap: calc(var(--flow) * 0.5); margin-bottom: var(--flow); }
+.markdown li { position: relative; }
+.markdown ul > li { list-style: none; padding-inline-start: 1.5em; }
+.markdown ul > li::before {
+  content: ''; position: absolute; left: 0; top: 0.8em; width: 0.75em; height: 1.5px; background: var(--ink-3);
+}
+.markdown ol > li { padding-inline-start: 1.6em; }
+
+.markdown blockquote {
+  padding-inline-start: 1.25em; border-inline-start: 2px solid var(--rule-strong);
+  border-left: 2px solid var(--rule-strong); background: transparent;
+}
+.markdown blockquote p { color: var(--ink-2); }
+
+.markdown hr { border: 0; border-top: 1px solid var(--rule); margin-block: 2em; }
+
+.markdown img {
+  display: block; max-width: 100%; height: auto;
+  border: 1px solid var(--rule); border-radius: var(--radius-md);
+}
+
+.markdown table { font-size: 0.9375rem; }
+.markdown table th, .markdown table td { padding: var(--space-sm) var(--space-md); }
+
+.markdown :not(pre) > code {
+  font-family: var(--font-mono); font-size: 0.86em; padding: 0.08em 0.35em; border-radius: var(--radius-xs);
+  background: var(--tier-2); color: var(--ink);
+}
+[data-theme='dark'] .markdown :not(pre) > code { background: var(--tier-3); }
