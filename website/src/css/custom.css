@@ -1,0 +1,236 @@
+/* react-native-impeller-platform docs. Restyled on Brandon Baker's personal
+   site tokens (ds/*), not stock Infima. One accent (red ink), used sparingly;
+   depth is a surface tier plus a 1px border, never a shadow. */
+
+@import url('./fonts.css');
+@import url('./tokens.css');
+@import url('./reading.css');
+
+:root {
+  --ifm-color-primary: var(--red);
+  --ifm-color-primary-dark: rgb(var(--accent-hover));
+  --ifm-color-primary-darker: rgb(var(--accent-press));
+  --ifm-color-primary-darkest: rgb(var(--accent-press));
+  --ifm-color-primary-light: var(--red);
+  --ifm-color-primary-lighter: var(--red);
+  --ifm-color-primary-lightest: var(--red);
+
+  --ifm-background-color: var(--paper);
+  --ifm-background-surface-color: var(--tier-1);
+  --ifm-font-color-base: var(--ink);
+  --ifm-heading-color: var(--ink);
+
+  --ifm-font-family-base: var(--font-body);
+  --ifm-font-family-monospace: var(--font-mono);
+  --ifm-heading-font-family: var(--font-display);
+  --ifm-heading-font-weight: var(--fw-semibold);
+  --ifm-font-weight-bold: var(--fw-semibold);
+
+  --ifm-code-font-size: 0.875rem;
+  --ifm-code-background: var(--tier-1);
+  --ifm-code-border-radius: var(--radius-sm);
+
+  --ifm-global-radius: var(--radius-md);
+  --ifm-button-border-radius: var(--radius-sm);
+
+  --ifm-link-color: var(--ink);
+  --ifm-link-decoration: underline;
+  --ifm-link-hover-color: var(--ink);
+  --ifm-link-hover-decoration: underline;
+
+  --ifm-table-border-color: var(--rule);
+  --ifm-table-stripe-background: var(--tier-1);
+  --ifm-hr-border-color: var(--rule);
+
+  --ifm-navbar-background-color: var(--paper);
+  --ifm-navbar-shadow: none;
+  --ifm-navbar-height: 64px;
+
+  --ifm-footer-background-color: var(--paper);
+  --ifm-footer-color: var(--ink-3);
+  --ifm-footer-link-color: var(--ink-2);
+
+  --ifm-toc-border-color: var(--rule);
+  --ifm-menu-color: var(--ink-2);
+  --ifm-menu-color-active: var(--ink);
+
+  --ifm-alert-border-width: 0px;
+  --ifm-blockquote-border-color: var(--rule-strong);
+  --ifm-blockquote-color: var(--ink-2);
+
+  --docusaurus-highlighted-code-line-bg: rgb(var(--surface-3));
+}
+
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* No stock shadows anywhere. Depth is a surface tier and a 1px border. */
+.navbar, .card, .menu, .pagination-nav__link, .theme-doc-sidebar-container,
+.table-of-contents, .dropdown__menu, .alert, .tabs {
+  box-shadow: none !important;
+}
+
+/* -- Navbar ------------------------------------------------------------- */
+.navbar {
+  border-bottom: 1px solid var(--rule);
+}
+.navbar__brand { color: var(--ink); min-width: 0; text-decoration: none; }
+.navbar__title {
+  font-family: var(--font-display);
+  font-weight: var(--fw-semibold);
+  font-size: 1.0625rem;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+.navbar__link { color: var(--ink-2); font-weight: var(--fw-medium); text-decoration: none; }
+.navbar__link:hover, .navbar__link--active { color: var(--ink); text-decoration: none; }
+.navbar__item.dropdown > .navbar__link:after { border-color: var(--ink-3) transparent transparent; }
+.navbar-sidebar, .navbar-sidebar__brand { background: var(--paper); }
+.navbar-sidebar__item .menu__link { color: var(--ink-2); }
+
+/* GitHub link: a plain Tabler "brand-github" icon (inline, no label text),
+   no stock navbar "button" chrome. Mask-image keeps it one currentColor
+   shape so it follows --ink-2 / --ink in both schemes. */
+.header-github-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.25rem; height: 2.25rem; margin-left: 4px; border-radius: var(--radius-sm);
+  color: var(--ink-2);
+}
+.header-github-link:hover { color: var(--ink); background: var(--tier-1); }
+.header-github-link:before {
+  content: '';
+  width: 20px; height: 20px;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5' /%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5' /%3E%3C/svg%3E");
+}
+
+/* -- Color mode toggle ---------------------------------------------------- */
+.navbar .colorModeToggle_DEke, [class*='toggleButton_'] {
+  color: var(--ink-2);
+}
+[class*='toggleButton_']:hover { background: var(--tier-1); }
+
+/* -- Sidebar / menu ------------------------------------------------------- */
+.theme-doc-sidebar-container { border-right: 1px solid var(--rule) !important; background: var(--paper); }
+.menu__link {
+  color: var(--ink-2); font-weight: var(--fw-medium); border-radius: var(--radius-xs);
+  text-decoration: none !important;
+}
+.menu__link:hover { color: var(--ink); background: var(--tier-1); }
+.menu__list-item-collapsible:hover { background: transparent; }
+.menu__list-item-collapsible .menu__link--sublist { color: var(--ink-3); font-weight: var(--fw-semibold); font-size: 0.8125rem; font-family: var(--font-body); }
+.menu__list-item-collapsible .menu__link--sublist:hover { color: var(--ink); background: transparent; }
+.menu__link--active:not(.menu__link--sublist) {
+  color: var(--ink);
+  background: transparent;
+  font-weight: var(--fw-semibold);
+  box-shadow: inset 2px 0 0 0 var(--ink);
+}
+.menu__caret:before { background: currentColor; -webkit-mask-size: 1.5rem 1.5rem; }
+.menu__list-item--collapsed .menu__link--sublist:after { opacity: 0.7; }
+
+/* -- Table of contents ----------------------------------------------------- */
+.table-of-contents { border-left: 1px solid var(--rule); font-size: 0.8125rem; }
+.table-of-contents__title { display: none; }
+/* Plain text, body face: a heading set in `code` keeps that styling in the
+   article, but here it should read like every other entry, not like a
+   terminal. The active item gets the sidebar's ink + medium-weight change,
+   not the accent red. */
+.table-of-contents__link,
+.table-of-contents__link code {
+  font-family: var(--font-body) !important;
+  font-size: inherit !important;
+  font-weight: var(--fw-regular);
+  color: var(--ink-3) !important;
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  text-decoration: none !important;
+}
+.table-of-contents__link:hover,
+.table-of-contents__link:hover code {
+  color: var(--ink) !important;
+}
+.table-of-contents__link--active,
+.table-of-contents__link--active code {
+  color: var(--ink) !important;
+  font-weight: var(--fw-medium);
+}
+
+/* -- Doc page chrome -------------------------------------------------------- */
+article h1 { font-size: clamp(2rem, 2.4vw + 1.2rem, 2.75rem); letter-spacing: -0.02em; }
+
+.theme-doc-footer { border-top: 1px solid var(--rule); margin-top: var(--space-4xl); }
+.theme-doc-footer-edit-meta-row { color: var(--ink-3); font-size: 0.875rem; }
+.theme-edit-this-page { color: var(--ink-3); text-decoration: underline; text-decoration-color: var(--ink-4); text-underline-offset: 0.18em; }
+.theme-edit-this-page:hover { color: var(--ink); text-decoration-color: var(--ink-3); }
+/* Plain text "Edit this page" link: drop the stock pencil icon. */
+[class*='iconEdit'] { display: none; }
+
+.pagination-nav { margin-top: var(--space-2xl); gap: var(--space-lg); }
+.pagination-nav__link {
+  border: none; border-top: 1px solid var(--rule); border-radius: 0; background: transparent;
+  padding-block: var(--space-md);
+  text-decoration: none !important;
+}
+.pagination-nav__link:hover { border-top-color: var(--ink); background: transparent; }
+.pagination-nav__link--prev { padding-right: var(--space-md); }
+.pagination-nav__link--next { padding-left: var(--space-md); text-align: right; }
+/* Two plain links: no stock "Previous/Next" sublabel, no guillemets, no
+   underline at rest. The hover affordance is the border above darkening. */
+.pagination-nav__sublabel { display: none; }
+.pagination-nav__link--prev .pagination-nav__label::before,
+.pagination-nav__link--next .pagination-nav__label::after { content: '' !important; }
+.pagination-nav__label {
+  color: var(--ink) !important; font-family: var(--font-display); font-weight: var(--fw-semibold);
+  text-decoration: none !important;
+}
+
+/* -- Admonitions: a tint and its text, no border, like the home site's Alert */
+.theme-admonition {
+  border: none; border-radius: var(--radius-md); padding: var(--space-md) var(--space-lg);
+}
+.theme-admonition-note { background: rgb(var(--surface-3)); }
+.theme-admonition-tip { background: color-mix(in oklab, rgb(var(--success)) 14%, var(--paper)); }
+.theme-admonition-warning { background: color-mix(in oklab, rgb(var(--warn)) 16%, var(--paper)); }
+.theme-admonition-danger { background: color-mix(in oklab, rgb(var(--destructive)) 14%, var(--paper)); }
+.theme-admonition .admonition-icon svg { width: 16px; height: 16px; }
+
+/* -- Code blocks: the reading layer's own block, not Prism's default chrome */
+div[class^='codeBlockContainer'] {
+  background: var(--tier-1) !important; border: 1px solid var(--rule); border-radius: var(--radius-md);
+}
+[data-theme='dark'] div[class^='codeBlockContainer'] { background: var(--tier-2) !important; border-color: var(--ink-4); }
+pre[class*='prism-code'] { background: transparent !important; font-size: 0.875rem; line-height: 1.6; }
+div[class^='codeBlockTitle'] { background: transparent; border-bottom: 1px solid var(--rule); color: var(--ink-3); font-family: var(--font-mono); font-size: 0.75rem; }
+button[class^='copyButton'] { color: var(--ink-3); background: var(--tier-2); border-radius: var(--radius-xs); }
+button[class^='copyButton']:hover { color: var(--ink); }
+code { color: var(--ink); }
+:not(pre) > code { background: var(--tier-2); border: none; }
+
+/* -- Tables ------------------------------------------------------------- */
+table thead tr { background: var(--tier-1); border-bottom: 1px solid var(--rule); }
+table thead { font-family: var(--font-body); font-weight: var(--fw-medium); color: var(--ink-2); }
+table tr { background: var(--paper); border-top: 1px solid var(--rule-faint); }
+
+/* -- Footer: one quiet mark, the way bbaker.dev's own footer reads ------- */
+.footer { border-top: 1px solid var(--ink); padding-top: var(--space-3xl); }
+.footer--dark { --ifm-footer-background-color: var(--paper); background: var(--paper); }
+.bb-foot {
+  display: flex; align-items: center; justify-content: center; gap: var(--space-sm);
+}
+.bb-foot a { display: inline-flex; color: var(--ink-3); }
+.bb-foot a:hover { color: var(--ink); }
+.bb-foot svg { width: 110px; height: auto; aspect-ratio: 241 / 124; color: var(--ink-3); }
+
+/* -- Back to top ----------------------------------------------------------- */
+.theme-back-to-top-button { background: var(--ink); color: var(--paper); box-shadow: none; }
