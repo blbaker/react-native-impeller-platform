@@ -21,11 +21,11 @@ const BACKENDS = [
 
 const DOCS = [
   { href: '/docs/intro', title: 'Introduction', dek: 'Why this exists and what it is today.' },
-  { href: '/docs/getting-started', title: 'Getting started', dek: 'Install the package, scaffold a project, run it.' },
+  { href: '/docs/getting-started', title: 'Get started', dek: 'Install the package, add the platform to your app, and run it.' },
   { href: '/docs/guides/how-it-works', title: 'How it works', dek: 'Fabric, the scene graph, the raster thread, engine resolution.' },
-  { href: '/docs/reference/supported-components-and-style-props', title: 'Supported components and style props', dek: 'What renders today, what is still gated off.' },
+  { href: '/docs/reference/supported-components-and-style-props', title: 'Supported components and style props', dek: "What renders today, and what's still gated off." },
   { href: '/docs/reference/platforms-and-requirements', title: 'Platforms and requirements', dek: 'Backend and OS requirements for Linux, macOS, and Windows.' },
-  { href: '/docs/contributing-and-releasing', title: 'Contributing and releasing', dek: 'Gates, mutation-verify, branching, and how a release ships.' },
+  { href: '/docs/contributing-and-releasing', title: 'Contributing and releasing', dek: 'Gates, mutation-verify, commit conventions, and how a release ships.' },
 ];
 
 export default function Home() {
@@ -41,7 +41,7 @@ export default function Home() {
             <p className={styles.lede}>
               An out-of-tree React Native platform. Fabric's view tree drives an embedded
               C++ renderer built on Flutter's Impeller engine, so the same app runs on
-              desktop targets React Native does not support on its own.
+              desktop targets React Native doesn't support on its own.
             </p>
             <div className={styles.ctas}>
               <Link className={styles.ctaPrimary} to={useBaseUrl('/docs/getting-started')}>
@@ -80,7 +80,7 @@ export default function Home() {
               for projects outside Flutter: a prebuilt binary for every Flutter
               commit, text layout and shaping included, and shaders compiled ahead
               of time so nothing compiles at runtime. It already renders a React
-              Native app I use every day.
+              Native app in daily use.
             </p>
           </div>
         </section>

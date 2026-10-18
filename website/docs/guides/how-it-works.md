@@ -7,12 +7,12 @@ title: How it works
 ## The render path
 
 React Native's Fabric renderer owns the component tree the same way it does
-on iOS and Android. What differs is everything below Fabric: instead of
+on iOS and Android. What differs is everything beneath Fabric: instead of
 handing mutations to a native view hierarchy, this engine turns them into a
 scene graph and paints that scene graph with Impeller.
 
 The engine follows Flutter's own thread model for Impeller, with React
-Native's own contracts kept unchanged underneath it:
+Native's own contracts kept unchanged beneath it:
 
 | Role | What runs there |
 |---|---|
@@ -29,13 +29,13 @@ in the repository, starting with
 [`DIAGRAMS.md`](https://github.com/blbaker/react-native-impeller-platform/blob/main/docs/eng/flutter-parity/DIAGRAMS.md)
 has the rendered thread-model and backend diagrams.
 
-## Backends, per OS
+## Backends by OS
 
 Impeller's own backend choice per OS is what this engine targets too:
 
 | OS | Backend |
 |---|---|
-| macOS | ANGLE over Metal today; native Metal (4x MSAA) lands as the engine moves off ANGLE on Apple platforms. Pass `--backend gles` to keep the ANGLE path. |
+| macOS | ANGLE over Metal today. Native Metal (4x MSAA) lands as the engine moves off ANGLE on Apple platforms. Pass `--backend gles` to keep the ANGLE path. |
 | Linux | OpenGL ES over EGL, through Mesa. CI renders with the `llvmpipe` software rasterizer, since there's no GPU requirement for the gates. |
 | Windows | OpenGL ES over ANGLE on Direct3D 11. |
 
@@ -46,12 +46,14 @@ pass instead: render the icon at 4x into an offscreen texture, then
 composite it down with a linear filter. See
 [Styling](./styling) for where that applies.
 
-## Resolving the engine binary
+## Engine binary resolution
 
-`react-native-impeller-platform` doesn't bundle a C++ binary. Each supported
-platform ships its own `@blbaker/react-native-impeller-platform-engine-<os>-<cpu>`
-package as an optional dependency, and the JS package resolves the right one
-at runtime:
+The `react-native-impeller-platform` package doesn't bundle a C++ binary.
+Each supported platform ships its own
+`@blbaker/react-native-impeller-platform-engine-OS-CPU` package as an
+optional dependency, where `OS` and `CPU` identify the operating system
+and CPU architecture, and the JS package resolves the right one at
+runtime:
 
 1. `IMPELLER_ENGINE_BINARY`, if set, wins outright. This is for engine
    development, not for consuming the package.
@@ -65,21 +67,23 @@ at runtime:
    every path it looked in.
 5. If an engine package resolves but its version doesn't match the host
    package exactly, the resolver refuses it. The engine exposes a C ABI
-   that isn't stable across versions, so a mismatched pair isn't a warning,
-   it's a hard failure.
+   that isn't stable across versions, so a mismatch triggers a hard
+   failure instead of a warning.
 
-The full set of real error messages is in [Debugging](./debugging).
+For more information about the full set of real error messages, see
+[Debugging](./debugging).
 
 ## Metro and the CLI
 
-`npx react-native init-impeller` scaffolds an `impeller/` folder into your
-app and wraps `metro.config.js` with `withImpeller`, which teaches Metro
-about the `impeller` platform. `npx react-native run-impeller` bundles with
-Metro for that platform and launches the resolved engine binary with the
-bundle's absolute path. The engine never falls back to a bundle it finds by
-guessing a working directory; a wrong path fails loudly instead of
-rendering something stale. See the full flag list in the
-[CLI reference](../reference/cli).
+Running `npx react-native init-impeller` scaffolds an `impeller/` folder
+into your app and wraps `metro.config.js` with `withImpeller`, which
+teaches Metro about the `impeller` platform. Running
+`npx react-native run-impeller` bundles the app with Metro for that
+platform and launches the resolved engine binary with the bundle's
+absolute path. The engine never falls back to a bundle it finds by
+guessing a working directory. A wrong path fails loudly instead of
+rendering something stale. For more information about the available
+flags, see the [CLI reference](../reference/cli).
 
 ## What's still open
 
