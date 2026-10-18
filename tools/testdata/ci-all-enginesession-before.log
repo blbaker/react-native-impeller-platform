@@ -1,0 +1,327 @@
+### gate 1/6: headless pixels
+wrote /tmp/impeller-spike.ppm
+IMPELLER_SPIKE_PASS
+IMPELLER_HEADLESS_PASS (colors=45)
+### gate 2/6: engine package
+CMake Deprecation Warning at build/_deps/double-conversion-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+
+
+CMake Deprecation Warning at build/_deps/glog-src/cmake/GetCacheVariables.cmake:2 (cmake_policy):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+Call Stack (most recent call first):
+  build/_deps/glog-src/CMakeLists.txt:34 (include)
+
+
+engine-build: unpacked payload = 28 MB
+engine-build: staged packages-engine/engine-linux-x64 @ 0.1.0
+### gate 3/6: pack and consume (P1)
+   rn-impeller: distinct_colors=47
+   rn-impeller: screenshot=/build/tmp.e78Sr7xr1v/frame.ppm
+   RN_IMPELLER_RENDER_OK app=ConsumerApp
+PACK_AND_CONSUME_PASS (swatch=0,255,0 colors=47)
+### gate 4/6: RN mount (P2)
+CMake Deprecation Warning at build/_deps/double-conversion-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+
+
+CMake Deprecation Warning at build/_deps/glog-src/cmake/GetCacheVariables.cmake:2 (cmake_policy):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+Call Stack (most recent call first):
+  build/_deps/glog-src/CMakeLists.txt:34 (include)
+
+
+== 6. assert: React actually mounted ==
+   scene_nodes=6 painted_nodes=6
+== 7. assert: the pixels are the ones the fixture declares ==
+   OK plain fill @70,50 rgb=255,0,0
+   OK rounded fill @275,70 rgb=0,0,255
+   OK rounded corner (must be background) @202,22 rgb=255,255,255
+   OK nested fill @60,200 rgb=0,170,0
+   OK label ink=835/8100
+   OK label measured 140x31
+P2_MOUNT_PASS (nodes=6 painted=6)
+### gate 5/6: conformance (P3)
+CMake Deprecation Warning at build/_deps/double-conversion-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+
+
+CMake Deprecation Warning at build/_deps/glog-src/cmake/GetCacheVariables.cmake:2 (cmake_policy):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+Call Stack (most recent call first):
+  build/_deps/glog-src/CMakeLists.txt:34 (include)
+
+
+== 6. assert: React actually mounted ==
+   scene_nodes=8 painted_nodes=8
+== 7. assert conformance ==
+   OK border top @100,26 rgb=255,0,0
+   OK border right @174,80 rgb=0,204,0
+   OK border bottom @100,134 rgb=0,0,255
+   OK border left @26,80 rgb=255,153,0
+   OK border centre (must be background) @100,80 rgb=255,255,255
+   OK radius TL rounded (must be background) @224,24 rgb=255,255,255
+   OK radius cornerTR square (must be fill) @356,24 rgb=136,0,204
+   OK radius cornerBL square (must be fill) @224,136 rgb=136,0,204
+   OK radius cornerBR square (must be fill) @356,136 rgb=136,0,204
+   OK radius centre @290,80 rgb=136,0,204
+   OK gradient red 241->126->12, blue 14->129->243
+   OK transform centre @100,280 rgb=0,170,136
+   OK transform corner (outside the rotated box) @46,226 rgb=255,255,255
+   OK clamped Paragraph 200x20 (one line)
+   OK wrapped Paragraph 200x40 (>= 2 lines)
+   OK text wrapped ink=1469/12000
+   OK text clamped ink=736/6000
+   OK distinct_colors=332
+P3_CONFORMANCE_PASS (nodes=8 painted=8)
+### gate 6/6: module seam (P4)
+CMake Deprecation Warning at build/_deps/double-conversion-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+
+
+CMake Deprecation Warning at build/_deps/glog-src/cmake/GetCacheVariables.cmake:2 (cmake_policy):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+Call Stack (most recent call first):
+  build/_deps/glog-src/CMakeLists.txt:34 (include)
+
+
+   rn-impeller: screenshot=/build/tmp.YGOdtFQ7Q8/frame.ppm
+   RN_IMPELLER_RENDER_OK app=P4Fixture
+== 8. assert: React actually mounted ==
+   scene_nodes=11 painted_nodes=11
+== 9. assert the seam IN PIXELS ==
+   OK Appearance reports the engine-supplied scheme @50,50 rgb=0,170,0
+   OK StatusBarManager constants readable @130,50 rgb=0,102,204
+   OK Alert callback fired @210,50 rgb=204,102,0
+   OK Linking.canOpenURL both directions @290,50 rgb=102,0,204
+   OK Linking.getInitialURL round-trips @50,130 rgb=0,153,153
+   OK DevSettings callable @130,130 rgb=153,153,0
+   OK DefaultTurboModules delegation (performance.now) @210,130 rgb=204,0,102
+   OK Platform.constants come from the native module @290,130 rgb=0,68,136
+   OK alerts_shown=1 (the call crossed into native)
+   OK colorScheme label ink=479/6240
+P4_MODULES_PASS (modules=20 nodes=11 painted=11)
+### gate 7: Windows (opt-in)
+   SKIPPED — no staged Windows engine (build: tools/win-sync.sh then
+   cmd.exe /c C:\Devel\rni-win-scripts\engine-build-win.bat). Set
+   RNI_REQUIRE_WIN=1 to make this skip a failure.
+### gate 9: darwin staging fetchers
+sdk-fetch-darwin: ABI parity OK (188 exports match linux-x64)
+SDK_FETCH_DARWIN_OK engine/third_party/impeller-sdk-darwin
+ANGLE_FETCH_OK engine/third_party/angle-darwin-arm64
+### gate 10: release metadata
+  OK publishConfig.access=public @blbaker/react-native-impeller-platform-engine-win32-x64
+RELEASE_META_PASS (version=0.1.0)
+### gate 11: package selftest (what a user's npm test runs)
+  ok  a missing IMPELLER_ENGINE_BINARY fails loudly, not silently
+SELFTEST_PASS (8 checks)
+### gate 11b: engine resolver under link: (and install non-regression)
+   package /build/tmp.OioingkNA8/installed/app/node_modules/@blbaker/react-native-impeller-platform-engine-linux-x64/bin/rn-impeller
+LINKRESOLVE_PASS (triple=linux-x64: linked resolves, installed unchanged, decoy rejected)
+### gate 12: workflow policy
+  OK actionlint (expression + schema)
+WORKFLOW_GATE_PASS
+### gate 13: install from a real registry (by name)
+SKIP: gate 13 needs a persistent local npm registry; that tooling is not part of this repo
+### gate 14: retina (points vs pixels)
+SKIP: gate 14 (retina) needs the same local npm registry tooling, not part of this repo
+### gate 15: windowed WSI (a real window, N frames, valid capture)
+CMake Deprecation Warning at build/_deps/double-conversion-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+
+
+CMake Deprecation Warning at build/_deps/glog-src/cmake/GetCacheVariables.cmake:2 (cmake_policy):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+Call Stack (most recent call first):
+  build/_deps/glog-src/CMakeLists.txt:34 (include)
+
+
+   OK: headless RN_IMPELLER_RENDER_OK + ci-p3.sh P3_CONFORMANCE_PASS
+   OK: exit 0, frames=20
+   OK: timed screenshot is a valid PPM, 1344x840
+   OK: timed screenshot has painted content (>= 64 distinct colours)
+   OK: no orphan process
+WINDOW_GATE_PASS (frames=20 screenshot=1344x840)
+### gate 16: repaint loop draws NEW content (matched pair)
+   animating fixture: 12800 px changed between frame 0 and later
+   static fixture:    0 px changed between frame 0 and later
+ANIMATE_GATE_PASS (animating=12800px static=0px)
+### gate 16b: window repaints while the frame loop is BLOCKED (resize)
+CMake Deprecation Warning at build/_deps/double-conversion-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+
+
+CMake Deprecation Warning at build/_deps/glog-src/cmake/GetCacheVariables.cmake:2 (cmake_policy):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+Call Stack (most recent call first):
+  build/_deps/glog-src/CMakeLists.txt:34 (include)
+
+
+   OK: painted_during=2 frames painted from the refresh callback
+   OK: resize px=700x500 was applied inside the stall window
+   OK: the stall itself does not manufacture a resize
+   OK: loop-driven resize unchanged
+   OK: no orphan process
+RESIZE_GATE_PASS (painted_during=2 stall=1200ms)
+### gate 16c: first present lands inside a launch animation
+   OK: BOOT screen with the mark
+   OK: first frame heard 63 ms after JS start (< 1500); process start -> present 261 ms
+FIRST_PRESENT_GATE_PASS (js_ms=63 first_present_ms=261 bg=ff0000 mark_x=0)
+### gate 17: SVG paths paint, with PER-PATH fill-opacity
+   solid=(255, 0, 0) invisible=(255, 255, 255) ramp_lo=(191, 191, 255) ramp_hi=(64, 64, 255) bg=(255, 255, 255)
+SVG_GATE_PASS (solid=(255, 0, 0) invisible=bg ramp (191, 191, 255)->(64, 64, 255))
+### gate 18: the HostApp mark's structure (17 even grey levels)
+   distinct grey levels: 17 (want 17)
+MARK_GATE_PASS (17 even grey levels, step 15)
+### gate 19: <G transform> moves its children (translate/scale/rotate)
+   control  translate(10,10)      -> (10, 10, 49, 49)  want (10, 10, 49, 49)
+   translate(110,70)              -> (110, 70, 149, 109)  want (110, 70, 149, 109)
+   translate(200,150) scale(2)    -> (200, 150, 279, 229)  want (200, 150, 279, 229)
+   translate(300,40) rotate(30)   -> (290, 40, 333, 76)  want ~(290, 40, 334, 76) (+/-3)
+GTRANSFORM_GATE_PASS (translate and scale both applied, subtree included)
+### gate 20: stroke (independent colour, width, opacity)
+   1 stroke-only   edge=(255, 0, 0) interior=(255, 255, 255)
+   2 fill+stroke   edge=(0, 0, 255) interior=(0, 128, 0)
+   3 width=16      edge=(255, 0, 255) interior=(255, 255, 255)
+   4 strokeOpacity edge=(191, 191, 191)
+STROKE_GATE_PASS (hollow=True independent_colours=True width_honoured=True stroke_opacity=(191, 191, 191))
+### gate 21: basic shapes (rect, circle, ellipse, line)
+   Rect     ink(70, 55)=(255, 0, 0)  empty(22, 22)=(255, 255, 255)
+   Circle   ink(215, 55)=(0, 0, 255)  empty(183, 23)=(255, 255, 255)
+   Ellipse  ink(80, 200)=(0, 128, 0)  empty(80, 172)=(255, 255, 255)
+   Line     ink(230, 200)=(255, 0, 255)  empty(230, 220)=(255, 255, 255)
+SHAPES_GATE_PASS (rect+circle+ellipse+line all painted with correct geometry)
+### gate 22: gradient fills via url(#id)
+   linear  left=(248, 0, 7) mid=(127, 0, 128) right=(6, 0, 249)
+   radial  centre=(252, 252, 252) edge=(23, 23, 23)
+   dangling ref = (255, 255, 255)
+GRADIENT_GATE_PASS (linear (248, 0, 7)->(127, 0, 128)->(6, 0, 249) radial (252, 252, 252)/(23, 23, 23) dangling=empty)
+### gate 23: <Symbol>/<Use> -- one asset, N mounting sites
+   control=(255, 0, 0) leak_site=(255, 255, 255) use1=(0, 255, 0) use2=(0, 255, 0) dangling=(255, 255, 255)
+   scaled_inside=(0, 255, 0) scaled_outside=(255, 255, 255) bg=(255, 255, 255)
+USESYM_GATE_PASS (control=(255, 0, 0) leak_site=bare use1=use2=(0, 255, 0) dangling=bare)
+### gate 24: canvas draw path -- offscreen atlas, blit, rect volume
+CANVAS_BENCH steady_rects=290 ms_per_frame=1.95 fps=513.1
+CANVAS_BENCH burst_rects=9367 ms_per_frame=53.50
+CANVAS_BENCH steady_rects=290 ms_per_frame=1.60 fps=625.6
+CANVAS_BENCH burst_rects=9367 ms_per_frame=51.76
+blit site differs as required: with=(255,  0,  0) without=(255,255,255)
+CANVAS_BENCH steady_rects=290 ms_per_frame=1.95 fps=513.1
+CANVAS_BENCH burst_rects=9367 ms_per_frame=53.50
+CANVAS_GATE_PASS
+### gate 24b: <Text> lineHeight reaches measure AND paint (ENG-23)
+   OK A: boxes 32.0 / 64.0 pt (control 36.0)
+   OK C: control pitch 18.0 pt
+   OK B: pitch 16.0 / 32.0 pt
+   OK D: all ink inside its measured box
+LINE_HEIGHT_GATE_PASS (lineHeight drives measured height and painted pitch alike)
+### gate 24c: <world> nearest-neighbour sampling (ENG-21)
+   OK C: setSampling present, bad mode throws, 2 sprites drawn
+   OK A: nearest world diff nearest=0.000 bilinear=46.244 blend share=0.0000
+   OK B: control world diff bilinear=0.333 nearest=46.250 blend share=0.9891
+   OK D-A: nearest world diff nearest=0.000 bilinear=46.244 blend share=0.0000
+   OK D-B: control world diff bilinear=0.894 nearest=46.341 blend share=0.9871
+WORLD_NEAREST_GATE_PASS (setSampling 'nearest' keeps terrain and sprite texels hard; default stays linear)
+### gate 24d: TextInput vertical placement (ENG-16)
+   OK A: ink top 24.0 (content top 22)
+   OK B: ink midpoint 168.5 (box centre 170)
+   OK C: last line ends at 315.0 (content bottom 318), block starts 285.0
+   OK D: ink midpoint 370.0 (box centre 370)
+   OK E: ink top 424.0 (content top 422)
+TEXTINPUT_VALIGN_GATE_PASS (multiline starts at the top; textAlignVertical top/center/bottom honoured; single-line unchanged)
+### gate 24e: style audit grid (shadows + keep-green regression)
+   item 1: TILE 1 shadowIOS PASS diff=4612 out=4612 n=8212 bbox=(20, 21, 111, 112) counts={'gray': 4612, 'blue': 3600}
+   item 2: TILE 2 boxShadow PASS diff=2112 out=2112 n=5712 bbox=(28, 29, 103, 104) counts={'gray': 2013, 'blue': 3600, 'black': 99}
+   item 3: TILE 3 boxShadowInset PASS diff=2000 out=0 n=3600 bbox=(30, 31, 89, 90) counts={'red': 2000, 'blue': 1600}
+   item 4: TILE 4 elevation PASS diff=5052 out=5052 n=8652 bbox=(12, 25, 107, 120) counts={'gray': 5052, 'blue': 3600}
+   item 11: TILE 64 textInputSecure PASS diff=173 out=0 n=64 bbox=(34, 47, 50, 51) counts={'gray': 41, 'black': 23}
+   item 13: TILE 20 overflowRounded PASS diff=772 out=0 n=2828 bbox=(30, 31, 89, 90) counts={'red': 2828}
+   item 12: TILE 38 lineHeight PASS diff=132 out=66 n=132 bbox=(30, 52, 40, 103) counts={'gray': 104, 'black': 28}
+   item 16: TILE 63 textInputMultiline PASS diff=198 out=0 n=193 bbox=(35, 39, 48, 80) counts={'gray': 170, 'black': 23}
+   item 5: TILE 44 fontWeight PASS diff=611 out=0 n=552 bbox=(30, 36, 70, 60) counts={'gray': 182, 'black': 370}
+   item 5: TILE 45 fontWeightBold PASS diff=449 out=0 n=527 bbox=(30, 36, 70, 60) counts={'gray': 190, 'black': 337}
+   item 7: TILE 51 textAlignCenter PASS diff=388 out=0 n=187 bbox=(57, 36, 81, 49) counts={'gray': 136, 'black': 51}
+   item 7: TILE 52 textAlignRight PASS diff=388 out=147 n=187 bbox=(84, 36, 108, 49) counts={'gray': 136, 'black': 51}
+   item 9: TILE 39 underline PASS diff=108 out=0 n=467 bbox=(30, 36, 83, 52) counts={'gray': 270, 'black': 197}
+   item 9: TILE 40 lineThrough PASS diff=103 out=0 n=405 bbox=(30, 36, 83, 49) counts={'gray': 217, 'black': 188}
+   item 9: TILE 41 decorationColor PASS diff=108 out=0 n=433 bbox=(30, 36, 83, 52) counts={'gray': 270, 'black': 89, 'red': 74} rule=corrected
+   item 10: TILE 16 borderDashed PASS diff=432 out=0 n=464 bbox=(30, 31, 89, 90) counts={'black': 464} rule=corrected
+   item 25: TILE 17 borderDotted PASS diff=448 out=0 n=448 bbox=(30, 31, 89, 90) counts={'black': 448}
+STYLE_AUDIT_GATE_PASS landed=43 keep=21 select=1
+### gate 24f: windowed --type (ENG-18)
+   NL field: ink=82 rows=19.0-36.0 bands=1 cols=34.0-54.0
+   NL field: ink=0 rows=-1.0--1.0 bands=0 cols=-1.0--1.0
+WINDOW_TYPE_PASS
+### gate 25: Networking TurboModule + TLS (P10)
+CMake Deprecation Warning at build/_deps/double-conversion-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+
+
+CMake Deprecation Warning at build/_deps/glog-src/cmake/GetCacheVariables.cmake:2 (cmake_policy):
+  Compatibility with CMake < 3.5 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value or use a ...<max> suffix to tell
+  CMake that the project does not need compatibility with older versions.
+Call Stack (most recent call first):
+  build/_deps/glog-src/CMakeLists.txt:34 (include)
+
+
+   TLS negative controls RAN: chain trust + hostname verification both rejected
+   rn-impeller: net_requests_completed=4 net_in_flight=0
+   net_requests_completed=4 (the calls crossed into native), in_flight=0
+   OK NATIVE HALF: TurboModuleRegistry.get('Networking') is non-null @130,50 rgb=0,102,204
+P10_NETWORKING_PASS (nodes=10 painted=10 port=36989)
+ALL_GATES_PASS
