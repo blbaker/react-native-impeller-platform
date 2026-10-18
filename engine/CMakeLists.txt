@@ -256,6 +256,14 @@ add_executable(rn-impeller
   host/IoContextEgl.cpp
   host/PoisonProbe.cpp
   host/ExternalTextureProbe.cpp  # FP-42 test hook
+  # FP-30: host/main.cpp's CLI parser calls rni::resizeprobe::ParseSequence()
+  # unconditionally (it is not inside a windowed-only code path), so this TU
+  # must always compile. It has no windowing dependency of its own (string
+  # parsing + a mutex) -- it was only ever paired with --resize-after-frames
+  # in practice, which made gating it alongside the other windowed-only FP-30
+  # files look right until a non-windowed build (RNI_WITH_WINDOW=OFF, the
+  # android engine) tried to link and failed with an undefined symbol.
+  host/ResizeProbe.cpp
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeSync.cpp>
   # FP-32: GPU context loss -> teardown + rebuild (windowed EGL).
@@ -266,7 +274,6 @@ add_executable(rn-impeller
   # FP-44: platform views (X11 child windows; stubs on other hosts).
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PlatformViewsX11Gl.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PlatformViewProbeX11.cpp>
-  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeProbe.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
   base/DevToolsFrames.cpp
