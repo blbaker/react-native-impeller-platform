@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.2.0...v0.3.0) (2026-10-19)
+
+
+### Features
+
+* **engine:** add a Notifications module for desktop notifications ([0e97d2a](https://github.com/blbaker/react-native-impeller-platform/commit/0e97d2afd31fc17f011b28cc0458853ae743772d))
+* **engine:** add a Notifications module for desktop notifications ([5c99dfd](https://github.com/blbaker/react-native-impeller-platform/commit/5c99dfd6328a14791b93b72c9b2378f7f1c27370))
+* **ios:** touch and system keyboard input for RNIEngine ([02deacb](https://github.com/blbaker/react-native-impeller-platform/commit/02deacb860b8406c51df7a740ceccb185efae304))
+* **ios:** touch and system keyboard input, tested with real UIKit input ([17e2945](https://github.com/blbaker/react-native-impeller-platform/commit/17e29458ad6a4705e87a77c0e20fe055436231dc))
+
+
+### Bug Fixes
+
+* **engine:** keep the Windows toast objects on one COM thread ([2814df8](https://github.com/blbaker/react-native-impeller-platform/commit/2814df8421927868baf2032cf5f40958cc1bd4c7))
+
 ## [0.2.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.1.0...v0.2.0) (2026-10-19)
 
 

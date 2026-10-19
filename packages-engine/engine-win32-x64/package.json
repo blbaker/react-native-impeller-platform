@@ -1,6 +1,6 @@
 {
   "name": "@blbaker/react-native-impeller-platform-engine-win32-x64",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Prebuilt Impeller engine host for win32-x64 (installed automatically by react-native-impeller-platform)",
   "license": "MIT",
   "repository": {
