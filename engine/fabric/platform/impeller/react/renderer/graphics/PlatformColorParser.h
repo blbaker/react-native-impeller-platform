@@ -35,7 +35,10 @@ parsePlatformColor(const ContextContainer & /*contextContainer*/, int32_t /*surf
       }
     }
   }
-  return {colorFromComponents({0, 0, 0, 0})};
+  // An unknown name stays unset, as on iOS. Building rgba(0,0,0,0) here would
+  // give a set, transparent colour, which paints nothing where the default
+  // would have shown (for example the default text colour).
+  return {};
 }
 
 inline void
