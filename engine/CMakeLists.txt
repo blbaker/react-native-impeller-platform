@@ -28,6 +28,16 @@ include(${CMAKE_SOURCE_DIR}/cmake/CompileFlags.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/Sanitize.cmake)
 
 # ---------------------------------------------------------------------------
+# iOS (Phase 1, Task 1.6). An iOS configure (-DCMAKE_SYSTEM_NAME=iOS) builds
+# only the iOS platform library: Metal only, no GLFW, no ANGLE, none of the
+# desktop host below. Everything iOS lives in ios/RniIos.cmake.
+# ---------------------------------------------------------------------------
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  include(${CMAKE_SOURCE_DIR}/ios/RniIos.cmake)
+  return()
+endif()
+
+# ---------------------------------------------------------------------------
 # P9-A: windowed WSI. Default ON everywhere. Linux and APPLE consume a GLFW
 # built by tools/glfw-fetch.sh; Windows builds the same GLFW 3.4 source from
 # this configure (see the GLFW block below) and reaches GLES3 through ANGLE
