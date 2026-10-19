@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/blbaker/react-native-impeller-platform/compare/v0.3.0...v0.3.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **engine:** make transparent a real colour, not "no colour set" ([152ed52](https://github.com/blbaker/react-native-impeller-platform/commit/152ed52a1a3314bf62393bd975cc3862a1e0854e))
+
 ## [0.3.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.2.0...v0.3.0) (2026-10-19)
 
 
