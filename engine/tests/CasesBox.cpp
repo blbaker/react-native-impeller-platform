@@ -18,6 +18,16 @@ RNI_TEST(transparent_background_paints_nothing) {
   EXPECT_TEXT(s.Ops(), R"()");
 }
 
+// processColor('transparent') is 0. A border edge set to it must paint nothing, not the opaque black
+// an unset colour falls back to (the triangle of a CSS-style wedge).
+RNI_TEST(transparent_border_edge_paints_nothing) {
+  TestScene s;
+  s.View(1, R"({"borderBottomWidth":40,"borderBottomColor":4294901760,"borderRightWidth":40,"borderRightColor":0})",
+         10, 10, 40, 40);
+  EXPECT_TEXT(s.Ops(), R"ops(DrawPath path[M(50,50) L(10,50) L(10,10) L(10,10) Z nonzero] paint(#ff0000ff)
+)ops");
+}
+
 RNI_TEST(uniform_border_paints_four_mitred_quads) {
   TestScene s;
   s.View(1, R"({"borderWidth":4,"borderColor":4278190335})", 10, 10, 100, 60);

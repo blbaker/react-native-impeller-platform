@@ -3,6 +3,16 @@
 #include <algorithm>
 #include <cmath>
 
+#include <react/renderer/graphics/HostPlatformColor.h>
+
+// The colour-hint test in BuildStops relies on the engine's HostPlatformColor.h
+// (engine/fabric/platform/impeller), where a transparent stop is never the
+// unset colour. React Native's cxx copy packs transparent to 0, which would
+// turn every placed transparent stop back into a hint.
+#ifndef RNI_IMPELLER_HOST_PLATFORM_COLOR
+#error "<react/renderer/graphics/HostPlatformColor.h> resolved to React Native's cxx copy, not engine/fabric/platform/impeller"
+#endif
+
 namespace rni {
 
 namespace react = facebook::react;
@@ -71,10 +81,10 @@ void AppendHint(BgLayer& L, const RawStop& a, const RawStop& b, float hintPos) {
   }
 }
 
-// RN marks a colour hint as a stop with no colour but a position. Colour 0 is
-// RN's "undefined", so transparent black reads the same: only a placed,
-// interior, colourless entry counts as a hint (a placed `rgba(0,0,0,0) 50%`
-// mid-gradient stop is indistinguishable and reads as a hint too).
+// RN marks a colour hint as a stop with no colour but a position, so a placed,
+// interior entry whose colour is unset is a hint. A transparent stop is a set
+// colour (the engine's HostPlatformColor.h never packs a real colour to the
+// unset value), so `transparent 50%` and `rgba(0,0,0,0) 50%` are real stops.
 bool BuildStops(const std::vector<react::ColorStop>& in, float refLen, BgLayer& L) {
   std::vector<RawStop> s;
   for (size_t i = 0; i < in.size(); ++i) {

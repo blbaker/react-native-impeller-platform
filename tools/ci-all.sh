@@ -29,6 +29,8 @@ bash tools/ci-p2.sh | tail -10
 
 echo "### gate 5/6: conformance (P3)"
 bash tools/ci-p3.sh | tail -22
+echo "### gate 5b: transparent is a colour, not unset (13 prop families, N=0 and N=4)"
+bash tools/ci-transparent-color.sh | grep -E "TRANSPARENT_COLOR_GATE_PASS|OK [0AB]:|SKIP"
 
 echo "### gate 6/6: module seam (P4)"
 bash tools/ci-p4.sh | tail -16
