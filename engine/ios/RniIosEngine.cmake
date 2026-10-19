@@ -74,6 +74,7 @@ add_library(rni_ios_engine STATIC
   ${_E}/scenegraph/ContentFilters.cpp ${_E}/scenegraph/PrewarmTour.cpp
   ${_E}/scenegraph/BackdropBlur.cpp ${_E}/scenegraph/BlendGroup.cpp
   ${_E}/scenegraph/EllipsizeText.cpp ${_E}/scenegraph/BorderCurve.cpp
+  ${_E}/scenegraph/ParagraphCache.cpp
   ${_E}/scenegraph/BorderDashRounded.cpp ${_E}/scenegraph/DrawOpLog.cpp
   ${_E}/scenegraph/DrawOpHooks.cpp ${_E}/scenegraph/DrawOpHooksObjects.cpp
   ${_E}/text/ImpellerTextLayoutManager.cpp ${_E}/text/FontRegistry.cpp

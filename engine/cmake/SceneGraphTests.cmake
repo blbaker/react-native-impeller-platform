@@ -38,6 +38,7 @@ if(NOT WIN32 AND NOT ANDROID)
     scenegraph/BackdropBlur.cpp
     scenegraph/BlendGroup.cpp
     scenegraph/EllipsizeText.cpp
+    scenegraph/ParagraphCache.cpp
     scenegraph/BorderCurve.cpp
     scenegraph/BorderDashRounded.cpp
     scenegraph/DrawOpLog.cpp

@@ -37,6 +37,11 @@ void Invalidate();
 // Appends a font every context registers; returns its index. Any thread.
 size_t AddFont(const std::string& path, std::shared_ptr<const std::vector<uint8_t>> bytes);
 
+// Changes whenever text could shape differently than it did before: a font was
+// added (AddFont) or the contexts were rebuilt (Invalidate). ParagraphCache
+// keys on it.
+uint64_t FontEpoch();
+
 // Whether this thread's context accepted font `index` (syncs first).
 bool RegisteredHere(size_t index);
 

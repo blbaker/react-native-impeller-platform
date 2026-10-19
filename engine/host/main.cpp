@@ -2108,6 +2108,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::exttexprobe::PrintSummary();  // FP-42 test hook
   host.snapshots()->PrintSummary();  // FP-43
   rni::typography::PrintSummary();  // FP-12
+  sceneGraph.printParagraphCacheSummary();
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
   // a completely different failure from touch_downs=3 touch_hits=0 (clicks
@@ -3670,6 +3671,7 @@ int main(int argc, char** argv) {
     rni::PrintGpuTextureTotals();  // FP-20
     host.snapshots()->PrintSummary();  // FP-43
     rni::typography::PrintSummary();  // FP-12
+    sceneGraph.printParagraphCacheSummary();
   }
 
   std::vector<rni::Px> px;
