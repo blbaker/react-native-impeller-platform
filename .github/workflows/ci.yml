@@ -80,7 +80,8 @@ jobs:
             cmake ninja-build g++ libicu-dev \
             libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libglvnd-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
-            fontconfig fonts-dejavu-core fonts-ubuntu
+            fontconfig fonts-dejavu-core fonts-ubuntu \
+            dbus-daemon
           echo "Ubuntu font faces installed: $(fc-list : family | grep -c '^Ubuntu')"
           cmake --version | head -1
           node --version
