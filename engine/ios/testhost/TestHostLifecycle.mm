@@ -6,8 +6,11 @@
 // is unavailable it only counts a skipped frame.
 // The production InstallGpuAvailabilityObservers() is called at load. The
 // test's OWN lifecycle observer (not the production one) keeps the process
-// running in the background (beginBackgroundTask) and samples the counters at
-// background+0.1 s and +1.1 s, then 1 s after the foreground.
+// running in the background (beginBackgroundTask, taken at resign-active) and
+// has the RASTER THREAD sample the counters at background+0.1 s and +1.1 s:
+// a backgrounded app's timers are coalesced (a dispatch_after at +1.1 s once
+// fired only at the foreground, 20 s later), its running thread is not. Then
+// 1 s after the foreground.
 #import "TestHost.h"
 
 #import <Metal/Metal.h>
@@ -22,6 +25,12 @@
 #include "host/MetalSurfaceIOS.h"
 
 namespace {
+int64_t SteadyUs() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
 struct Counts {
   std::atomic<long> presents{0}, draws{0}, offscreen{0}, skipped{0};
 };
@@ -57,6 +66,7 @@ ImpellerDisplayList Frame(long n, int w, int h) {
   id<MTLTexture> _offscreen;
   std::thread _raster;
   std::atomic<bool> _stop;
+  std::atomic<int64_t> _bgStartDueUs, _bgEndDueUs;  // 0 = no sample pending
   Counts _c;
   int _w, _h;
   UIBackgroundTaskIdentifier _bgTask;
@@ -76,6 +86,8 @@ ImpellerDisplayList Frame(long n, int w, int h) {
   rni::gpu::InstallGpuAvailabilityObservers();
   TestLog("gpu observers_installed=1");
   NSNotificationCenter* nc = NSNotificationCenter.defaultCenter;
+  [nc addObserver:self selector:@selector(willResignActive:)
+             name:UIApplicationWillResignActiveNotification object:nil];
   [nc addObserver:self selector:@selector(didBackground:)
              name:UIApplicationDidEnterBackgroundNotification object:nil];
   [nc addObserver:self selector:@selector(willForeground:)
@@ -128,27 +140,34 @@ ImpellerDisplayList Frame(long n, int w, int h) {
       }
     }
     if (n == 60) Sample(_c, "ready");
+    const int64_t now = SteadyUs();
+    int64_t due = _bgStartDueUs.load();
+    if (due && now >= due && _bgStartDueUs.compare_exchange_strong(due, 0)) Sample(_c, "bg_start");
+    due = _bgEndDueUs.load();
+    if (due && now >= due && _bgEndDueUs.compare_exchange_strong(due, 0)) Sample(_c, "bg_end");
     std::this_thread::sleep_for(std::chrono::milliseconds(16));
   }
 }
 
-- (void)didBackground:(NSNotification*)note {
+- (void)willResignActive:(NSNotification*)note {
+  if (_bgTask != UIBackgroundTaskInvalid) return;
   _bgTask = [UIApplication.sharedApplication beginBackgroundTaskWithExpirationHandler:^{
     [UIApplication.sharedApplication endBackgroundTask:self->_bgTask];
+    self->_bgTask = UIBackgroundTaskInvalid;
   }];
+}
+
+- (void)didBackground:(NSNotification*)note {
+  [self willResignActive:note];  // no-op when resign-active already took it
   Sample(_c, "background");
-  dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
   // The window opens 100 ms in (the production observer flipped the switch
   // inside this same notification) and closes 1 s later, while the loop still
-  // runs often: measured in this window, 13-25 skipped frames with the switch
+  // runs often: measured in this window, 13-35 skipped frames with the switch
   // and 8-11 presents without it; from +0.5 s to +2.5 s only ~2 iterations ran,
   // which would make a zero cheap.
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), q, ^{
-    Sample(self->_c, "bg_start");
-  });
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1100 * NSEC_PER_MSEC), q, ^{
-    Sample(self->_c, "bg_end");
-  });
+  const int64_t now = SteadyUs();
+  _bgStartDueUs.store(now + 100000);
+  _bgEndDueUs.store(now + 1100000);
 }
 
 - (void)willForeground:(NSNotification*)note {
