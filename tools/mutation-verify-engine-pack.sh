@@ -12,6 +12,9 @@
 #   M2  libhermesvm.dylib not shipped ........................ C fails
 #   M3  rn-impeller asks for @rpath/nested/libhermesvm.dylib . C fails
 #   M4  package.json "files" leaves the dylibs out ........... B fails
+#   M5  the 0.1.0 install names: rn-impeller loads
+#       @loader_path/libimpeller.dylib ....................... E fails, C passes
+#   M6  rn-impeller has no @loader_path/../Frameworks rpath .. E fails, C passes
 #
 # Usage: bash tools/mutation-verify-engine-pack.sh <staged darwin engine package dir>
 # Needs install_name_tool (macOS) or llvm-install-name-tool (Linux). On Linux
@@ -66,7 +69,7 @@ printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>
 "$INT" -change "$OLD" @rpath/hermesvm.framework/Versions/0/hermesvm "$B/rn-impeller" 2>/dev/null
 resign "$B/rn-impeller" "$B/hermesvm.framework/Versions/0/hermesvm"
 if [ "$DARWIN" = 1 ]; then
-  check "M1 0.1.0 shape FAILS A     " 1 'arms: A D\)'
+  check "M1 0.1.0 shape FAILS A     " 1 'arms: A D E\)'
   out="$(bash "$GATE" "$W/p" 2>&1)"
   grep -q 'bundle format' <<<"$out" || { sed 's/^/      /' <<<"$out"; fail "M1: arm D failed, but not on the bundle format"; }
   echo "  [M1 arm D names the defect   ] /bundle format/ ... OK"
@@ -91,4 +94,18 @@ json.dump(d, open(p, "w"), indent=2)
 PY
 check "M4 files filter FAILS B    " 1 'libhermesvm\.dylib is staged but not in the tarball'
 
-echo "VERIFY_OK ${PASS}/5 cases behaved as specified."
+# M5 and M6 are the .app defect 0.1.0 shipped: everything loads from bin/, so
+# A-D pass, and the standard MacOS + Frameworks layout aborts. Only E can see it.
+fresh
+"$INT" -change @rpath/libimpeller.dylib @loader_path/libimpeller.dylib "$W/p/bin/rn-impeller" 2>/dev/null
+resign "$W/p/bin/rn-impeller"
+"$OTOOL" -L "$W/p/bin/rn-impeller" | grep -q '@loader_path/libimpeller\.dylib' || fail "M5 mutant did not apply"
+check "M5 @loader_path ref FAILS E " 1 'arms: E\)'
+
+fresh
+"$INT" -delete_rpath @loader_path/../Frameworks "$W/p/bin/rn-impeller" 2>/dev/null
+resign "$W/p/bin/rn-impeller"
+"$OTOOL" -l "$W/p/bin/rn-impeller" | grep -q 'path @loader_path/\.\./Frameworks' && fail "M6 mutant did not apply"
+check "M6 no ../Frameworks FAILS E " 1 'arms: E\)'
+
+echo "VERIFY_OK ${PASS}/7 cases behaved as specified."

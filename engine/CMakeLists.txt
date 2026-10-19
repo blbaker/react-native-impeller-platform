@@ -637,8 +637,15 @@ endif()
 # build-tree rpaths that only resolve on the machine that built it.
 #
 # macOS spells $ORIGIN as @loader_path; the ELF token is meaningless to dyld.
+#
+# The second macOS entry is for a standard .app: the executable in
+# Contents/MacOS and its dylibs in Contents/Frameworks. With @loader_path
+# alone dyld aborts there (rc=134), and every consumer had to run
+# `install_name_tool -add_rpath` on a signed binary. The shipped dylibs carry
+# @rpath install names (cmake/StageDarwinEngine.cmake), so either layout
+# loads: bin/ as npm unpacks it, or MacOS + Frameworks.
 if(APPLE)
-  set(_install_rpath "@loader_path")
+  set(_install_rpath "@loader_path;@loader_path/../Frameworks")
 else()
   set(_install_rpath "$ORIGIN")
 endif()
@@ -701,7 +708,7 @@ if(WIN32)
   install(FILES ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
           DESTINATION bin COMPONENT engine)
 elseif(APPLE)
-  # macOS DOES have an rpath (@loader_path, set above), so unlike Windows the
+  # macOS DOES have an rpath (@loader_path and ../Frameworks, set above), so unlike Windows the
   # libraries do not have to sit beside the binary for the loader to find
   # them, but they DO have to ship, and their install names have to be fixed.
   #
@@ -721,7 +728,7 @@ elseif(APPLE)
     "${ANGLE_DIR}/LICENSE.electron"
     DESTINATION bin COMPONENT engine)
 
-  # Install names to @loader_path, Hermes repointed, everything re-signed.
+  # Install names to @rpath, Hermes repointed, everything re-signed.
   # Runs after the FILES rules above: install rules run in declaration order.
   install(SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/StageDarwinEngine.cmake"
           COMPONENT engine)
