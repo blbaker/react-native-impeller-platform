@@ -57,7 +57,7 @@ case "$flag" in
         esac
       else
         case "$base" in
-          rn-impeller)     printf '\t@loader_path/libimpeller.dylib (compatibility version 0.0.0)\n\t@rpath/hermesvm.framework/Versions/0/hermesvm (compatibility version 0.0.0)\n' ;;
+          rn-impeller)     printf '\t@loader_path/libimpeller.dylib (compatibility version 0.0.0)\n\t@loader_path/libhermesvm.dylib (compatibility version 0.0.0)\n' ;;
           libGLESv2.dylib) printf '\t@loader_path/libEGL.dylib (compatibility version 0.0.0)\n' ;;
         esac
       fi
@@ -82,11 +82,10 @@ echo "[2] stub otool + codesign staged ........ OK"
 
 # --------------------------------------------------------- 3. fake package
 PKG="$WORK/pkg"
-mkdir -p "$PKG/bin/hermesvm.framework/Versions/0"
-for f in libEGL.dylib libGLESv2.dylib libimpeller.dylib rn-impeller; do
+mkdir -p "$PKG/bin"
+for f in libEGL.dylib libGLESv2.dylib libimpeller.dylib libhermesvm.dylib rn-impeller; do
   echo x > "$PKG/bin/$f"
 done
-echo x > "$PKG/bin/hermesvm.framework/Versions/0/hermesvm"
 
 # ------------------------------------------------------------- 4. run cases
 run_case() {
