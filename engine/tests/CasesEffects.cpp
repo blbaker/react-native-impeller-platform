@@ -32,6 +32,48 @@ RNI_TEST(ios_shadow_props_need_an_opacity) {
 )ops");
 }
 
+// Colour 0 is processColor('transparent'). Each case below used to read it as "unset" and paint the
+// unset fallback, opaque black.
+RNI_TEST(transparent_outline_paints_nothing) {
+  TestScene s;
+  s.View(1, R"({"backgroundColor":4294967295,"outlineWidth":10,"outlineStyle":"solid","outlineColor":0})",
+         20, 20, 40, 40);
+  EXPECT_TEXT(s.Ops(), R"ops(DrawRect rect(20,20,40,40) paint(#ffffffff)
+)ops");
+}
+
+RNI_TEST(transparent_ios_shadow_paints_nothing) {
+  TestScene s;
+  s.View(1, R"({"backgroundColor":4294967295,"shadowColor":0,"shadowOpacity":1,"shadowRadius":0,
+               "shadowOffset":{"width":20,"height":20}})", 20, 20, 40, 40);
+  EXPECT_TEXT(s.Ops(), R"ops(DrawRect rect(20,20,40,40) paint(#ffffffff)
+)ops");
+}
+
+RNI_TEST(transparent_box_shadow_paints_nothing) {
+  TestScene s;
+  s.View(1, R"({"backgroundColor":4294967295,"boxShadow":[{"offsetX":20,"offsetY":20,"blurRadius":0,"color":0}]})",
+         20, 20, 40, 40);
+  EXPECT_TEXT(s.Ops(), R"ops(DrawRect rect(20,20,40,40) paint(#ffffffff)
+)ops");
+}
+
+RNI_TEST(transparent_drop_shadow_paints_nothing) {
+  TestScene s;
+  const Tag v = s.View(1, R"({"filter":[{"dropShadow":{"offsetX":20,"offsetY":20,"standardDeviation":0,"color":0}}]})",
+                       20, 20, 40, 40);
+  s.View(v, R"({"backgroundColor":4294967295})", 0, 0, 40, 40);
+  // The shadow pass still runs, tinted with an alpha-0 colour (source-in), so it paints nothing.
+  EXPECT_TEXT(s.Ops(), R"ops(Save
+  Translate 20,20
+  SaveLayer rect(-100000,-100000,200000,200000) paint(#000000ff cf=blend(#00000100,source-in))
+    DrawRect rect(20,20,40,40) paint(#ffffffff)
+  Restore
+Restore
+DrawRect rect(20,20,40,40) paint(#ffffffff)
+)ops");
+}
+
 RNI_TEST(opacity_half_wraps_the_subtree_in_one_save_layer) {
   TestScene s;
   const Tag v = s.View(1, R"({"opacity":0.5})", 10, 10, 100, 60);

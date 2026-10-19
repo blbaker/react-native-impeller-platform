@@ -7,14 +7,19 @@
 #   M2  the overflow clip is taken before the Save that should scope it, so it leaks to later siblings
 #       -> "FAIL clip_is_set_before_the_children_draw"
 #   M3  the top-left and top-right corner radii are swapped -> "FAIL per_corner_radii_keep_their_corners"
+#   M4  the engine's HostPlatformColor.h packs rgba(0,0,0,0) to 0 again (the producer change reverted,
+#       with its static_assert), so `transparent` reads as unset and the fallbacks paint black
+#       -> every transparent_* case fails, the border edge first
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 SRC="engine/scenegraph/SceneGraph.cpp"
+HDR="engine/fabric/platform/impeller/react/renderer/graphics/HostPlatformColor.h"
 BACKUP="$(mktemp -d)"
 cp "$SRC" "$BACKUP/SceneGraph.cpp"
-restore() { cp "$BACKUP/SceneGraph.cpp" "$SRC"; }
+cp "$HDR" "$BACKUP/HostPlatformColor.h"
+restore() { cp "$BACKUP/SceneGraph.cpp" "$SRC"; cp "$BACKUP/HostPlatformColor.h" "$HDR"; }
 trap 'restore; echo "(engine source restored)" >&2' EXIT
 
 mutate() {  # file old new
@@ -70,9 +75,26 @@ gate "$BACKUP/m3.log" || true
 expect_killed M3 "$BACKUP/m3.log" '^FAIL per_corner_radii_keep_their_corners'
 restore
 
+echo "== M4: transparent packs to the unset colour again =="
+mutate "$HDR" '  return color == HostPlatformColor::UndefinedColor ? kTransparentColor : color;
+}
+
+static_assert(
+    hostPlatformColorFromRGBA(0, 0, 0, 0) != HostPlatformColor::UndefinedColor,
+    "a transparent colour must not equal the unset colour");' '  return color;  // MUTANT M4
+}'
+gate "$BACKUP/m4.log" || true
+expect_killed M4 "$BACKUP/m4.log" '^FAIL transparent_border_edge_paints_nothing'
+for c in transparent_outline_paints_nothing transparent_ios_shadow_paints_nothing \
+         transparent_box_shadow_paints_nothing transparent_drop_shadow_paints_nothing; do
+  grep -q "^FAIL $c\$" "$BACKUP/m4.log" || { echo "MUTATE_FAIL: M4 left $c green" >&2; exit 1; }
+done
+echo "   M4 also failed the outline, iOS shadow, boxShadow and dropShadow cases"
+restore
+
 echo "== RESTORE: clean painter must be GREEN =="
 gate "$BACKUP/final.log" || { tail -15 "$BACKUP/final.log" >&2; echo "MUTATE_FAIL: ci-unit RED after restore" >&2; exit 1; }
 echo "   $(grep -o 'UNIT_PASS.*' "$BACKUP/final.log")"
 trap - EXIT
 rm -rf "$BACKUP"
-echo "MUTATE_UNIT_OK -- 3 mutants, 3 killed, painter restored and green"
+echo "MUTATE_UNIT_OK -- 4 mutants, 4 killed, painter restored and green"
