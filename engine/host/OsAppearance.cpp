@@ -25,7 +25,8 @@ std::string Valid(const std::string& s) {
   return (s == "light" || s == "dark") ? s : "";
 }
 
-#if !defined(_WIN32)
+// Only LinuxScheme shells out (iOS has no popen-able tools, and darwin reads AppKit).
+#if !defined(_WIN32) && !defined(__APPLE__)
 std::string RunCapture(const char* cmd) {
   FILE* p = popen(cmd, "r");
   if (!p) return "";
@@ -104,6 +105,7 @@ OsAppearanceWatcher::OsAppearanceWatcher(std::string initial, bool allowRealOs,
     const auto period = std::chrono::milliseconds(OsAppearanceHookActive() ? 100 : 1500);
     while (!stop_) {
 #ifdef __APPLE__
+      (void)allowRealOs;  // darwin/iOS always read the real OS through the cache
       if (!OsAppearanceHookActive()) DarwinRefreshOsScheme();
       const std::string now = OsAppearanceHookActive()
                                   ? ResolveSystemScheme(false)

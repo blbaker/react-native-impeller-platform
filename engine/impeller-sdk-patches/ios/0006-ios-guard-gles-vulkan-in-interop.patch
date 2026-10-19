@@ -1,0 +1,89 @@
+diff --git a/engine/src/flutter/impeller/toolkit/interop/impeller.cc b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+--- a/engine/src/flutter/impeller/toolkit/interop/impeller.cc
++++ b/engine/src/flutter/impeller/toolkit/interop/impeller.cc
+@@ -11,8 +11,10 @@
+ #include "flutter/fml/mapping.h"
+ #include "impeller/base/validation.h"
+ #include "impeller/geometry/scalar.h"
++#if IMPELLER_ENABLE_OPENGLES
+ #include "impeller/renderer/backend/gles/context_gles.h"
+ #include "impeller/renderer/backend/gles/texture_gles.h"
++#endif  // IMPELLER_ENABLE_OPENGLES
+ #include "impeller/renderer/context.h"
+ #include "impeller/toolkit/interop/color_filter.h"
+ #include "impeller/toolkit/interop/color_source.h"
+@@ -75,7 +77,9 @@
+ DEFINE_PEER_GETTER(Path, ImpellerPath);
+ DEFINE_PEER_GETTER(PathBuilder, ImpellerPathBuilder);
+ DEFINE_PEER_GETTER(Surface, ImpellerSurface);
++#if IMPELLER_ENABLE_VULKAN
+ DEFINE_PEER_GETTER(SwapchainVK, ImpellerVulkanSwapchain);
++#endif  // IMPELLER_ENABLE_VULKAN
+ DEFINE_PEER_GETTER(Texture, ImpellerTexture);
+ DEFINE_PEER_GETTER(TypographyContext, ImpellerTypographyContext);
+ 
+@@ -211,7 +215,7 @@
+       ->GetInfo(*out_vulkan_info);
+ #else   // IMPELLER_ENABLE_VULKAN
+   VALIDATION_LOG << "Vulkan not available.";
+-  return nullptr;
++  return false;
+ #endif  // IMPELLER_ENABLE_VULKAN
+ }
+ 
+@@ -244,13 +248,22 @@
+ IMPELLER_EXTERN_C
+ ImpellerSurface ImpellerVulkanSwapchainAcquireNextSurfaceNew(
+     ImpellerVulkanSwapchain swapchain) {
++#if IMPELLER_ENABLE_VULKAN
+   return GetPeer(swapchain)->AcquireNextSurface().Leak();
++#else   // IMPELLER_ENABLE_VULKAN
++  VALIDATION_LOG << "Vulkan not available.";
++  return nullptr;
++#endif  // IMPELLER_ENABLE_VULKAN
+ }
+ 
+ IMPELLER_EXTERN_C
+ void ImpellerVulkanSwapchainSetSize(ImpellerVulkanSwapchain swapchain,
+                                     const ImpellerISize* size) {
++#if IMPELLER_ENABLE_VULKAN
+   GetPeer(swapchain)->SetSize(ToImpellerType(*size));
++#else   // IMPELLER_ENABLE_VULKAN
++  VALIDATION_LOG << "Vulkan not available.";
++#endif  // IMPELLER_ENABLE_VULKAN
+ }
+ 
+ IMPELLER_EXTERN_C ImpellerDisplayListBuilder
+@@ -678,6 +691,7 @@
+     return nullptr;
+   }
+ 
++#if IMPELLER_ENABLE_OPENGLES
+   const auto& impeller_context_gl =
+       impeller::ContextGLES::Cast(*impeller_context);
+   const auto& reactor = impeller_context_gl.GetReactor();
+@@ -703,6 +717,10 @@
+   return Create<Texture>(impeller::Context::BackendType::kOpenGLES,
+                          std::move(texture))
+       .Leak();
++#else   // IMPELLER_ENABLE_OPENGLES
++  VALIDATION_LOG << "OpenGLES not available.";
++  return nullptr;
++#endif  // IMPELLER_ENABLE_OPENGLES
+ }
+ 
+ IMPELLER_EXTERN_C
+@@ -723,9 +741,13 @@
+     VALIDATION_LOG << "Can only fetch the texture handle of an OpenGL texture.";
+     return 0u;
+   }
++#if IMPELLER_ENABLE_OPENGLES
+   return TextureGLES::Cast(*interop_texture->GetTexture())
+       .GetGLHandle()
+       .value_or(0u);
++#else   // IMPELLER_ENABLE_OPENGLES
++  return 0u;
++#endif  // IMPELLER_ENABLE_OPENGLES
+ }
+ 
+ IMPELLER_EXTERN_C
