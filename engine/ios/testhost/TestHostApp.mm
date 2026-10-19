@@ -1,6 +1,8 @@
 // iOS Phase 1 test host: app + scene delegate and the --test dispatch.
 #import "TestHost.h"
 
+#include <unistd.h>
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -85,6 +87,16 @@ static UIViewController* MakeTest(const std::string& name) {
 
 int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) gArgs.emplace_back(argv[i]);
+  // --log-file=1: stdout and stderr to Documents/testhost.log. For launches a
+  // gate does not make itself (XCUITest launches the app), where simctl's
+  // --stdout capture is not available.
+  if (TestArg("log-file") == "1") {
+    NSString* path = [TestDocumentsDir() stringByAppendingPathComponent:@"testhost.log"];
+    if (std::freopen(path.fileSystemRepresentation, "w", stdout)) {
+      setvbuf(stdout, nullptr, _IOLBF, 0);
+      dup2(fileno(stdout), STDERR_FILENO);
+    }
+  }
   @autoreleasepool {
     return UIApplicationMain(argc, argv, nil, NSStringFromClass([TestHostAppDelegate class]));
   }
