@@ -44,6 +44,7 @@ set(_E ${CMAKE_SOURCE_DIR})
 add_library(rni_ios_engine STATIC
   ${_E}/ios/RNIEngine.mm
   ${_E}/ios/RNIInputIOS.mm
+  ${_E}/ios/RNITextInputView.mm
   ${_E}/ios/GlAbsentIOS.cpp
   ${_E}/host/FrameTimings.cpp ${_E}/host/FrameScheduler.cpp ${_E}/host/FrameItem.cpp
   ${_E}/host/RecordNoGl.cpp ${_E}/host/AnimRowProbe.cpp ${_E}/host/MemoryPressure.cpp
@@ -58,9 +59,10 @@ add_library(rni_ios_engine STATIC
   ${_E}/modules/CryptoGlobal.cpp ${_E}/modules/ExpoConstants.cpp ${_E}/modules/ExpoFetch.cpp
   # Notifications answers "unavailable" on iOS (no backend yet).
   ${_E}/modules/NotificationsNull.cpp
-  ${_E}/fabric/FabricHost.cpp ${_E}/fabric/ComponentRegistry.cpp ${_E}/fabric/LayoutAnimations.cpp
+  ${_E}/fabric/FabricHost.cpp ${_E}/fabric/FabricHostTextEdit.cpp ${_E}/fabric/ComponentRegistry.cpp ${_E}/fabric/LayoutAnimations.cpp
   ${_E}/fabric/ExpoBlurShadowNode.cpp ${_E}/fabric/platform/impeller/PlatformColorTable.cpp
   ${_E}/scenegraph/SceneGraph.cpp ${_E}/scenegraph/SceneGraphContextLoss.cpp
+  ${_E}/scenegraph/SceneGraphTextInputHost.cpp
   ${_E}/scenegraph/TextureRegistry.cpp ${_E}/scenegraph/ExternalTexturePaint.cpp
   ${_E}/scenegraph/PlatformViewRecord.cpp ${_E}/scenegraph/SnapshotController.cpp
   ${_E}/scenegraph/SnapshotRecord.cpp ${_E}/scenegraph/ImageEncode.cpp
@@ -105,7 +107,7 @@ foreach(_f SvgPath SvgDash)
     "-include" "${_E}/scenegraph/DrawOpHook.h")
 endforeach()
 set_source_files_properties(${_E}/ios/RNIEngine.mm ${_E}/ios/RNIInputIOS.mm
-  PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  ${_E}/ios/RNITextInputView.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_include_directories(rni_ios_engine PRIVATE
   ${_E} "${RN_ROOT}/React" "${RN_ROOT}/React/FBReactNativeSpec")
 target_include_directories(rni_ios_engine SYSTEM PRIVATE "${RNI_IOS_SDK_DIR}/include")

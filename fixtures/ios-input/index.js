@@ -32,6 +32,11 @@ function IosInput() {
       />
       <TextInput
         value={value}
+        // Plain keys only: the gate taps lowercase keys and wants exactly what
+        // it typed (RN's iOS defaults would capitalise and autocorrect).
+        autoCapitalize="none"
+        autoCorrect={false}
+        spellCheck={false}
         onFocus={() => console.log('ios-input focus=1')}
         onChangeText={v => {
           console.log('ios-input value=' + JSON.stringify(v));

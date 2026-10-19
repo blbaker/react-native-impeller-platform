@@ -82,16 +82,30 @@ While attached, `RNIEngine` takes the view's input (`engine/ios/RNIInputIOS.mm`)
   windowed host's order: down is `beginTouchCapture` + `focusTextInputAt`, move
   is `dragTextSelection` or `dispatchCapturedMove`, up is `endTouchCapture` +
   `endTextSelectionDrag`.
-- **Keyboard.** A hidden `UIView <UIKeyInput>` subview becomes first responder
-  when a press focuses a `TextInput`, which brings up the system keyboard, and
-  resigns when focus leaves (checked every frame, so a JS `blur()` also closes
-  it). `insertText:` becomes `KeyAction::InsertChar` per Unicode scalar (`"\n"` is
-  `Submit`), `deleteBackward` becomes `Backspace`. The engine's edit buffer is the
-  only buffer.
+- **Keyboard.** A hidden `UITextInput` view (`engine/ios/RNITextInputView.mm`)
+  becomes first responder when a press focuses a `TextInput`, and resigns when
+  focus leaves (checked every frame, so a JS `blur()` also closes it). The
+  field's props configure the keyboard: `autoCapitalize`, `autoCorrect`,
+  `spellCheck`, `keyboardType`, `returnKeyType`, `keyboardAppearance`,
+  `enablesReturnKeyAutomatically` and `secureTextEntry`, mapped as RN's own
+  iOS `TextInput` maps them.
+- **Editing by range.** The view keeps a copy of the field's text and selection
+  in UTF-16, which is how UIKit counts. That lets the keyboard read the text
+  around the caret, and autocorrect, predictive text and marked text (IME
+  composition) work. Every keyboard edit is applied to the copy and sent to the
+  engine as one range replace (`FabricHost::replaceTextInputRange`), which fires
+  `onChange` and `onSelectionChange` as a keystroke does. Text being composed
+  is ordinary text in the engine's buffer until it's confirmed, so JS sees it
+  as it's typed, as with RN's own iOS `TextInput`. Changes the engine makes on
+  its own (a submit, a JS value update, focus moving to another field) come back
+  to the copy each frame, and the keyboard is told. Never during a composition.
+- **Return** goes to the engine as a key, so `submitBehavior` decides between
+  submitting and a new line, as on desktop. While text is marked, Return
+  confirms the composition instead.
 
-Plain keys only, so far: no marked text (IME), autocorrect, autocapitalisation,
-predictive text or selection UI. Those need `UITextInput`, and are switched off
-on the proxy until then rather than half-working.
+Not done yet: the composing text is not underlined, the keyboard gets no
+selection rectangles (no loupe or selection handles), and the caret rectangle
+the keyboard positions against is the field's box at the caret's x.
 
 ## Inputs
 
@@ -122,6 +136,7 @@ bash tools/hermes-build-ios.sh         # once; needs engine/rn npm install
 bash tools/ci-metal-ios-sim.sh         # any gate
 bash tools/ci-ios-sim.sh               # M1: builds the engine (librni_ios_all.a) first
 bash tools/ci-ios-input.sh             # real UIKit taps and keyboard keys (XCUITest)
+bash tools/ci-ios-text-input.sh        # autocorrect and Japanese composition (XCUITest)
 ```
 
 From linux, point the same commands at a Mac over ssh:
@@ -152,6 +167,14 @@ writes a `.xctestrun` by hand (`man 5 xcodebuild.xctestrun`), and runs
 `IOS_INPUT_TEST=textfield` runs the same test against a plain `UITextField`,
 which tells "the engine drops keys" apart from "the simulator delivers none".
 
+`tools/ci-ios-text-input.sh` uses the same machinery for edits the keyboard
+makes by range (`fixtures/ios-text-input`). In a field with RN's default
+autocorrect it types `teh `, and the keyboard's autocorrection must reach JS
+as `the `. The same keys in an `autoCorrect={false}` field must stay `teh `,
+which proves the field's props reach the keyboard. In a third field it switches
+to the Japanese romaji keyboard, types `nihonn` and confirms. The engine must receive the marked text while composing,
+JS must see kana before the confirm, and the final value must be `にほん`.
+
 ## Simulator facts the gates depend on
 
 - `simctl launch --stdout=<file>` stays empty when the file is under
@@ -172,6 +195,13 @@ which tells "the engine drops keys" apart from "the simulator delivers none".
   XCUITest reports the keys as not hittable (`Computed hit point {-1, -1}`). The
   UI test taps its "Continue" button. The `DidShowContinuousPathIntroduction`
   preference does not suppress it on iOS 26.3.
+- Keyboards set with `defaults write -g AppleKeyboards` on a booted simulator
+  never reach the keyboard. The text-input gate writes them, then reboots the
+  simulator once.
+- On a notch iPhone the globe ("Next keyboard") key sits in the strip under the
+  keyboard, outside `app.keyboards` in XCUITest. Search `app.buttons`.
+- Romaji: a single trailing `n` stays a Latin `n` when the composition is
+  confirmed (`にほn`). `ん` at the end needs `nn`.
 
 ## Not done
 
@@ -179,8 +209,8 @@ which tells "the engine drops keys" apart from "the simulator delivers none".
   device` says so by name.
 - A raster thread for the iOS host (RECORD and RASTER share the main thread).
 - `Linking.openURL`, TLS, and image upload on an IO thread (GL-only on desktop).
-- `UITextInput` (IME and marked text, autocorrect, selection UI, the caret rect
-  the keyboard positions against), hardware keyboards (`pressesBegan`), moving
+- Selection UI (loupe, handles, edit menu), an underline for composing text, a
+  per-glyph caret rectangle, hardware keyboards (`pressesBegan`), moving
   content above the keyboard, multi-touch, VoiceOver. iOS 16+ also shows a paste-consent alert when an app
   reads another app's pasteboard; the Clipboard module's `getString` will hit it,
   as RN's does.

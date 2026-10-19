@@ -7,12 +7,13 @@
 // dispatchCapturedMove + dragTextSelection; Up -> endTouchCapture +
 // endTextSelectionDrag. It never cancels or delays UIKit's own touch delivery.
 //
-// Keyboard: a hidden UIView <UIKeyInput> becomes first responder when a press
-// focuses a TextInput, which brings up the system keyboard, and resigns when
-// focus leaves. insertText -> KeyAction::InsertChar per Unicode scalar
-// ("\n" -> Submit), deleteBackward -> Backspace. Plain keys only: no marked text
-// (IME), autocorrect, autocapitalisation or selection UI yet (UITextInput is the
-// next step), so those traits are switched off rather than half-working.
+// Keyboard: a hidden UITextInput view (RNITextInputView.h) becomes first
+// responder when a press focuses a TextInput, which brings up the system
+// keyboard configured from the field's props (autoCapitalize, autoCorrect,
+// keyboardType, returnKeyType, ...), and resigns when focus leaves. The full
+// protocol gives the keyboard the text around the caret, so autocorrect and
+// marked text (IME composition) work; every edit reaches the engine as a range
+// replace.
 // All main thread.
 #pragma once
 
