@@ -36,10 +36,13 @@ ios_build_testhost engine || { echo "IOS_SIM_FAIL (test host build)"; exit 1; }
 ios_sim_up || { echo "IOS_SIM_FAIL (simulator)"; exit 1; }
 
 LOG="$IOS_WORK/app.log"
-ios_launch "$LOG" engine || { echo "IOS_SIM_FAIL (launch)"; exit 1; }
 if [ "${IOS_SIM_SHOT_EARLY:-0}" = 1 ]; then
-  :   # mutant: screenshot as soon as the app process is up, no idle marker
+  # mutant: screenshot as soon as the app process is up, no first-frame wait.
+  # The engine's first attach is held 4 s (a slow start), so the missing wait
+  # is caught every run, not only when the screenshot wins the race.
+  ios_launch "$LOG" engine --attach-delay-ms=4000 || { echo "IOS_SIM_FAIL (launch)"; exit 1; }
 else
+  ios_launch "$LOG" engine || { echo "IOS_SIM_FAIL (launch)"; exit 1; }
   ios_wait_log "$LOG" 'rni-ios: engine first_frame ' 60 || bad B "no first frame in 60 s: $(tail -3 "$LOG" | tr '\n' ' ')"
   ios_wait_log "$LOG" 'testhost: engine presented=(1[2-9][0-9]|[2-9][0-9][0-9])' 20 \
     || bad F "presents stopped: $(grep 'engine presented=' "$LOG" | tail -1)"
