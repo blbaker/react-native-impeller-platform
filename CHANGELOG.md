@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.1.0...v0.2.0) (2026-10-19)
+
+
+### Features
+
+* **ios:** iOS branch of engine/CMakeLists.txt, Hermes for iOS, docs ([74c8a35](https://github.com/blbaker/react-native-impeller-platform/commit/74c8a3534be9fbaa602aec6ad4c3e977384f7116))
+* **ios:** iOS surface primitives with simulator gates ([a92e1ee](https://github.com/blbaker/react-native-impeller-platform/commit/a92e1eeb2967bb84d055156cb80795ff0d27e78d))
+* **ios:** iOS surface primitives with simulator gates ([14c96c1](https://github.com/blbaker/react-native-impeller-platform/commit/14c96c1dad53d643e1c38636bf1aab9046380f16))
+* **ios:** the engine for iOS and RNIEngine, its host API ([365f65f](https://github.com/blbaker/react-native-impeller-platform/commit/365f65ffc6c84917d08bf8e5211d3d0548ee3eaf))
+* **ios:** the engine on iOS, RNIEngine, and M1 in the simulator ([0a65221](https://github.com/blbaker/react-native-impeller-platform/commit/0a652214068bf71b6e194bf47e26f0ee1f96ffd2))
+* publish the Android custom Impeller SDK and fetch it ([8a67bd2](https://github.com/blbaker/react-native-impeller-platform/commit/8a67bd2a16f206b712e808ee921ca73ff149c161))
+
+
+### Bug Fixes
+
+* compile ResizeProbe.cpp unconditionally ([71038f2](https://github.com/blbaker/react-native-impeller-platform/commit/71038f2ceb757e0190118f16ad1abc4ca4a8b3e9))
+* **darwin:** load the engine's dylibs through [@rpath](https://github.com/rpath) so a standard .app runs it ([4f01a09](https://github.com/blbaker/react-native-impeller-platform/commit/4f01a09c6265b8b33396b18fedc99bad64c5ac99))
+* **darwin:** load the engine's dylibs through [@rpath](https://github.com/rpath) so a standard .app runs it ([6ff1967](https://github.com/blbaker/react-native-impeller-platform/commit/6ff1967d5d63ec515009bc3c51fa8be3e55662b6))
+* **darwin:** ship Hermes as a flat libhermesvm.dylib ([e21fdd2](https://github.com/blbaker/react-native-impeller-platform/commit/e21fdd2e41c3d2f729e06fb948fcaded59c3730c))
+* **darwin:** ship Hermes as a flat libhermesvm.dylib ([71fc7dd](https://github.com/blbaker/react-native-impeller-platform/commit/71fc7ddec25e798271da3cb52fbe332801589a87))
+
 ## [0.1.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.0.1...v0.1.0) (2026-10-17)
 
 
