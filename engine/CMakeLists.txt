@@ -344,11 +344,13 @@ add_executable(rn-impeller
   modules/NotificationsAppName.cpp
   ${RNI_NOTIFICATIONS_BACKEND}
   fabric/FabricHost.cpp
+  fabric/FabricHostTextEdit.cpp
   fabric/ComponentRegistry.cpp
   fabric/LayoutAnimations.cpp
   fabric/ExpoBlurShadowNode.cpp
   scenegraph/SceneGraph.cpp
   scenegraph/SceneGraphContextLoss.cpp
+  scenegraph/SceneGraphTextInputHost.cpp
   # FP-42: external textures (Flutter TextureRegistry + TextureLayer).
   scenegraph/TextureRegistry.cpp
   scenegraph/ExternalTexturePaint.cpp

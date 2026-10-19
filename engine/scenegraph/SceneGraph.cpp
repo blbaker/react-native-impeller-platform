@@ -911,9 +911,22 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       // Style audit item 11: secureTextEntry lives on the iOS TextInputProps'
       // traits, not on BaseTextInputProps.
       node.tiSecure = false;
+      node.tiKeyboard = TextInputKeyboardTraits{};
       if (const auto* itp = dynamic_cast<const react::TextInputProps*>(tp)) {
         node.tiSecure = itp->traits.secureTextEntry;
+        // iOS host keyboard: the traits UITextInputTraits needs.
+        const auto& tr = itp->traits;
+        auto& kb = node.tiKeyboard;
+        kb.autoCapitalize = (int)tr.autocapitalizationType;
+        kb.autoCorrect = tr.autoCorrect.has_value() ? (*tr.autoCorrect ? 1 : 0) : -1;
+        kb.spellCheck = tr.spellCheck.has_value() ? (*tr.spellCheck ? 1 : 0) : -1;
+        kb.keyboardType = (int)tr.keyboardType;
+        kb.returnKeyType = (int)tr.returnKeyType;
+        kb.keyboardAppearance = (int)tr.keyboardAppearance;
+        kb.enablesReturnKeyAutomatically = tr.enablesReturnKeyAutomatically;
       }
+      node.tiKeyboard.secure = node.tiSecure;
+      node.tiKeyboard.multiline = tp->multiline;
       node.tiAlignVertical =
           tp->paragraphAttributes.textAlignVertical.has_value()
               ? (int)*tp->paragraphAttributes.textAlignVertical

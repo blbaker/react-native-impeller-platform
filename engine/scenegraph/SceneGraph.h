@@ -37,6 +37,7 @@
 #include "scenegraph/RasterJobs.h"
 #include "scenegraph/Shadows.h"
 #include "scenegraph/TextInputStyle.h"
+#include "scenegraph/TextInputKeyboardTraits.h"
 
 namespace rni {
 
@@ -324,6 +325,9 @@ struct SceneNode {
   int tiAlignVertical{0};
   // ENG-24: RN's resolved submitBehavior (see textInputKeyTraits).
   int tiSubmitBehavior{2};
+  // iOS host keyboard: autoCapitalize, autoCorrect, keyboardType, ... (see
+  // textInputKeyboardTraits).
+  TextInputKeyboardTraits tiKeyboard;
   float tiPlaceholderColor[4]{0.6f, 0.6f, 0.6f, 1.0f};
   // item 4a: selection highlight fill. Defaults to rgba(51,144,255,0.35) (a
   // common desktop selection blue) when the field sets no `selectionColor`
@@ -792,6 +796,15 @@ class SceneGraph {
   // the field's padding. Multiline wraps at the box; single-line never wraps.
   bool textInputContentSize(facebook::react::Tag tag, float* w, float* h);
   std::string textInputValueFor(facebook::react::Tag tag);
+  // iOS host keyboard (SceneGraphTextInputHost.cpp). The field's keyboard
+  // traits, for the system keyboard. False for an unknown or non-text tag.
+  bool textInputKeyboardTraits(facebook::react::Tag tag, TextInputKeyboardTraits* out);
+  // The caret at UTF-8 `byteOffset` of `tag`'s displayed text, in layout
+  // points (hit-test coordinates): x from the same glyph boundaries the
+  // painted caret uses, y and height the field's box. For a host keyboard's
+  // candidate and autocorrect UI. False for an unknown or non-text tag.
+  bool textInputCaretRect(facebook::react::Tag tag, size_t byteOffset, float* x, float* y,
+                          float* w, float* h);
   // The caret index within the focused field's edit buffer. Returns 0 when the
   // tag is not the focused field (an unfocused field paints no caret). Exposed
   // so a gate can assert the caret ADVANCED with the typed characters, not just
