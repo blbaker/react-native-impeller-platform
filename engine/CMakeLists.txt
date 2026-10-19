@@ -249,6 +249,17 @@ endif()
 # The engine host binary. Name and CLI contract are FROZEN by P1 -- the npm
 # package's resolver and run-impeller both depend on both.
 # ---------------------------------------------------------------------------
+# Desktop notifications: one backend per OS (see modules/Notifications.h).
+# macOS needs the windowed build, the only one that links Apple's UI frameworks.
+if(WIN32)
+  set(RNI_NOTIFICATIONS_BACKEND modules/NotificationsWin.cpp)
+elseif(APPLE AND RNI_WITH_WINDOW)
+  set(RNI_NOTIFICATIONS_BACKEND modules/NotificationsDarwin.mm)
+elseif(UNIX AND NOT APPLE AND NOT ANDROID)
+  set(RNI_NOTIFICATIONS_BACKEND modules/NotificationsLinux.cpp)
+else()
+  set(RNI_NOTIFICATIONS_BACKEND modules/NotificationsNull.cpp)
+endif()
 add_executable(rn-impeller
   host/main.cpp
   host/Pixel.cpp
@@ -330,6 +341,8 @@ add_executable(rn-impeller
   modules/CryptoGlobal.cpp
   modules/ExpoConstants.cpp
   modules/ExpoFetch.cpp
+  modules/NotificationsAppName.cpp
+  ${RNI_NOTIFICATIONS_BACKEND}
   fabric/FabricHost.cpp
   fabric/ComponentRegistry.cpp
   fabric/LayoutAnimations.cpp
@@ -517,10 +530,12 @@ elseif(RNI_WITH_WINDOW)
       "-framework IOKit"
       "-framework CoreVideo"
       "-framework QuartzCore"
-      "-framework Metal")
+      "-framework Metal"
+      "-framework UserNotifications")
     # MetalSurface.mm holds strong ObjC members in a C++ struct: ARC only.
     set_source_files_properties("${CMAKE_SOURCE_DIR}/host/MetalSurface.mm"
       "${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm"
+      "${CMAKE_SOURCE_DIR}/modules/NotificationsDarwin.mm"
       PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   else()
     set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
@@ -617,8 +632,9 @@ if(WIN32)
   # NO ANGLE HERE ON PURPOSE. libEGL/libGLESv2 ship without import libraries,
   # so there is nothing to link; WinGLSurface resolves every EGL and GL entry
   # point with LoadLibrary/GetProcAddress. shlwapi/shell32 are for ShellExecuteW
-  # in LinkingManager.
-  target_link_libraries(rn-impeller PRIVATE shell32 shlwapi)
+  # in LinkingManager. runtimeobject is the WinRT activation API the toast
+  # backend (modules/NotificationsWin.cpp) uses.
+  target_link_libraries(rn-impeller PRIVATE shell32 shlwapi runtimeobject)
 elseif(APPLE)
   # ⛔ SAME REASON AS WINDOWS: DO NOT LINK EGL/GLESv2 BY NAME.
   # ANGLE's macOS redistribution is libEGL.dylib + libGLESv2.dylib with no
