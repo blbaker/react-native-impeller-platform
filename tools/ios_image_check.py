@@ -12,6 +12,12 @@
       4x MSAA has exactly 2 + 3 colors (ink, background, coverage 1/4, 2/4, 3/4;
       measured: readback colors=5, corner_levels=3). ci-metal.sh's 10 is for
       multi-colour fixtures. A plain rect has 2.
+  ios_image_check.py smoke <img.png> <geometry.js> <scale>
+      The iOS M1 fixture (fixtures/ios-smoke) as rendered: every box's (and child's)
+      centre is its exact color (+-8 per channel), the rounded box's corner pixel is
+      background, a background pixel is background, and the label band has ink.
+      Prints `smoke box_rgb_match=<0|1> boxes=<ok>/<n> corner_bg=<0|1> bg_ok=<0|1>
+      label_ink=<px> colors=<n>`; exit 0 only when all hold.
 """
 MIN_COLORS = 5
 import struct
@@ -127,9 +133,65 @@ def rrect(path, x, y, w, h, r):
     return 0 if ok else 1
 
 
+def hex_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def load_geometry(path):
+    text = open(path).read()
+    body = text.split("\nmodule.exports =", 1)[1].strip().rstrip(";").strip()
+    import json
+    return json.loads(body)
+
+
+def smoke(path, geometry_path, scale):
+    img = read_image(path)
+    iw, ih, bpp, rows = img
+    g = load_geometry(geometry_path)
+    near = lambda p, q: all(abs(p[k] - q[k]) <= 8 for k in range(3))
+    at = lambda x, y: px(img, min(iw - 1, int(x * scale)), min(ih - 1, int(y * scale)))
+    checks, details = [], []
+    for box in g["boxes"]:
+        ox, oy = box["x"], box["y"]
+        c = at(ox + box["width"] / 2, oy + box["height"] / 2)
+        if box.get("child"):  # probe the parent away from its child
+            c = at(ox + box["width"] - 10, oy + box["height"] - 10)
+        checks.append(near(c, hex_rgb(box["color"])))
+        details.append("%s=%s" % (box["id"], c))
+        ch = box.get("child")
+        if ch:
+            cc = at(ox + ch["x"] + ch["width"] / 2, oy + ch["y"] + ch["height"] / 2)
+            checks.append(near(cc, hex_rgb(ch["color"])))
+            details.append("%s=%s" % (ch["id"], cc))
+    bg = hex_rgb(g["background"])
+    corner_bg = all(near(at(b["x"] + 1, b["y"] + 1), bg) for b in g["boxes"] if b.get("radius"))
+    bg_ok = near(at(10, 760), bg)
+    lx, ly, lw, lh = g["label"]["inkBand"]
+    ink = 0
+    for y in range(int(ly * scale), int((ly + lh) * scale), 2):
+        for x in range(int(lx * scale), int((lx + lw) * scale), 2):
+            if sum(px(img, x, y)) < 200:
+                ink += 1
+    distinct = set()
+    for y in range(0, ih, 4):
+        r = rows[y]
+        for x in range(0, iw, 4):
+            distinct.add(bytes(r[x * bpp:x * bpp + 3]))
+    ok_boxes = sum(checks)
+    match = int(ok_boxes == len(checks))
+    ok = match and corner_bg and bg_ok and ink >= 50
+    print("smoke box_rgb_match=%d boxes=%d/%d corner_bg=%d bg_ok=%d label_ink=%d colors=%d size=%dx%d %s"
+          % (match, ok_boxes, len(checks), corner_bg, bg_ok, ink, len(distinct), iw, ih,
+             " ".join(details)))
+    return 0 if ok else 1
+
+
 def main(argv):
     if len(argv) == 8 and argv[1] == "rrect":
         return rrect(argv[2], *map(int, argv[3:8]))
+    if len(argv) == 5 and argv[1] == "smoke":
+        return smoke(argv[2], argv[3], float(argv[4]))
     print(__doc__)
     return 2
 

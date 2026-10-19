@@ -20,10 +20,14 @@ ios_begin cmake
 FAILS=()
 bad() { echo "IOS_CMAKE_GATE FAIL $1: $2"; FAILS+=("$1"); }
 export PATH="/opt/homebrew/bin:$PATH"   # cmake
+# FetchContent sources are cached across runs; per generator, because each
+# dependency's sub-build is generator-specific (tools/engine-build-ios.sh's
+# Ninja cache cannot be reused by Xcode).
 B="$IOS_WORK/build"
 
 cmake -S engine -B "$B" -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.1 > "$IOS_WORK/configure.log" 2>&1
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.1 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DFETCHCONTENT_BASE_DIR="$HOME/Library/Caches/rni-ios-ci/fetchcontent-xcode" > "$IOS_WORK/configure.log" 2>&1
 RC=$?
 grep -E 'rni-ios:|CMake Error|FATAL' "$IOS_WORK/configure.log"
 ios_keep "$IOS_WORK/configure.log"
@@ -37,8 +41,12 @@ grep -q 'rni-ios: impeller_sdk=.*impeller-sdk-ios-simulator-arm64' "$IOS_WORK/co
 grep -q 'rni-ios: hermes=.*hermesvm.xcframework' "$IOS_WORK/configure.log" || bad C "no Hermes xcframework reported"
 
 echo "== N: Metal only =="
-HITS=$(grep -ilE 'angle|glfw|libGLESv2|libEGL' "$B/CMakeCache.txt" "$B"/*.xcodeproj/project.pbxproj 2> /dev/null || true)
-[ -z "$HITS" ] || bad N "ANGLE/GLFW/GLES referenced in: $HITS"
+# Tokens a GL/ANGLE/GLFW build would leave (paths and library names), not the
+# bare word: ReactCommon has Rectangle.h and friends.
+HITS=$(cat "$B/CMakeCache.txt" "$B"/*.xcodeproj/project.pbxproj 2> /dev/null \
+  | grep -oE 'angle-(darwin|win)[a-z0-9-]*|libEGL[a-z.]*|libGLESv2[a-z.]*|glfw[0-9]?[a-z_./-]*|third_party/khronos|-lGLESv2|-lEGL' \
+  | sort -u | tr '\n' ' ')
+[ -z "$HITS" ] || bad N "ANGLE/GLFW/GLES referenced: $HITS"
 echo "angle/glfw/gles references: ${HITS:-none}"
 
 echo "== B: build rni_ios_platform =="

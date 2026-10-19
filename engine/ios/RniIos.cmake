@@ -86,3 +86,10 @@ target_link_libraries(rni_ios_platform PUBLIC
 add_library(rni_ios_hermes INTERFACE)
 target_include_directories(rni_ios_hermes SYSTEM INTERFACE "${_rni_hermes_root}/include")
 target_link_libraries(rni_ios_hermes INTERFACE "${RNI_IOS_HERMES_XCFRAMEWORK}")
+
+# The engine itself (ReactCommon + runtime + Fabric + scene graph) for the iOS
+# host: engine/ios/RniIosEngine.cmake. OFF builds only the platform library.
+option(RNI_IOS_WITH_ENGINE "Build rni_ios_engine (the full engine) for iOS" ON)
+if(RNI_IOS_WITH_ENGINE)
+  include(${CMAKE_SOURCE_DIR}/ios/RniIosEngine.cmake)
+endif()
