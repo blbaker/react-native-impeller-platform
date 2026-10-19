@@ -23,8 +23,12 @@
 
 #include <cstdio>
 #include <cwctype>
+#include <condition_variable>
+#include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 namespace rni::notifications {
@@ -87,16 +91,67 @@ class WinBackend : public Backend {
     for (wchar_t c : name) id += (iswalnum(c) || c == L'.' || c == L'-') ? c : L'_';
     displayName_ = name;
     appId_ = id;
+    worker_ = std::thread([this] { run(); });
+  }
+
+  ~WinBackend() override {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      stop_ = true;
+    }
+    wake_.notify_one();
+    worker_.join();
   }
 
   void requestPermission(Done done) override {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (!ensure()) return done({"unavailable", unavailable_});
-    done(setting());
+    post([this, done = std::move(done)] {
+      if (!ensure()) return done({"unavailable", unavailable_});
+      done(setting());
+    });
   }
 
   void show(const Request& request, Done done) override {
-    std::lock_guard<std::mutex> lock(mu_);
+    post([this, request, done = std::move(done)] { showNow(request, done); });
+  }
+
+ private:
+  void post(std::function<void()> task) {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      tasks_.push_back(std::move(task));
+    }
+    wake_.notify_one();
+  }
+
+  // ⛔ ONE THREAD OWNS THE APARTMENT AND EVERY WinRT OBJECT IN IT.
+  // Measured: with the objects created on the JS thread and released by
+  // ReactHost teardown on the main thread, after the JS thread had exited,
+  // the engine died with an access violation on every run. Here the objects
+  // are created, used and released on this thread, and the apartment is left
+  // only after the last one is gone.
+  void run() {
+    const HRESULT init = RoInitialize(RO_INIT_MULTITHREADED);
+    for (;;) {
+      std::function<void()> task;
+      {
+        std::unique_lock<std::mutex> lock(mu_);
+        wake_.wait(lock, [this] { return stop_ || !tasks_.empty(); });
+        if (stop_) break;  // queued calls are dropped unanswered at shutdown
+        task = std::move(tasks_.front());
+        tasks_.pop_front();
+      }
+      task();
+    }
+    {
+      std::lock_guard<std::mutex> lock(state_->mu);
+      state_->live.clear();
+    }
+    factory_.Reset();
+    notifier_.Reset();
+    if (SUCCEEDED(init)) RoUninitialize();
+  }
+
+  void showNow(const Request& request, const Done& done) {
     if (!ensure()) return done({"unavailable", unavailable_});
     // Show() returns S_OK even when Windows will discard the toast, so a
     // turned-off setting is reported here instead of a false "shown".
@@ -158,7 +213,6 @@ class WinBackend : public Backend {
     done({"shown", ""});
   }
 
- private:
   // Windows has no prompt to show; the answer is the user's current setting.
   Result setting() {
     wun::NotificationSetting value = wun::NotificationSetting_Enabled;
@@ -176,12 +230,9 @@ class WinBackend : public Backend {
     }
   }
 
-  // Called under mu_. Retries on every call until it succeeds once.
+  // Worker thread only. Retries on every call until it succeeds once.
   bool ensure() {
     if (notifier_) return true;
-    // S_FALSE (already initialised) and RPC_E_CHANGED_MODE (an STA thread)
-    // both leave WinRT usable on this thread.
-    RoInitialize(RO_INIT_MULTITHREADED);
     if (!registerAppId()) return false;
     SetCurrentProcessExplicitAppUserModelID(appId_.c_str());
     ComPtr<wun::IToastNotificationManagerStatics> manager;
@@ -233,6 +284,10 @@ class WinBackend : public Backend {
   std::string unavailable_;
   ComPtr<wun::IToastNotificationFactory> factory_;
   ComPtr<wun::IToastNotifier> notifier_;
+  std::condition_variable wake_;
+  std::deque<std::function<void()>> tasks_;
+  bool stop_ = false;
+  std::thread worker_;
 };
 
 }  // namespace
