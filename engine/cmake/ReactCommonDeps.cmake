@@ -98,7 +98,9 @@ endif()
 # failed the build. On a user's machine that engine would die before main().
 # Windows builds without TLS (the branch below), the same on every machine,
 # until shipping OpenSSL and a CA story for Windows is a deliberate decision.
-if(NOT ANDROID AND NOT WIN32)
+# iOS: find_package would resolve the Mac's own (Homebrew, macOS-arch) OpenSSL
+# for an iOS target; iOS builds without TLS for now, like Android.
+if(NOT ANDROID AND NOT WIN32 AND NOT IOS)
   find_package(OpenSSL QUIET)
 endif()
 if(OpenSSL_FOUND)
@@ -106,7 +108,7 @@ if(OpenSSL_FOUND)
   add_library(rc_ssl INTERFACE)
   target_link_libraries(rc_ssl INTERFACE OpenSSL::SSL OpenSSL::Crypto)
   target_compile_definitions(rc_ssl INTERFACE RNI_WITH_TLS=1)
-elseif(WIN32 OR ANDROID)
+elseif(WIN32 OR ANDROID OR IOS)
   # The source fallback below is a Unix config+make build cmd.exe cannot run
   # (and on android the NDK cross config is not wired; SC-41 probes need no TLS).
   # Build without TLS: NetworkingModule refuses https:// with a clear error.

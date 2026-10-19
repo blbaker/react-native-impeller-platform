@@ -38,3 +38,4 @@ engine/third_party/impeller-sdk-custom-parity*/
 engine/build-android-*.log
 # fetched by tools/sdk-fetch-win.sh, never committed
 engine/third_party/impeller-sdk-win/
+engine/build-ios-*
