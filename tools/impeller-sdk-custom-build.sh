@@ -6,7 +6,7 @@
 # engine/third_party/impeller-sdk-custom. The stock engine/third_party/impeller-sdk
 # is never touched.
 #   bash tools/impeller-sdk-custom-build.sh [dest]
-# Env: RNI_SDK_TARGET host (default) or android-arm64
+# Env: RNI_SDK_TARGET host (default), android-arm64 or android-x64
 #      RNI_SDK_WORK  checkout dir (default ~/projects/_ref/sc32, ~10 GB)
 #      RNI_SDK_PATCH apply this patch instead of the committed ones
 #      RNI_SDK_POST_PATCH  shell command run in the patched interop dir (mutants)
@@ -21,11 +21,19 @@ OUT=rni_host_debug
 GN_EXTRA=()
 ANDROID_DEPS=False
 SYNC_KEY="$SHA"
-if [ "${RNI_SDK_TARGET:-host}" = android-arm64 ]; then
-  # Cross build on the linux box; the NDK comes from the android deps.
-  GN_EXTRA=(--android --android-cpu arm64); OUT=rni_android_debug_arm64
-  ANDROID_DEPS=True; SYNC_KEY="$SHA android"
-fi
+case "${RNI_SDK_TARGET:-host}" in
+  android-arm64)
+    # Cross build on the linux box; the NDK comes from the android deps.
+    GN_EXTRA=(--android --android-cpu arm64); OUT=rni_android_debug_arm64
+    ANDROID_DEPS=True; SYNC_KEY="$SHA android"
+    ;;
+  android-x64)
+    # Same android deps as arm64 (one gclient sync covers both cpus); the
+    # emulator-only x86_64 engine build (never published to npm) links this.
+    GN_EXTRA=(--android --android-cpu x64); OUT=rni_android_debug_x64
+    ANDROID_DEPS=True; SYNC_KEY="$SHA android"
+    ;;
+esac
 case "$(uname -s)" in
   # Apple silicon: flutter's gn defaults --mac-cpu to x64.
   Darwin) [ "$ANDROID_DEPS" = True ] || { GN_EXTRA=(--mac-cpu arm64); OUT=rni_host_debug_arm64; }
