@@ -52,7 +52,7 @@ ios_on_mac_or_reexec() {
   fi
   # Only these knobs cross over; everything else a gate needs is in the tree.
   RNI_MAC_TREE="${RNI_MAC_TREE:-rni-ios}" \
-    RNI_MAC_ENV="IOS_DEVICE IOS_SETTLE IOS_KEEP_SIM RNI_IOS_SDK RNI_IOS_CI_DIR IOS_SIM_SHOT_EARLY" \
+    RNI_MAC_ENV="IOS_DEVICE IOS_SETTLE IOS_KEEP_SIM RNI_IOS_SDK RNI_IOS_CI_DIR IOS_SIM_SHOT_EARLY IOS_INPUT_TEST" \
     exec bash "$IOS_ROOT/tools/mac-run.sh" bash "$rel" "$@"
 }
 
@@ -96,7 +96,7 @@ ios_sdk_resolve() {
 #   TestHostEngine.mm, linked against librni_ios_all.a (tools/engine-build-ios.sh,
 #   RNI_IOS_ENGINE_LIB) instead of IOS_SRCS, hermesvm.framework embedded, and
 #   the fixture bundles in IOS_BUNDLES copied in as <name>.jsbundle.
-IOS_BUNDLES=(fixtures/ios-smoke/prebuilt/ios-smoke.bundle)
+IOS_BUNDLES=(fixtures/ios-smoke/prebuilt/ios-smoke.bundle fixtures/ios-input/prebuilt/ios-input.bundle)
 ios_build_testhost() {
   ios_sdk_resolve || return 1
   IOS_APP="$IOS_WORK/RniTestHost.app"

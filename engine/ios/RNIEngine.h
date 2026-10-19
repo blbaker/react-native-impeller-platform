@@ -10,7 +10,10 @@
 //   [e destroy];                  // tears everything down; the object is spent
 //
 // The view must be backed by a CAMetalLayer (+layerClass), e.g. RNIMetalLayerView
-// from host/MetalSurfaceIOS.h. All methods: main thread.
+// from host/MetalSurfaceIOS.h. All methods: main thread. While attached, the
+// engine takes the view's touches (a gesture recognizer that never cancels
+// UIKit's own delivery) and, when a TextInput is focused, the system keyboard
+// (a hidden first responder subview; plain keys, no IME yet).
 #pragma once
 
 #import <UIKit/UIKit.h>

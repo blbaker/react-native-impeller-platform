@@ -5,7 +5,8 @@
 #   M1  the oracle disagrees with the bundle (geometry.js's plain box turns green,
 #       the committed bundle still paints red) -> P: box_rgb_match=0
 #   M2  the screenshot is taken as soon as the app is up, without waiting for
-#       the engine's idle marker (IOS_SIM_SHOT_EARLY=1) -> P
+#       the engine's first frame (IOS_SIM_SHOT_EARLY=1; the engine's start is
+#       held 4 s so the race is lost every run) -> P
 #   M3  RNIEngine lays out in pixels (scale 1) instead of points -> P
 #   M4  RNIEngine never starts the surface -> B: no first frame
 #   M5  detach tears the session down, so re-attach boots a second one -> L
@@ -32,8 +33,8 @@ mut_apply "$ENG" '  s.session->StartSurface(s.appName, s.width, s.height, s.scal
   '  // MUTANT M4: the surface is never started'
 mut_expect M4 "$GATE" 'IOS_SIM_GATE FAIL B: no first frame'
 
-mut_apply "$ENG" '  _s->link.reset();
-  _s->surface.Release();' '  _s->link.reset();
+mut_apply "$ENG" '  [_s->input detach];
+  _s->surface.Release();' '  [_s->input detach];
   _s->surface.Release();
   _s->session.reset();  // MUTANT M5'
 mut_expect M5 "$GATE" 'IOS_SIM_GATE FAIL L: '

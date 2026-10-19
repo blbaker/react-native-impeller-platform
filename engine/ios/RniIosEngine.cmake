@@ -43,6 +43,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/RnSvg.cmake)
 set(_E ${CMAKE_SOURCE_DIR})
 add_library(rni_ios_engine STATIC
   ${_E}/ios/RNIEngine.mm
+  ${_E}/ios/RNIInputIOS.mm
   ${_E}/ios/GlAbsentIOS.cpp
   ${_E}/host/FrameTimings.cpp ${_E}/host/FrameScheduler.cpp ${_E}/host/FrameItem.cpp
   ${_E}/host/RecordNoGl.cpp ${_E}/host/AnimRowProbe.cpp ${_E}/host/MemoryPressure.cpp
@@ -101,7 +102,8 @@ foreach(_f SvgPath SvgDash)
   set_property(SOURCE "${_E}/svg/${_f}.cpp" APPEND PROPERTY COMPILE_OPTIONS
     "-include" "${_E}/scenegraph/DrawOpHook.h")
 endforeach()
-set_source_files_properties(${_E}/ios/RNIEngine.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+set_source_files_properties(${_E}/ios/RNIEngine.mm ${_E}/ios/RNIInputIOS.mm
+  PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_include_directories(rni_ios_engine PRIVATE
   ${_E} "${RN_ROOT}/React" "${RN_ROOT}/React/FBReactNativeSpec")
 target_include_directories(rni_ios_engine SYSTEM PRIVATE "${RNI_IOS_SDK_DIR}/include")

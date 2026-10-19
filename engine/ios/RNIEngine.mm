@@ -9,6 +9,7 @@
 //   Present. RECORD and RASTER both run on the main thread here (one thread,
 //   like headless); the desktop windowed pipeline's raster thread is later work.
 #import "ios/RNIEngine.h"
+#import "ios/RNIInputIOS.h"
 
 #include <cstdio>
 #include <fstream>
@@ -41,6 +42,7 @@ struct EngineState {
   ImpellerTypographyContext typography = nullptr;
   std::unique_ptr<rni::EngineSession> session;
   std::unique_ptr<rni::DisplayLinkIOS> link;
+  RNIInputBridge* input = nil;  // touches + keyboard (Phase 4 spike)
   int width = 0, height = 0;
   float scale = 1;
   bool destroyed = false;
@@ -127,6 +129,8 @@ struct EngineState {
     std::fflush(stdout);
     return NO;
   }
+  if (!s.input) s.input = [[RNIInputBridge alloc] initWithFabric:&s.session->fabricHost()];
+  [s.input attachToView:view];
   __weak RNIEngine* weakSelf = self;
   s.link = std::make_unique<rni::DisplayLinkIOS>([weakSelf](int64_t, int64_t, int64_t) {
     [weakSelf frame];
@@ -138,6 +142,7 @@ struct EngineState {
 - (void)frame {
   EngineState& s = *_s;
   if (!s.session) return;
+  [s.input syncFocus];
   int w = 0, h = 0;
   s.surface.SyncFromView(&w, &h);
   if (w > 0 && h > 0 && (w != s.width || h != s.height)) {
@@ -175,6 +180,7 @@ struct EngineState {
 - (void)detach {
   if (!_s) return;
   _s->link.reset();
+  [_s->input detach];
   _s->surface.Release();
 }
 
@@ -182,6 +188,7 @@ struct EngineState {
   if (!_s || _s->destroyed) return;
   [self detach];
   rni::gpu::RemoveGpuAvailabilityObservers();
+  _s->input = nil;  // holds a FabricHost*: gone before the session
   _s->session.reset();
   if (_s->typography) {
     rni::typography::Unbind(_s->typography);

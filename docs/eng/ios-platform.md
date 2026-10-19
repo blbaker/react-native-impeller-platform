@@ -73,6 +73,26 @@ the drawable, `Present`, inside a `rni::gpu::Section`. RECORD and RASTER both ru
 the main thread; the desktop windowed pipeline's raster thread is later work. An app
 links `librni_ios_all.a`, `libimpeller.a` and `hermesvm.framework` (embedded).
 
+## Touch and keyboard
+
+While attached, `RNIEngine` takes the view's input (`engine/ios/RNIInputIOS.mm`):
+
+- **Touch.** A gesture recognizer on the view (it never cancels or delays UIKit's
+  own touch delivery) forwards the first touch, in points, in the desktop
+  windowed host's order: down is `beginTouchCapture` + `focusTextInputAt`, move
+  is `dragTextSelection` or `dispatchCapturedMove`, up is `endTouchCapture` +
+  `endTextSelectionDrag`.
+- **Keyboard.** A hidden `UIView <UIKeyInput>` subview becomes first responder
+  when a press focuses a `TextInput`, which brings up the system keyboard, and
+  resigns when focus leaves (checked every frame, so a JS `blur()` also closes
+  it). `insertText:` becomes `KeyAction::InsertChar` per Unicode scalar (`"\n"` is
+  `Submit`), `deleteBackward` becomes `Backspace`. The engine's edit buffer is the
+  only buffer.
+
+Plain keys only, so far: no marked text (IME), autocorrect, autocapitalisation,
+predictive text or selection UI. Those need `UITextInput`, and are switched off
+on the proxy until then rather than half-working.
+
 ## Inputs
 
 No prebuilt Impeller SDK exists for iOS: flutter_infra publishes none, and
@@ -101,6 +121,7 @@ bash tools/impeller-sdk-ios-build.sh   # once; RNI_SDK_WORK=<synced engine check
 bash tools/hermes-build-ios.sh         # once; needs engine/rn npm install
 bash tools/ci-metal-ios-sim.sh         # any gate
 bash tools/ci-ios-sim.sh               # M1: builds the engine (librni_ios_all.a) first
+bash tools/ci-ios-input.sh             # real UIKit taps and keyboard keys (XCUITest)
 ```
 
 From linux, point the same commands at a Mac over ssh:
@@ -117,9 +138,19 @@ bash tools/mutation-verify-metal-ios-sim.sh
 command there. Without `RNI_MAC_HOST`, a gate started on linux exits 2.
 
 Each gate builds the test host (`engine/ios/testhost/`, one UIKit app that takes
-`--test=metal|vsync|gpu|settings|clipboard|engine`) with `xcrun clang++`, boots a fresh
+`--test=metal|vsync|gpu|settings|clipboard|engine|textfield`) with `xcrun clang++`, boots a fresh
 iPhone 16 simulator, runs, and deletes the simulator. The last run's log and
 screenshots stay in `~/Library/Caches/rni-ios-ci/artifacts/<gate>/` on the Mac.
+
+`tools/ci-ios-input.sh` needs input that a test cannot fake from inside the app,
+so it drives the simulator with XCUITest, still without an Xcode project
+(`tools/lib/ios-uitest.sh`): it copies Xcode's `XCTRunner.app` template, builds
+`engine/ios/testhost/uitests/RniInputUITests.m` into its `PlugIns/` with clang,
+writes a `.xctestrun` by hand (`man 5 xcodebuild.xctestrun`), and runs
+`xcodebuild test-without-building`. The UI test taps a `Pressable`, taps a
+`TextInput` and types on the software keyboard, key by key (`fixtures/ios-input`).
+`IOS_INPUT_TEST=textfield` runs the same test against a plain `UITextField`,
+which tells "the engine drops keys" apart from "the simulator delivers none".
 
 ## Simulator facts the gates depend on
 
@@ -136,6 +167,11 @@ screenshots stay in `~/Library/Caches/rni-ios-ci/artifacts/<gate>/` on the Mac.
   `com.apple.accessibility.reduce.motion.status` notification.
 - One grey shape under Impeller's 4x MSAA has exactly 5 colors (ink, background,
   three coverage levels), so the Metal gate asks for 5, not `ci-metal.sh`'s 10.
+- The first keyboard on a fresh simulator shows a "Slide to Type" tutorial card
+  over the keys. Taps on the keys then land on the card and nothing is typed;
+  XCUITest reports the keys as not hittable (`Computed hit point {-1, -1}`). The
+  UI test taps its "Continue" button. The `DidShowContinuousPathIntroduction`
+  preference does not suppress it on iOS 26.3.
 
 ## Not done
 
@@ -143,7 +179,9 @@ screenshots stay in `~/Library/Caches/rni-ios-ci/artifacts/<gate>/` on the Mac.
   device` says so by name.
 - A raster thread for the iOS host (RECORD and RASTER share the main thread).
 - `Linking.openURL`, TLS, and image upload on an IO thread (GL-only on desktop).
-- Text input, IME, VoiceOver. iOS 16+ also shows a paste-consent alert when an app
+- `UITextInput` (IME and marked text, autocorrect, selection UI, the caret rect
+  the keyboard positions against), hardware keyboards (`pressesBegan`), moving
+  content above the keyboard, multi-touch, VoiceOver. iOS 16+ also shows a paste-consent alert when an app
   reads another app's pasteboard; the Clipboard module's `getString` will hit it,
   as RN's does.
 - CI: the gates need a Mac with the iOS SDK built from a full engine checkout,

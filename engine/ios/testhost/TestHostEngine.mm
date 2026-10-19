@@ -55,6 +55,24 @@
   _engine.onFirstFrame = ^{
     TestLog("engine idle first_frame=1");
   };
+  // --attach-delay-ms=N holds the first attach (a slow engine start), so a gate
+  // that screenshots without waiting for the first frame always catches the
+  // blank screen (tools/mutation-verify-ios-sim.sh M2), instead of only when
+  // it happens to win the race.
+  const int delayMs = std::atoi(TestArg("attach-delay-ms").c_str());
+  if (delayMs > 0) {
+    TestLog("engine attach_delay_ms=%d", delayMs);
+    __weak EngineTestController* weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayMs * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+                     [weakSelf attachFirst];
+                   });
+  } else {
+    [self attachFirst];
+  }
+}
+
+- (void)attachFirst {
   const BOOL attached = [_engine attachToView:self.view];
   TestLog("engine attached=%d", attached);
   _watch = [CADisplayLink displayLinkWithTarget:self selector:@selector(watch:)];
