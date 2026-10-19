@@ -96,7 +96,8 @@ ios_sdk_resolve() {
 #   TestHostEngine.mm, linked against librni_ios_all.a (tools/engine-build-ios.sh,
 #   RNI_IOS_ENGINE_LIB) instead of IOS_SRCS, hermesvm.framework embedded, and
 #   the fixture bundles in IOS_BUNDLES copied in as <name>.jsbundle.
-IOS_BUNDLES=(fixtures/ios-smoke/prebuilt/ios-smoke.bundle fixtures/ios-input/prebuilt/ios-input.bundle)
+IOS_BUNDLES=(fixtures/ios-smoke/prebuilt/ios-smoke.bundle fixtures/ios-input/prebuilt/ios-input.bundle
+  fixtures/ios-text-input/prebuilt/ios-text-input.bundle)
 ios_build_testhost() {
   ios_sdk_resolve || return 1
   IOS_APP="$IOS_WORK/RniTestHost.app"
