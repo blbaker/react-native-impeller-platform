@@ -28,6 +28,9 @@ probe/build-out/
 probe/android/src/main/jniLibs/
 engine/third_party/impeller-sdk-custom/
 engine/third_party/impeller-sdk-custom-darwin/
+# iOS: built on a Mac by tools/impeller-sdk-ios-build.sh / hermes-build-ios.sh, never committed.
+engine/third_party/impeller-sdk-ios*/
+engine/third_party/hermes-ios/
 engine/third_party/impeller-sdk-custom-win/
 engine/third_party/impeller-sdk-custom-android/
 # Fetched by tools/sdk-fetch-custom.sh (or built by impeller-sdk-custom-build*.sh).
