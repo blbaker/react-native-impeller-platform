@@ -79,6 +79,7 @@
 #include "host/FrameTimings.h"
 #include "host/FrameItem.h"
 #include "host/FrameScheduler.h"
+#include "runtime/EngineSession.h"
 #if defined(__APPLE__)
 #include "host/DisplayLinkDarwin.h"
 #endif
@@ -688,14 +689,25 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
          pointScaleGiven ? " (--scale override)" : " (from framebuffer)");
   fflush(stdout);
 
-  rni::SceneGraph sceneGraph(surface.typography());
+  // The cursor conversion divides by this. Set from the SAME derived value the
+  // layout uses, and re-set on every resize below, so a click can never be
+  // converted with a scale the painter is no longer using.
+  surface.setPointScale(pointScale);
+  // EngineSession (engine/runtime/EngineSession.{h,cpp}) owns construction
+  // order and lifetime of SceneGraph, ReactHost and FabricHost -- the shared
+  // foundation also needed by the Android/iOS hosts. See its header for why
+  // construction is split in two: this constructor only builds SceneGraph
+  // and tells it the backend, so setRenderContext/printGpuBackend/the
+  // prewarm tour below (raster-thread-affine, windowed-only) can run before
+  // Boot() constructs ReactHost and FabricHost.
+  rni::EngineSession session(surface.typography(), gGpuBackend, gGpuPolicy);
   // ENG item 2. Wire the supersample render context (the surface's own
   // ImpellerContext — same GL sharegroup the offscreen FBO needs) and N. On
   // Android the offscreen path is compiled out, so these are inert there.
   // FP-14 fills the GL name pool here: a GL call, so on the raster thread.
-  sceneGraph.setGpuBackend(gGpuBackend, gGpuPolicy);  // FP-20
-  rasterizer.thread().PostSync([&] { sceneGraph.setRenderContext(surface.context()); });
-  sceneGraph.printGpuBackend();
+  rasterizer.thread().PostSync(
+      [&] { session.sceneGraph().setRenderContext(surface.context()); });
+  session.sceneGraph().printGpuBackend();
   // FP-34: the pipeline pre-warm tour, before the first frame (fonts are registered above).
   if (gPrewarm) {
     rni::RunPrewarmTour(surface, rasterizer.thread(), gGpuBackend, frameTimings);
@@ -703,27 +715,20 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     printf("rn-impeller: prewarm skipped=off\n");
     rni::programcount::SetPhase(rni::programcount::Phase::kFrames);
   }
-  sceneGraph.setSupersample(supersampleRnsvg);
+  // parity item 24: a Metro-served bundle is debuggable (React Native DevTools).
+  rni::EngineSession::Options sessionOptions;
+  sessionOptions.withInspector = sourceUrl.rfind("http://", 0) == 0;
+  sessionOptions.supersampleRnsvg = supersampleRnsvg;
+  sessionOptions.platformViewsEmbedded = pvEmbedder != nullptr;  // FP-44
+  sessionOptions.colorScheme = colorScheme;
+  sessionOptions.initialUrl = initialUrl;
+  sessionOptions.logMutations = logMutations;
   // ENG item 2b — the root supersample offscreen is sized N x this. Device
   // pixels (surface.width()/height()), re-set on resize below.
-  sceneGraph.setSurfaceSize(surface.width(), surface.height());
-  // The cursor conversion divides by this. Set from the SAME derived value the
-  // layout uses, and re-set on every resize below, so a click can never be
-  // converted with a scale the painter is no longer using.
-  surface.setPointScale(pointScale);
-  // parity item 24: a Metro-served bundle is debuggable (React Native DevTools).
-  rni::ReactHost host(/*withInspector*/ sourceUrl.rfind("http://", 0) == 0);
-  host.setKnownComponents(rni::FabricHost::knownComponentNames());
-  // ENG-09 — the <world> painter reads pixel buffers the WorldRaster
-  // TurboModule writes; give the SceneGraph the same store the host owns.
-  sceneGraph.setWorldRasterStore(host.worldRasterStore());
-  sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
-  sceneGraph.setSnapshotController(host.snapshots());  // FP-43
-  sceneGraph.setPlatformViewsEmbedded(pvEmbedder != nullptr);  // FP-44
-  host.displayMetrics()->set((float)pxWidth / pointScale,
-                             (float)pxHeight / pointScale, pointScale);
-  host.appearance()->set(colorScheme);
-  *host.initialUrl() = initialUrl;
+  session.Boot(pxWidth, pxHeight, pointScale, sessionOptions);
+  rni::SceneGraph& sceneGraph = session.sceneGraph();
+  rni::ReactHost& host = session.reactHost();
+  rni::FabricHost& fabric = session.fabricHost();
   // SC-23: report OS theme changes to JS. Declared after `host`, so it is
   // joined before the host (and its device-event sink) is destroyed.
   std::unique_ptr<rni::OsAppearanceWatcher> osWatcher;
@@ -739,9 +744,6 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
               "appearanceChanged", folly::dynamic::object("colorScheme", scheme));
         });
   }
-
-  rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
-                         logMutations, host.displayMetrics());
   // FP-15 teardown order (shell.cc OnPlatformViewDestroyed): declared after
   // host + fabric, so on EVERY exit path the raster thread drains, releases the
   // GPU objects on itself and joins BEFORE JS goes; the window and its GL
@@ -774,7 +776,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // parity item 14: DevSettings.reload() re-execs (see ReexecForReload).
   // Called on the JS thread; the re-exec replaces the whole process.
   host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
-  host.runScript(std::move(bundle), sourceUrl);
+  session.RunScript(std::move(bundle), sourceUrl);
   // ⛔ WINDOWED BOOT DRAINS THE JS QUEUE, IT DOES NOT WAIT FOR JS IDLE.
   // waitForJsIdle counts every pending one-shot timer, and RN core's
   // requestAnimationFrame is setTimeout(0). An app that starts a launch
@@ -786,14 +788,14 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // app's first committed tree, not a blank window. The headless path keeps
   // waitForJsIdle: its frames are deterministic snapshots, not a live clock.
   const int bootWaitStart = SinceLaunchMs();
-  const bool bundleDrained = host.waitForJsQueueDrained(rni::testsync::ScaledMs(10000));
+  const bool bundleDrained = session.WaitForJsQueueDrained(rni::testsync::ScaledMs(10000));
   // parity item 14: a bundle from Metro starts HMR (Fast Refresh).
   host.devServerSetup(sourceUrl);
   host.connectInspector(sourceUrl, appName);  // parity item 24
   // startSurface takes DEVICE PIXELS and divides by pointScale itself
   // (FabricHost.cpp:279) — so it gets the framebuffer size, not the request.
-  fabric.startSurface(appName, 1, (float)pxWidth, (float)pxHeight, pointScale);
-  const bool surfaceDrained = host.waitForJsQueueDrained(rni::testsync::ScaledMs(10000));
+  session.StartSurface(appName, pxWidth, pxHeight, pointScale);
+  const bool surfaceDrained = session.WaitForJsQueueDrained(rni::testsync::ScaledMs(10000));
   printf("rn-impeller: boot_wait_ms=%d drained=%d/%d\n",
          SinceLaunchMs() - bootWaitStart, bundleDrained ? 1 : 0,
          surfaceDrained ? 1 : 0);
@@ -990,9 +992,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     const bool afterLoss = rni::ctxloss::ConsumeFullRepaint();  // FP-32: new buffer, no history
     const bool allowPartial =
         rasterizer.partialRepaint() && !rni::gpu::ConsumeRestore() && !afterLoss;
-    auto recorded = rni::RecordFrame(sceneGraph, pointScale, surface.width(),
-                                     surface.height(), std::move(frame), nullptr,
-                                     allowPartial);
+    auto recorded = session.RecordFrame(pointScale, surface.width(),
+                                        surface.height(), std::move(frame),
+                                        nullptr, allowPartial);
     recorded->vsyncUs = scheduler.lastTickUs();
     recorded->targetUs = scheduler.lastTargetUs();
     const int painted = recorded->painted;
@@ -1058,37 +1060,11 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // subsequent click by the OLD factor and quietly halve or double every
     // coordinate. Set through the same one derivation, at the same moment.
     surface.setPointScale(pointScale);
-    // ENG item 2b — the root supersample offscreen must track the new
-    // framebuffer, or it would supersample the old extent into the new one.
-    sceneGraph.setSurfaceSize(newPx, newPy);
+    // EngineSession::ApplyResize does the set -> resize -> emit sequence
+    // (see its header for why the order is load-bearing).
+    session.ApplyResize(newPx, newPy, pointScale);
     const float newPointW = (float)newPx / pointScale;
     const float newPointH = (float)newPy / pointScale;
-
-    // Dimensions.get('window') and the useWindowDimensions hook read this.
-    host.displayMetrics()->set(newPointW, newPointH, pointScale);
-    // And this re-constrains the LAYOUT. Without it the framebuffer and
-    // Dimensions are both correct and every mounted view keeps the geometry
-    // it had at launch, which is the half of the bug a screenshot of a
-    // freshly-launched window can never show.
-    fabric.updateSurface(1, (float)newPx, (float)newPy, pointScale);
-
-    // ⛔ EMIT LAST. ORDER IS set -> resizeSurface -> emit, AND IT IS LOAD-BEARING.
-    // Emitting first re-renders JS against the new Dimensions while Fabric
-    // still holds the OLD layout constraint, committing one frame at a width
-    // the surface does not have. That is a single wrong frame -- it survives a
-    // screenshot gate, because by the time anything captures, the next frame
-    // is correct.
-    //
-    // This is the crossing the whole suite was blind to: 16 of 16 probes would
-    // pass on a build where the two lines above run and this one does not
-    // (boundary-audit.py, boundary-crossing 0/16). Native geometry perfect,
-    // JS never told.
-    //
-    // toDimensionsDynamic() rather than a hand-built object: Dimensions.js
-    // requires the SAME metrics under both `window` and `screen`, plus
-    // fontScale. Building it here would let the two shapes drift.
-    host.deviceEvents()->emit("didUpdateDimensions",
-                              host.displayMetrics()->toDimensionsDynamic());
 
     printf("rn-impeller: resize px=%dx%d points=%.1fx%.1f scale=%.2f%s\n",
            newPx, newPy, newPointW, newPointH, pointScale,
@@ -1238,7 +1214,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   int scrollHits = 0;
   int scrollEvents = 0;
   surface.setScrollHandler([&](float x, float y, float dx, float dy) {
-    const int hit = fabric.dispatchScroll(x, y, dx, dy);
+    const int hit = session.DispatchScroll(x, y, dx, dy);
     ++scrollEvents;
     if (hit) ++scrollHits;
     printf("rn-impeller: scroll hit=%d at=%.1f,%.1f dx=%.1f dy=%.1f\n", hit, x, y,
@@ -1274,7 +1250,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
     }
     if (selectionDrag) return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
-    const auto r = fabric.dispatchHover(x, y);
+    const auto r = session.DispatchHover(x, y);
     bool logged = false;
     if (r.left) {
       printf("rn-impeller: hover_leave tag=%d\n", r.left);
@@ -1323,7 +1299,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   surface.setCharHandler([&](unsigned int codepoint) {
     if (!fabric.hasTextInputFocus()) return;
     const int tag =
-        fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar, codepoint);
+        session.DispatchKey(rni::FabricHost::KeyAction::InsertChar, codepoint);
     printf("rn-impeller: key_char cp=%u tag=%d\n", codepoint, tag);
     fflush(stdout);
   });
@@ -1340,7 +1316,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       act = shift ? rni::FabricHost::KeyAction::Newline
                   : rni::FabricHost::KeyAction::Submit;
     }
-    const int tag = fabric.dispatchKey(act, 0);
+    const int tag = session.DispatchKey(act, 0);
     printf("rn-impeller: key_ctrl key=%d tag=%d\n", (int)key, tag);
     fflush(stdout);
   });
@@ -1655,7 +1631,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       // FP-40: RN's animationTick (LayoutAnimation half), platform thread.
       if (fabric.tickLayoutAnimations()) animatedThisFrame = true;
       const unsigned long ticksBefore = host.nativeAnimatedTicks();
-      host.pumpNativeAnimated();
+      session.PumpNativeAnimated();
       if (host.nativeAnimatedTicks() != ticksBefore) animatedThisFrame = true;
     }
     // A live clock asks for the next frame: a NativeAnimated animation in
@@ -1906,13 +1882,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
             pressKey("Enter", true);
             break;
           case TypeToken::SelectAll:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
             break;
           case TypeToken::Copy:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::Copy, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::Copy, 0);
             break;
           case TypeToken::Cut:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::Cut, 0);
             break;
         }
         host.waitForJsIdle(rni::testsync::ScaledMs(5000));
@@ -3168,61 +3144,57 @@ int main(int argc, char** argv) {
   int painted = 0;
   size_t nodeCount = 0;
   {
-    rni::SceneGraph sceneGraph(surface.typography());
+    // FP-40: headless LayoutAnimation time is frame-counted (16.667 ms per
+    // stepped frame), like the NativeAnimated clock, so captures are
+    // repeatable. Declared before `session`: the KFM keeps the clock until
+    // the FabricHost `session` owns dies, so this must outlive it.
+    std::atomic<uint64_t> layoutAnimFrames{0};
+    // See EngineSession's header for why construction is split in two.
+    rni::EngineSession session(surface.typography(), gGpuBackend, gGpuPolicy);
     // ENG item 2 — same wiring as the primary headless path above.
-    sceneGraph.setGpuBackend(gGpuBackend, gGpuPolicy);  // FP-20
-    sceneGraph.setRenderContext(surface.context());
-    sceneGraph.printGpuBackend();
-    sceneGraph.setSupersample(supersampleRnsvg);
-    // ENG item 2b — root supersample offscreen size, device pixels.
-    sceneGraph.setSurfaceSize(width, height);
+    session.sceneGraph().setRenderContext(surface.context());
+    session.sceneGraph().printGpuBackend();
     // parity item 24: a Metro-served bundle is debuggable.
-    rni::ReactHost host(/*withInspector*/ sourceUrl.rfind("http://", 0) == 0);
-    host.setKnownComponents(rni::FabricHost::knownComponentNames());
-    // ENG-09 — wire the world raster store, same as the primary path.
-    sceneGraph.setWorldRasterStore(host.worldRasterStore());
-    sceneGraph.setTextureRegistry(host.textureRegistry());  // FP-42
-  sceneGraph.setSnapshotController(host.snapshots());  // FP-43
+    rni::EngineSession::Options sessionOptions;
+    sessionOptions.withInspector = sourceUrl.rfind("http://", 0) == 0;
+    sessionOptions.supersampleRnsvg = supersampleRnsvg;
+    sessionOptions.colorScheme = colorScheme;
+    sessionOptions.initialUrl = initialUrl;
+    sessionOptions.logMutations = logMutations;
+    // ENG item 2b — root supersample offscreen size, device pixels.
     // ⛔ JS MUST SEE THE SAME SCALE FABRIC LAYS OUT WITH.
     // Dimensions/PixelRatio read this. RN code branches on PixelRatio.get()
     // for asset selection (@2x/@3x) and hairline widths, so reporting 1 while
     // laying out at 2 gives an app that is internally inconsistent: correct
     // geometry, wrong assets. window/screen are POINTS, which is what
-    // Dimensions.get('window') means on every other RN platform.
-    host.displayMetrics()->set((float)width / pointScale,
-                               (float)height / pointScale, pointScale);
-    // Seed platform-module state BEFORE the bundle evaluates. Appearance is
-    // read at module scope by RN's Appearance.js, so setting it after the
-    // bundle runs would be read too late and look like the prop being ignored.
-    host.appearance()->set(colorScheme);
-    *host.initialUrl() = initialUrl;
-
+    // Dimensions.get('window') means on every other RN platform. Seeded
+    // BEFORE the bundle evaluates (Appearance.js reads it at module scope).
+    //
     // Fabric must be up BEFORE the bundle evaluates: the Scheduler installs
     // UIManagerBinding through the unbuffered executor, and ReactFabric reads
-    // global.nativeFabricUIManager the moment it initialises.
-    // FP-40: headless LayoutAnimation time is frame-counted (16.667 ms per
-    // stepped frame), like the NativeAnimated clock, so captures are repeatable.
-    // Declared before fabric: the KFM keeps the clock until fabric dies.
-    std::atomic<uint64_t> layoutAnimFrames{0};
-    rni::FabricHost fabric(host.instance(), &sceneGraph, surface.typography(),
-                           logMutations, host.displayMetrics());
+    // global.nativeFabricUIManager the moment it initialises -- Boot() builds
+    // ReactHost then FabricHost, in that order.
+    session.Boot(width, height, pointScale, sessionOptions);
+    rni::SceneGraph& sceneGraph = session.sceneGraph();
+    rni::ReactHost& host = session.reactHost();
+    rni::FabricHost& fabric = session.fabricHost();
     fabric.setLayoutAnimationClock([&layoutAnimFrames]() -> uint64_t {
       return layoutAnimFrames.load() * 16667 / 1000;
     });
 
     host.setReloadHook([](const std::string& reason) { ReexecForReload(reason); });
-    host.runScript(std::move(bundle), sourceUrl);
+    session.RunScript(std::move(bundle), sourceUrl);
     host.devServerSetup(sourceUrl);  // parity item 14 (no-op for file://)
     host.connectInspector(sourceUrl, appName);  // parity item 24
     // Let the bundle finish evaluating (AppRegistry.registerComponent) before
     // asking for the surface, otherwise runApplication names a module that is
     // not registered yet.
-    host.waitForJsIdle(10000);
+    session.WaitForJsIdle(10000);
 
-    fabric.startSurface(appName, 1, (float)width, (float)height, pointScale);
+    session.StartSurface(appName, width, height, pointScale);
     // React renders, Fabric commits, the delegate applies mutations — all on
     // the JS thread. Idle means that whole chain has drained.
-    host.waitForJsIdle(10000);
+    session.WaitForJsIdle(10000);
     // FP-16: <Image> decodes run on the IO pool, off the JS thread, so an idle
     // JS thread does not mean the pixels exist. Drain them, then the JS their
     // load events scheduled (which may mount more images).
@@ -3272,10 +3244,10 @@ int main(int argc, char** argv) {
     if (!tapSpec.empty()) {
       float tx = 0, ty = 0;
       if (std::sscanf(tapSpec.c_str(), "%f,%f", &tx, &ty) == 2) {
-        int hit = fabric.dispatchTouch(rni::FabricHost::TouchPhase::Down, tx, ty);
+        int hit = session.DispatchTouch(rni::FabricHost::TouchPhase::Down, tx, ty);
         printf("rn-impeller: tap_hit=%d at=%.1f,%.1f\n", hit, tx, ty);
         if (hit) {
-          fabric.dispatchTouch(rni::FabricHost::TouchPhase::Up, tx, ty);
+          session.DispatchTouch(rni::FabricHost::TouchPhase::Up, tx, ty);
         }
         fflush(stdout);
         // Let the scheduled work reach the JS thread: dispatchTouch is
@@ -3470,27 +3442,27 @@ int main(int argc, char** argv) {
         }
         switch (tk.kind) {
           case TypeToken::Backspace:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::Backspace, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::Backspace, 0);
             break;
           case TypeToken::Enter:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::Submit, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::Submit, 0);
             break;
           case TypeToken::ShiftEnter:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::Newline, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::Newline, 0);
             break;
           case TypeToken::SelectAll:
             // Style audit item 11 gate: select all, then <COPY>/<CUT>, so a
             // headless run can prove a secure field refuses the clipboard.
-            fabric.dispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::SelectAll, 0);
             break;
           case TypeToken::Copy:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::Copy, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::Copy, 0);
             break;
           case TypeToken::Cut:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::Cut, 0);
+            session.DispatchKey(rni::FabricHost::KeyAction::Cut, 0);
             break;
           case TypeToken::Char:
-            fabric.dispatchKey(rni::FabricHost::KeyAction::InsertChar,
+            session.DispatchKey(rni::FabricHost::KeyAction::InsertChar,
                                tk.codepoint);
             break;
         }
@@ -3552,7 +3524,7 @@ int main(int argc, char** argv) {
         hf->RecordBuildStart();
         layoutAnimFrames.fetch_add(1);
         fabric.tickLayoutAnimations();  // FP-40
-        host.pumpNativeAnimated();
+        session.PumpNativeAnimated();
         host.waitForJsIdle(5000);
         // FP-33: decodes finish off-thread. Their load events are queued to JS before WaitIdle
         // returns, so the NEXT frame's waitForJsIdle mounts what they trigger, and every frame
@@ -3562,7 +3534,7 @@ int main(int argc, char** argv) {
         TRACE_EVENT0("frame", "Frame");
         // FP-13: RECORD -> Pipeline -> RASTER on this one thread.
         auto slot = headlessPipeline.Produce();
-        (void)slot.Complete(rni::RecordFrame(sceneGraph, pointScale, width,
+        (void)slot.Complete(session.RecordFrame(pointScale, width,
                                              height, std::move(hf)));
         (void)headlessPipeline.Consume([&](std::unique_ptr<rni::FrameItem> item) {
           rni::RasterFrame(*item, [&](ImpellerDisplayList dl) {
@@ -3646,8 +3618,8 @@ int main(int argc, char** argv) {
     {
       TRACE_EVENT0("frame", "Frame");
       auto finalSlot = headlessPipeline.Produce();
-      (void)finalSlot.Complete(rni::RecordFrame(
-          sceneGraph, pointScale, width, height, std::move(finalFrame),
+      (void)finalSlot.Complete(session.RecordFrame(
+          pointScale, width, height, std::move(finalFrame),
           [&](ImpellerDisplayListBuilder builder) {
             if (probeBanner) {
               DrawProbeBanner(builder, shimOk, bundleSize, width, height);

@@ -39,7 +39,7 @@ echo "[1] extracted gate body lines ${START}-$((END-1)) ..... OK ($(wc -l < "$BO
 mkdir -p "$WORK/stubs"
 cat > "$WORK/stubs/otool" <<'STUB'
 #!/usr/bin/env bash
-# good    -> @loader_path everywhere (a `cmake --install` package)
+# good    -> @rpath names, libGLESv2 -> @loader_path/libEGL (a `cmake --install` package)
 # badname -> raw `cmake --build` output: ./libX.dylib (the macOS tester's build)
 # badsig  -> names correct, signatures stripped
 flag="$1"; f="$2"; base="$(basename "$f")"
@@ -47,7 +47,7 @@ case "$flag" in
   -D) echo "$f:"
       case "$STUB_MODE" in
         badname) case "$base" in *.dylib) echo "./$base" ;; esac ;;
-        *)       case "$base" in *.dylib) echo "@loader_path/$base" ;; esac ;;
+        *)       case "$base" in *.dylib) echo "@rpath/$base" ;; esac ;;
       esac ;;
   -L) echo "$f:"
       if [ "$STUB_MODE" = badname ]; then
@@ -57,7 +57,7 @@ case "$flag" in
         esac
       else
         case "$base" in
-          rn-impeller)     printf '\t@loader_path/libimpeller.dylib (compatibility version 0.0.0)\n\t@rpath/hermesvm.framework/Versions/0/hermesvm (compatibility version 0.0.0)\n' ;;
+          rn-impeller)     printf '\t@rpath/libimpeller.dylib (compatibility version 0.0.0)\n\t@rpath/libhermesvm.dylib (compatibility version 0.0.0)\n' ;;
           libGLESv2.dylib) printf '\t@loader_path/libEGL.dylib (compatibility version 0.0.0)\n' ;;
         esac
       fi
@@ -82,11 +82,10 @@ echo "[2] stub otool + codesign staged ........ OK"
 
 # --------------------------------------------------------- 3. fake package
 PKG="$WORK/pkg"
-mkdir -p "$PKG/bin/hermesvm.framework/Versions/0"
-for f in libEGL.dylib libGLESv2.dylib libimpeller.dylib rn-impeller; do
+mkdir -p "$PKG/bin"
+for f in libEGL.dylib libGLESv2.dylib libimpeller.dylib libhermesvm.dylib rn-impeller; do
   echo x > "$PKG/bin/$f"
 done
-echo x > "$PKG/bin/hermesvm.framework/Versions/0/hermesvm"
 
 # ------------------------------------------------------------- 4. run cases
 run_case() {
