@@ -50,8 +50,10 @@ restore
 
 echo "== M2: clip taken before its Save =="
 mutate "$SRC" '  if (clip) {
+    pvPushClipLocked(builder, x, y, w, h);  // FP-44 kClipRect mutator
     ImpellerDisplayListBuilderSave(builder);
     // Style audit item 13' '  if (clip) {
+    pvPushClipLocked(builder, x, y, w, h);  // FP-44 kClipRect mutator
     // MUTANT M2: the Save moves below the clip
     // Style audit item 13'
 mutate "$SRC" '                                         kImpellerClipOperationIntersect);
