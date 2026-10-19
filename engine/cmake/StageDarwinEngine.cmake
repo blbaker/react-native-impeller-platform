@@ -41,9 +41,19 @@ endfunction()
 # found" for a file sitting right next to the binary. The engine-build gate
 # caught this on the first darwin link ("staged binary links non-relocatable
 # paths: ./libimpeller.dylib"). Every shipped dylib gets its ID rewritten, and
-# every reference inside the executable is repointed at @loader_path.
+# every reference inside the executable is repointed at @rpath.
+#
+# ⛔ @rpath, NOT @loader_path, FOR WHAT rn-impeller LOADS.
+# An @loader_path/libfoo.dylib reference only ever looks beside rn-impeller.
+# A standard .app keeps the executable in Contents/MacOS and its dylibs in
+# Contents/Frameworks, so 0.1.0 aborted there (rc=134) and every consumer
+# patched the signed binary with install_name_tool. @rpath names go through
+# rn-impeller's LC_RPATH list, which CMakeLists.txt sets to @loader_path and
+# @loader_path/../Frameworks: bin/ as npm unpacks it and MacOS + Frameworks
+# both load, untouched. libGLESv2 -> libEGL stays @loader_path: the two ANGLE
+# libraries always sit in the same directory, whichever one that is.
 foreach(_lib libEGL.dylib libGLESv2.dylib libimpeller.dylib libhermesvm.dylib)
-  _stage_run(install_name_tool -id "@loader_path/${_lib}" "${_bin}/${_lib}")
+  _stage_run(install_name_tool -id "@rpath/${_lib}" "${_bin}/${_lib}")
 endforeach()
 
 # rn-impeller links Hermes by the framework's install name, which Hermes'
@@ -63,21 +73,38 @@ if(NOT _hermes_ref)
     "otool -L said:\n${_deps}")
 endif()
 _stage_run(install_name_tool
-  -change "./libEGL.dylib"      "@loader_path/libEGL.dylib"
-  -change "./libGLESv2.dylib"   "@loader_path/libGLESv2.dylib"
-  -change "./libimpeller.dylib" "@loader_path/libimpeller.dylib"
-  -change "${_hermes_ref}"      "@loader_path/libhermesvm.dylib"
+  -change "./libEGL.dylib"      "@rpath/libEGL.dylib"
+  -change "./libGLESv2.dylib"   "@rpath/libGLESv2.dylib"
+  -change "./libimpeller.dylib" "@rpath/libimpeller.dylib"
+  -change "${_hermes_ref}"      "@rpath/libhermesvm.dylib"
   "${_bin}/rn-impeller")
 # libGLESv2 references libEGL by the same relative name.
 _stage_run(install_name_tool
   -change "./libEGL.dylib" "@loader_path/libEGL.dylib"
   "${_bin}/libGLESv2.dylib")
 
+# Verify the result instead of trusting the -change calls: each one is a
+# silent no-op when its old name is absent.
 execute_process(COMMAND otool -L "${_bin}/rn-impeller" OUTPUT_VARIABLE _deps)
-if(_deps MATCHES "hermesvm\\.framework" OR NOT _deps MATCHES "@loader_path/libhermesvm\\.dylib")
+foreach(_lib libEGL.dylib libGLESv2.dylib libimpeller.dylib libhermesvm.dylib)
+  if(NOT _deps MATCHES "@rpath/${_lib}")
+    message(FATAL_ERROR
+      "stage-darwin: rn-impeller does not load @rpath/${_lib}:\n${_deps}")
+  endif()
+endforeach()
+if(_deps MATCHES "hermesvm\\.framework" OR _deps MATCHES "(^|[\t\n ])(\\./|@loader_path/)lib")
   message(FATAL_ERROR
-    "stage-darwin: rn-impeller still does not load @loader_path/libhermesvm.dylib:\n${_deps}")
+    "stage-darwin: rn-impeller still loads a framework or a non-@rpath dylib:\n${_deps}")
 endif()
+execute_process(COMMAND otool -l "${_bin}/rn-impeller" OUTPUT_VARIABLE _lc)
+foreach(_rp "@loader_path" "@loader_path/../Frameworks")
+  string(REPLACE "." "\\." _rp_re "${_rp}")
+  if(NOT _lc MATCHES "path ${_rp_re} \\(offset")
+    message(FATAL_ERROR
+      "stage-darwin: rn-impeller has no LC_RPATH ${_rp} (INSTALL_RPATH in "
+      "engine/CMakeLists.txt). Without it the @rpath names above cannot load.")
+  endif()
+endforeach()
 
 # ⛔ RE-SIGN, OR arm64 KILLS THE PROCESS WITH NO DIAGNOSTIC.
 # Every install_name_tool write invalidates the Mach-O code signature. On
