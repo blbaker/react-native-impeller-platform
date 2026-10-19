@@ -56,6 +56,8 @@ add_library(rni_ios_engine STATIC
   ${_E}/modules/PlatformModules.cpp ${_E}/modules/NetworkingModule.cpp
   ${_E}/modules/ImageLoaderModule.cpp ${_E}/modules/WebSocketModule.cpp ${_E}/modules/ExpoHost.cpp
   ${_E}/modules/CryptoGlobal.cpp ${_E}/modules/ExpoConstants.cpp ${_E}/modules/ExpoFetch.cpp
+  # Notifications answers "unavailable" on iOS (no backend yet).
+  ${_E}/modules/NotificationsNull.cpp
   ${_E}/fabric/FabricHost.cpp ${_E}/fabric/ComponentRegistry.cpp ${_E}/fabric/LayoutAnimations.cpp
   ${_E}/fabric/ExpoBlurShadowNode.cpp ${_E}/fabric/platform/impeller/PlatformColorTable.cpp
   ${_E}/scenegraph/SceneGraph.cpp ${_E}/scenegraph/SceneGraphContextLoss.cpp

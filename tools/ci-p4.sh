@@ -155,6 +155,9 @@ for (const required of [
   // four reachable native methods with no caller — the same silent no-op as a
   // missing shim, one layer up.
   'src/storage/index.js',
+  // Notifications: the engine's module is unreachable without its JS half.
+  'src/notifications/index.js',
+  'src/notifications/index.d.ts',
   'src/cli/index.js',
 ]) {
   if (!listing.includes(required)) fails.push(`LAYER1: tarball is missing ${required}`);
@@ -233,6 +236,8 @@ const OWN_SPEC_FOR = {
   ImpellerTextureRegistry: 'src/externaltexture/index.js',
   // FP-43. react-native-view-shot's module; this package ships its JS API.
   RNViewShot: 'src/viewshot/index.js',
+  // Desktop notifications. Our own module: its JS half is package/src/notifications.
+  Notifications: 'src/notifications/index.js',
 };
 // Where OWN_SPEC_FOR paths resolve: our installed package, not react-native.
 const OWN_PKG = 'node_modules/react-native-impeller-platform';

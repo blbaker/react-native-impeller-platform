@@ -27,6 +27,7 @@
 #include "modules/CryptoGlobal.h"  // ENG-31
 #include "modules/ImageLoaderModule.h"  // SC-31
 #include "modules/AccessibilityManagerModule.h"  // ENG-14
+#include "modules/NotificationsModule.h"
 
 namespace rni {
 
@@ -329,6 +330,21 @@ ReactHost::ReactHost(bool withInspector) {
   // so its absence is SILENT the same way AppStorage's and Networking's are.
   modules_->add("Clipboard", [c = clipboard_](auto inv) {
     return std::make_shared<ClipboardModule>(inv, c);
+  });
+
+  // Desktop notifications (NotificationsModule.h). Not getEnforcing'd by
+  // anything, so its absence is silent; tools/ci-notifications.sh asserts a
+  // real Notify call on a private session bus. The press arrives on a backend
+  // thread and goes out through deviceEvents_, which is invalidated first in
+  // ~ReactHost, so a click during shutdown is a logged drop, not a crash.
+  notifications_ = std::make_shared<NotificationsService>(
+      [sink = deviceEvents_](const notifications::Press& press) {
+        sink->emit("rniNotificationPress",
+                   folly::dynamic::object("id", press.id)("data", press.data)(
+                       "action", press.action));
+      });
+  modules_->add("Notifications", [n = notifications_](auto inv) {
+    return std::make_shared<NotificationsModule>(inv, n);
   });
 
   // ENG-14. AccessibilityInfo's non-Android arm reads this module (RN's iOS

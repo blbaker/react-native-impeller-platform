@@ -36,6 +36,7 @@
 namespace rni {
 
 class InspectorHost;
+class NotificationsService;
 
 class ReactHost {
  public:
@@ -204,6 +205,8 @@ class ReactHost {
   std::shared_ptr<ClipboardBridge> clipboard_ =
       std::make_shared<ClipboardBridge>();
   std::shared_ptr<AppStorageConfig> storage_;
+  // Desktop notifications: owns the platform backend (NotificationsModule.h).
+  std::shared_ptr<NotificationsService> notifications_;
   // globalThis.expo: directories + the expo-module seam. See ExpoHost.h.
   std::shared_ptr<ExpoHostConfig> expoConfig_;
   std::shared_ptr<ExpoModuleRegistry> expoModules_;

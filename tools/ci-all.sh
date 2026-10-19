@@ -285,6 +285,11 @@ bash tools/ci-style-audit.sh | grep -E "STYLE_AUDIT_GATE_PASS|item [0-9]+:"
 echo "### gate 24f: windowed --type (ENG-18)"
 bash tools/ci-window-type.sh | grep -E "WINDOW_TYPE_PASS|NL field"
 
+# Desktop notifications on a private session bus (dbus-daemon, no display).
+# Mutants: mutation-verify-notifications.sh.
+echo "### gate 24g: Notifications module (freedesktop D-Bus)"
+bash tools/ci-notifications.sh | grep -E "NOTIFY_GATE_PASS|OK BUS"
+
 # ⛔ THE NETWORKING GATE EXISTED FOR A DAY AND WAS NEVER IN THIS FILE.
 # tools/ci-p10.sh was written with the Networking TurboModule (737dcd7) and TLS
 # (15f7a4d) and is only referenced by tools/mutation-verify-p10.sh — so the ONLY
