@@ -1,9 +1,9 @@
 # iOS platform
 
-Status: the iOS surface primitives build and pass their gates in the iOS
-Simulator. No React Native app renders on iOS yet; that is the iOS host (the
-next phase), which runs `EngineSession` (`engine/runtime/EngineSession.h`) the
-way the desktop host does.
+Status: a React Native bundle renders on iOS. `RNIEngine` runs `EngineSession`
+(`engine/runtime/EngineSession.h`) the way the desktop host does, on a
+`CAMetalLayer`, and the M1 gate (`tools/ci-ios-sim.sh`) checks the pixels of
+`fixtures/ios-smoke` in the iOS Simulator. Simulator only; no text input yet.
 
 ## Shape
 
@@ -27,6 +27,7 @@ because the app is not a stock RN iOS app underneath. They are a later phase.
 | Light/dark | `engine/host/OsAppearanceIOS.mm` | `tools/ci-os-appearance-ios.sh` |
 | Clipboard | `engine/modules/ClipboardIOS.h/.mm` (`UIPasteboard`) | `tools/ci-clipboard-ios.sh` |
 | CMake | `engine/CMakeLists.txt` -> `engine/ios/RniIos.cmake` | `tools/ci-ios-cmake-configure.sh` |
+| Engine + host API (M1) | `engine/ios/RNIEngine.h/.mm`, `engine/ios/RniIosEngine.cmake` | `tools/ci-ios-sim.sh` |
 
 Every gate has a `tools/mutation-verify-*` script that breaks the code on
 purpose and requires the gate to fail on the arm named for that break.
@@ -46,6 +47,31 @@ purpose and requires the gate to fail on the arm named for that break.
   `rni_ios_platform` and returns before every desktop target. It exposes the Hermes
   xcframework as `rni_ios_hermes` for the host. A missing Impeller SDK or Hermes
   fails configure with its own named error.
+- With `RNI_IOS_WITH_ENGINE` (default on), `engine/ios/RniIosEngine.cmake` builds
+  the engine itself for iOS: ReactCommon (the same `cmake/ReactCommon*.cmake` and
+  `cmake/RnSvg.cmake` lists as desktop) and the same runtime, Fabric, scene graph,
+  text and module sources `rn-impeller` compiles, minus the desktop host and every
+  GL translation unit. `engine/ios/GlAbsentIOS.cpp` answers "no GL" for the two GL
+  entry points shared code names. Everything merges into one archive,
+  `librni_ios_all.a` (`tools/engine-build-ios.sh`, Ninja). iOS builds without TLS
+  for now (`NetworkingModule` refuses `https://`), as Android does.
+
+## The host API
+
+```objc
+RNIEngine* engine = [[RNIEngine alloc] initWithBundlePath:path appName:@"App"];
+[engine attachToView:metalView];   // RNIMetalLayerView, or any CAMetalLayer-backed view
+[engine detach];                   // stops frames; JS stays up; attach again any time
+[engine destroy];
+```
+
+The first attach creates the Metal context and typography, boots `EngineSession`
+(`setRenderContext`, `Boot`, `RunScript`, JS idle, `StartSurface`, JS idle; the
+desktop headless order), installs the GPU-availability observers, then paints on
+every `DisplayLinkIOS` tick: `PumpNativeAnimated`, `RecordFrame`, `RasterFrame` onto
+the drawable, `Present`, inside a `rni::gpu::Section`. RECORD and RASTER both run on
+the main thread; the desktop windowed pipeline's raster thread is later work. An app
+links `librni_ios_all.a`, `libimpeller.a` and `hermesvm.framework` (embedded).
 
 ## Inputs
 
@@ -74,6 +100,7 @@ On a Mac with Xcode and an iOS Simulator runtime:
 bash tools/impeller-sdk-ios-build.sh   # once; RNI_SDK_WORK=<synced engine checkout>
 bash tools/hermes-build-ios.sh         # once; needs engine/rn npm install
 bash tools/ci-metal-ios-sim.sh         # any gate
+bash tools/ci-ios-sim.sh               # M1: builds the engine (librni_ios_all.a) first
 ```
 
 From linux, point the same commands at a Mac over ssh:
@@ -90,7 +117,7 @@ bash tools/mutation-verify-metal-ios-sim.sh
 command there. Without `RNI_MAC_HOST`, a gate started on linux exits 2.
 
 Each gate builds the test host (`engine/ios/testhost/`, one UIKit app that takes
-`--test=metal|vsync|gpu|settings|clipboard`) with `xcrun clang++`, boots a fresh
+`--test=metal|vsync|gpu|settings|clipboard|engine`) with `xcrun clang++`, boots a fresh
 iPhone 16 simulator, runs, and deletes the simulator. The last run's log and
 screenshots stay in `~/Library/Caches/rni-ios-ci/artifacts/<gate>/` on the Mac.
 
@@ -114,7 +141,8 @@ screenshots stay in `~/Library/Caches/rni-ios-ci/artifacts/<gate>/` on the Mac.
 
 - Device (`iphoneos`) builds: no device Impeller SDK yet; `engine-build-ios.sh
   device` says so by name.
-- The iOS host (`RNIEngine` + a `UIViewController`) on `EngineSession`.
+- A raster thread for the iOS host (RECORD and RASTER share the main thread).
+- `Linking.openURL`, TLS, and image upload on an IO thread (GL-only on desktop).
 - Text input, IME, VoiceOver. iOS 16+ also shows a paste-consent alert when an app
   reads another app's pasteboard; the Clipboard module's `getString` will hit it,
   as RN's does.

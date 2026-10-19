@@ -52,7 +52,7 @@ ios_on_mac_or_reexec() {
   fi
   # Only these knobs cross over; everything else a gate needs is in the tree.
   RNI_MAC_TREE="${RNI_MAC_TREE:-rni-ios}" \
-    RNI_MAC_ENV="IOS_DEVICE IOS_SETTLE IOS_KEEP_SIM RNI_IOS_SDK RNI_IOS_CI_DIR" \
+    RNI_MAC_ENV="IOS_DEVICE IOS_SETTLE IOS_KEEP_SIM RNI_IOS_SDK RNI_IOS_CI_DIR IOS_SIM_SHOT_EARLY" \
     exec bash "$IOS_ROOT/tools/mac-run.sh" bash "$rel" "$@"
 }
 
@@ -91,24 +91,50 @@ ios_sdk_resolve() {
   return 1
 }
 
+# ios_build_testhost            the Phase 1 host: IOS_SRCS compiled in.
+# ios_build_testhost engine     the engine host: the test host sources plus
+#   TestHostEngine.mm, linked against librni_ios_all.a (tools/engine-build-ios.sh,
+#   RNI_IOS_ENGINE_LIB) instead of IOS_SRCS, hermesvm.framework embedded, and
+#   the fixture bundles in IOS_BUNDLES copied in as <name>.jsbundle.
+IOS_BUNDLES=(fixtures/ios-smoke/prebuilt/ios-smoke.bundle)
 ios_build_testhost() {
   ios_sdk_resolve || return 1
   IOS_APP="$IOS_WORK/RniTestHost.app"
   rm -rf "$IOS_APP" && mkdir -p "$IOS_APP"
-  local t0=$SECONDS
-  if ! xcrun --sdk iphonesimulator clang++ -std=c++20 -fobjc-arc -target arm64-apple-ios15.0-simulator \
+  local t0=$SECONDS srcs=("${IOS_SRCS[@]}") link=() what="${#IOS_SRCS[@]} sources"
+  if [ "${1:-}" = engine ]; then
+    local lib="${RNI_IOS_ENGINE_LIB:-$IOS_ROOT/engine/build-ios-simulator/librni_ios_all.a}"
+    local hx="$IOS_ROOT/engine/third_party/hermes-ios"
+    local fw
+    fw="$(ls -d "$hx"/hermesvm.xcframework/ios-*simulator 2> /dev/null | head -1)"
+    [ -f "$lib" ] || { echo "ios-sim: no engine library at $lib (run tools/engine-build-ios.sh)"; return 1; }
+    [ -d "$fw/hermesvm.framework" ] || { echo "ios-sim: no hermesvm.framework under $hx (run tools/hermes-build-ios.sh)"; return 1; }
+    srcs=()
+    local f
+    for f in engine/ios/testhost/*.mm; do srcs+=("$f"); done
+    mkdir -p "$IOS_APP/Frameworks"
+    cp -R "$fw/hermesvm.framework" "$IOS_APP/Frameworks/"
+    for f in "${IOS_BUNDLES[@]}"; do cp "$f" "$IOS_APP/$(basename "$f" .bundle).jsbundle"; done
+    link=("$lib" -F "$fw" -framework hermesvm -Wl,-rpath,@executable_path/Frameworks)
+    what="engine host, ${lib#"$IOS_ROOT"/} $(du -h "$lib" | cut -f1)"
+  fi
+  if ! xcrun --sdk iphonesimulator clang++ -std=c++20 -fobjc-arc -target arm64-apple-ios15.1-simulator \
       -Wall -Wextra -Wno-unused-parameter -Werror \
-      -I engine -I engine/ios/testhost -isystem "$IOS_SDK_INC" "${IOS_SRCS[@]}" "$IOS_SDK_LIB" \
+      -I engine -I engine/ios/testhost -isystem "$IOS_SDK_INC" "${srcs[@]}" ${link[@]+"${link[@]}"} "$IOS_SDK_LIB" \
       -framework UIKit -framework Metal -framework MetalPerformanceShaders -framework QuartzCore \
-      -framework CoreGraphics -framework CoreText -framework Foundation -lc++ \
+      -framework CoreGraphics -framework CoreText -framework Foundation \
       -o "$IOS_APP/RniTestHost" > "$IOS_WORK/build.log" 2>&1; then
-    echo "ios-sim: testhost build FAILED:"; grep -m8 -E 'error|warning' "$IOS_WORK/build.log"
+    echo "ios-sim: testhost build FAILED:"; grep -m12 -E 'error|warning|Undefined|referenced from' "$IOS_WORK/build.log"
     return 1
   fi
   cp engine/ios/testhost/Info.plist "$IOS_APP/Info.plist"
+  if [ -d "$IOS_APP/Frameworks" ]; then
+    codesign --force --sign - --timestamp=none "$IOS_APP"/Frameworks/*.framework > "$IOS_WORK/sign.log" 2>&1 \
+      || { echo "ios-sim: codesign (frameworks) FAILED: $(cat "$IOS_WORK/sign.log")"; return 1; }
+  fi
   codesign --force --sign - --timestamp=none "$IOS_APP" > "$IOS_WORK/sign.log" 2>&1 \
     || { echo "ios-sim: codesign FAILED: $(cat "$IOS_WORK/sign.log")"; return 1; }
-  echo "ios-sim: testhost built in $((SECONDS - t0))s ($(du -sh "$IOS_APP" | cut -f1), ${#IOS_SRCS[@]} sources, sdk ${IOS_SDK_LIB#"$HOME"/})"
+  echo "ios-sim: testhost built in $((SECONDS - t0))s ($(du -sh "$IOS_APP" | cut -f1), $what, sdk ${IOS_SDK_LIB#"$HOME"/})"
 }
 
 ios_sim_up() {

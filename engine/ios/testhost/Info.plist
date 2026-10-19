@@ -10,7 +10,7 @@
   <key>CFBundleShortVersionString</key><string>0.0.1</string>
   <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>
   <key>DTPlatformName</key><string>iphonesimulator</string>
-  <key>MinimumOSVersion</key><string>15.0</string>
+  <key>MinimumOSVersion</key><string>15.1</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UIDeviceFamily</key><array><integer>1</integer></array>
   <!-- Without a launch screen iOS runs the app letterboxed at legacy size. -->

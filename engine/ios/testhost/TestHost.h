@@ -18,3 +18,6 @@ UIViewController* MakeVsyncTest();            // TestHostVsync.mm (Task 1.2)
 UIViewController* MakeGpuAvailabilityTest();  // TestHostLifecycle.mm (Task 1.3)
 UIViewController* MakeSettingsTest();         // TestHostSettings.mm (Task 1.4)
 UIViewController* MakeClipboardTest();        // TestHostClipboard.mm (Task 1.5)
+// For tests only some host builds carry (TestHostEngine.mm):
+//   static const bool registered = RegisterTest("engine", MakeEngineTest);
+bool RegisterTest(const char* name, UIViewController* (*make)());

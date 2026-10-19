@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <vector>
 
 namespace {
@@ -15,7 +16,19 @@ UIViewController* Missing(const std::string& name) {
   TestLog("unknown_test name=%s", name.c_str());
   return [UIViewController new];
 }
+
+// Tests compiled into only some builds of the host (the engine test needs the
+// full engine library) register themselves from a static initializer.
+std::map<std::string, UIViewController* (*)()>& Registry() {
+  static std::map<std::string, UIViewController* (*)()> tests;
+  return tests;
+}
 }  // namespace
+
+bool RegisterTest(const char* name, UIViewController* (*make)()) {
+  Registry()[name] = make;
+  return true;
+}
 
 void TestLog(const char* fmt, ...) {
   va_list ap;
@@ -45,6 +58,8 @@ static UIViewController* MakeTest(const std::string& name) {
   if (name == "gpu") return MakeGpuAvailabilityTest();
   if (name == "settings") return MakeSettingsTest();
   if (name == "clipboard") return MakeClipboardTest();
+  auto it = Registry().find(name);
+  if (it != Registry().end()) return it->second();
   return Missing(name);
 }
 
