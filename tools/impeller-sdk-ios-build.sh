@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # iOS Phase 1: build the Impeller interop STATIC library for the iOS Simulator
-# (arm64) on the Mac, from the pinned engine (engine/IMPELLER_SHA) plus
+# (arm64) or, with RNI_IOS_TARGET=device, for iPhone/iPad (iphoneos arm64), on
+# the Mac, from the pinned engine (engine/IMPELLER_SHA) plus
 # engine/impeller-sdk-patches/*.patch and engine/impeller-sdk-patches/ios/*.patch,
-# staged as <dest> (default engine/third_party/impeller-sdk-ios-simulator-arm64):
+# staged as <dest> (default engine/third_party/impeller-sdk-ios-simulator-arm64,
+# or engine/third_party/impeller-sdk-ios-arm64 for device, the dirs
+# engine/ios/RniIos.cmake looks in):
 #   include/impeller.h, include/impeller.hpp, lib/libimpeller.a (without
 #   Flutter's C++ exception runtime; see below),
 #   lib/exports.txt (the exported Impeller* C functions), .stamp
@@ -26,12 +29,18 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"
 [ "$(uname -s)" = Darwin ] || { echo "impeller-sdk-ios: darwin only (from linux: tools/sdk-fetch-ios.sh)" >&2; exit 2; }
 SHA="$(tr -d ' \n' < engine/IMPELLER_SHA)"
-DEST="${1:-engine/third_party/impeller-sdk-ios-simulator-arm64}"
+TARGET="${RNI_IOS_TARGET:-simulator}"
+case "$TARGET" in
+  simulator) GN_TARGET=(--ios --simulator --simulator-cpu arm64); OUT=rni_ios_sim_debug_arm64
+             VARIANT=simulator-arm64 ;;
+  device) GN_TARGET=(--ios); OUT=rni_ios_dev_debug_arm64; VARIANT=arm64 ;;
+  *) echo "impeller-sdk-ios: RNI_IOS_TARGET is simulator or device, not '$TARGET'" >&2; exit 64 ;;
+esac
+OUTI="${OUT/_debug_/_interop_}"       # same args, interop BUILD.gn as the root
+DEST="${1:-engine/third_party/impeller-sdk-ios-$VARIANT}"
 WORK="${RNI_SDK_WORK:-$HOME/projects/_ref/sc32}"
 F="$WORK/flutter"
 SRC="$F/engine/src"
-OUT=rni_ios_sim_debug_arm64           # flutter/tools/gn's own out dir (args.gn)
-OUTI=rni_ios_sim_interop_arm64        # same args, interop BUILD.gn as the root
 say() { echo "[impeller-sdk-ios] $*"; }
 die() { say "FAIL: $*" >&2; exit 1; }
 
@@ -51,7 +60,7 @@ for p in "${PATCHES[@]}"; do git -C "$F" apply "$p" || die "patch $(basename "$p
 say "patched: ${#PATCHES[@]} patches, sum ${PATCH_SUM:0:16}"
 
 if [ ! -f "$SRC/out/$OUT/args.gn" ]; then
-  (cd "$SRC" && ./flutter/tools/gn --target-dir "$OUT" --ios --simulator --simulator-cpu arm64 \
+  (cd "$SRC" && ./flutter/tools/gn --target-dir "$OUT" "${GN_TARGET[@]}" \
     --runtime-mode debug --prebuilt-dart-sdk --no-lto --no-rbe --no-goma > "$WORK/gn-ios.log" 2>&1) \
     || { tail -15 "$WORK/gn-ios.log"; die "gn --ios"; }
 fi
@@ -100,7 +109,7 @@ LEFT=$(grep -cE ' T (___cxa_(throw|rethrow|begin_catch|end_catch|current_primary
 say "dropped $(echo "$ABI_MEMBERS" | grep -c . || true) C++ exception-runtime members (the system's is the only one)"
 sed -nE 's/^[0-9a-f]+ T _(Impeller[A-Za-z0-9_]+)$/\1/p' "$TMP/nm.txt" | sort -u > "$TMP/lib/exports.txt"
 rm -f "$TMP/nm.txt"
-printf 'sha=%s\npatch_sha256=%s\ntarget=ios-simulator-arm64\nbuild_seconds=%s\n' "$SHA" "$PATCH_SUM" "$secs" > "$TMP/.stamp"
+printf 'sha=%s\npatch_sha256=%s\ntarget=ios-%s\nbuild_seconds=%s\n' "$SHA" "$PATCH_SUM" "$VARIANT" "$secs" > "$TMP/.stamp"
 chmod 755 "$TMP"; rm -rf "$DEST"; mv "$TMP" "$DEST"
 say "built in ${secs}s -> $DEST ($(du -h "$DEST/lib/libimpeller.a" | cut -f1), $(wc -l < "$DEST/lib/exports.txt" | tr -d ' ') exports)"
 echo "IMPELLER_SDK_IOS_OK $DEST"

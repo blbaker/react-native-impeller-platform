@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Stage the iOS Simulator Impeller SDK from a linux host (iOS Task 1.6).
+# Stage the iOS Impeller SDK (Simulator, or device = iPhone/iPad) from a linux
+# host (iOS Task 1.6).
 #
 # Same role as tools/sdk-fetch-darwin.sh, but no prebuilt exists for iOS
 # (flutter_infra publishes no ios impeller_sdk.zip at any SHA, and
@@ -7,7 +8,7 @@
 # "fetch" is a build ON A MAC: tools/impeller-sdk-ios-build.sh in this
 # worktree's copy there (tools/mac-run.sh). The SDK stays on the Mac, where the
 # iOS gates link it.
-#   RNI_MAC_HOST=<ssh host> bash tools/sdk-fetch-ios.sh
+#   RNI_MAC_HOST=<ssh host> bash tools/sdk-fetch-ios.sh [simulator|device]
 # Env: RNI_MAC_TREE (default rni-ios), RNI_SDK_WORK (forwarded), RNI_ABI_REF.
 #
 # ABI parity, like sdk-fetch-darwin.sh: the iOS archive's exported Impeller*
@@ -18,8 +19,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 HOST="${RNI_MAC_HOST:?RNI_MAC_HOST=<ssh host of a Mac> is required}"
-export RNI_MAC_TREE="${RNI_MAC_TREE:-rni-ios}" RNI_MAC_ENV="RNI_SDK_WORK"
-DEST=engine/third_party/impeller-sdk-ios-simulator-arm64
+export RNI_MAC_TREE="${RNI_MAC_TREE:-rni-ios}" RNI_MAC_ENV="RNI_SDK_WORK RNI_IOS_TARGET"
+# [simulator|device]: the iOS Simulator (default) or iPhone/iPad (iphoneos).
+export RNI_IOS_TARGET="${1:-simulator}"
+case "$RNI_IOS_TARGET" in
+  simulator) DEST=engine/third_party/impeller-sdk-ios-simulator-arm64 ;;
+  device) DEST=engine/third_party/impeller-sdk-ios-arm64 ;;
+  *) echo "usage: $0 [simulator|device]" >&2; exit 64 ;;
+esac
 REF="${RNI_ABI_REF:-engine/third_party/impeller-sdk-custom/lib/libimpeller.so}"
 say() { echo "[sdk-fetch-ios] $*"; }
 
@@ -33,7 +40,7 @@ if [ -f "$REF" ]; then
   readelf --dyn-syms -W "$REF" | awk '$4=="FUNC" && $7!="UND" {print $8}' | sed 's/@.*//' \
     | grep '^Impeller' | sort -u > "$tmp/linux.syms"
   if ! diff -q "$tmp/linux.syms" "$tmp/ios.syms" > /dev/null; then
-    say "FAIL: ios-simulator/linux export sets differ:"
+    say "FAIL: ios $RNI_IOS_TARGET/linux export sets differ:"
     diff "$tmp/linux.syms" "$tmp/ios.syms" | head -20
     exit 1
   fi

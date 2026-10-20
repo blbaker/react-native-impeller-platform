@@ -216,6 +216,39 @@ colour must be on screen where that layout says, in both screenshots. Layout
 alone can't prove that: `onLayout` reports the new position before anything is
 drawn there.
 
+## Device builds (iPhone/iPad)
+
+```bash
+bash tools/sdk-fetch-ios.sh device     # once: Impeller for iphoneos arm64 (about 5 min, 3 GB of build files)
+bash tools/engine-build-ios.sh device  # engine/build-ios-device/librni_ios_all.a
+bash tools/ci-ios-device-build.sh      # builds, links and checks the test host for iphoneos
+```
+
+The device SDK is built from the same checkout and patches as the Simulator
+one (`RNI_IOS_TARGET=device` in `tools/impeller-sdk-ios-build.sh`) and lands in
+`engine/third_party/impeller-sdk-ios-arm64`, where `engine/ios/RniIos.cmake`
+looks for it. Hermes's xcframework already has the device slice. The gate
+checks that the app is an iPhone app (Mach-O platform `IOS`, arm64, minimum
+iOS 15.1, `CFBundleSupportedPlatforms` iPhoneOS) and has one C++ exception
+runtime and one jsi. The built app is kept as `RniTestHost-iphoneos.zip` in
+the gate's artifacts. Shared test-host builds pick the platform with
+`IOS_PLATFORM=simulator|device` (`tools/lib/ios-sim.sh`).
+
+Running it needs one of:
+
+- an iPhone or iPad connected to the Mac and trusted, signed with an iOS
+  development provisioning profile that includes it; or
+- an Apple-silicon Mac, which can run iOS apps: an iOS development profile
+  that includes the Mac (Xcode makes one when an iOS app is run on "My Mac
+  (Designed for iPad)" with automatic signing), the app signed with it and
+  installed in the App Store wrapper layout (`X.app/Wrapper/X.app`).
+
+Measured on this Mac: a flat iOS bundle won't open ("incorrect executable
+format"). The wrapper layout reaches macOS's installer, which rejects any
+app whose signature it can't validate. `codesign` with an Apple Development
+identity fails over SSH (`errSecInternalComponent`: the login keychain is
+locked to a non-GUI session).
+
 ## Simulator facts the gates depend on
 
 - `simctl launch --stdout=<file>` stays empty when the file is under
@@ -246,8 +279,8 @@ drawn there.
 
 ## Not done
 
-- Device (`iphoneos`) builds: no device Impeller SDK yet; `engine-build-ios.sh
-  device` says so by name.
+- Running on a device. Device builds compile, link and sign (below), but no
+  gate runs one: that needs an iPhone, or this Mac set up to run iOS apps.
 - A raster thread for the iOS host (RECORD and RASTER share the main thread).
 - `Linking.openURL`, TLS, and image upload on an IO thread (GL-only on desktop).
 - Selection UI (loupe, handles, edit menu), an underline for composing text, a

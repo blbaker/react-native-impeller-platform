@@ -52,7 +52,7 @@ ios_on_mac_or_reexec() {
   fi
   # Only these knobs cross over; everything else a gate needs is in the tree.
   RNI_MAC_TREE="${RNI_MAC_TREE:-rni-ios}" \
-    RNI_MAC_ENV="IOS_DEVICE IOS_SETTLE IOS_KEEP_SIM RNI_IOS_SDK RNI_IOS_CI_DIR IOS_SIM_SHOT_EARLY IOS_INPUT_TEST" \
+    RNI_MAC_ENV="IOS_DEVICE IOS_SETTLE IOS_KEEP_SIM RNI_IOS_SDK RNI_IOS_CI_DIR IOS_SIM_SHOT_EARLY IOS_INPUT_TEST RNI_IOS_ENGINE_LIB" \
     exec bash "$IOS_ROOT/tools/mac-run.sh" bash "$rel" "$@"
 }
 
@@ -79,15 +79,29 @@ ios_begin() {
 
 ios_keep() { cp "$@" "$IOS_ART/" 2> /dev/null || true; }
 
-# RNI_IOS_SDK: a dir with include/impeller.h + lib/libimpeller.a for the iOS
-# Simulator (arm64). Default: the one tools/sdk-fetch-ios.sh stages on the Mac.
+# IOS_PLATFORM: simulator (default) or device (iPhone/iPad, iphoneos arm64).
+# Picks the clang SDK + target, the Impeller SDK, the engine build and the
+# Hermes slice. Only tools/ci-ios-device-build.sh sets device.
+ios_platform() {
+  case "${IOS_PLATFORM:-simulator}" in
+    simulator) IOS_CC_SDK=iphonesimulator IOS_TRIPLE=arm64-apple-ios15.1-simulator
+               IOS_SDK_VARIANT=simulator-arm64 IOS_HERMES_SLICE='ios-*simulator' ;;
+    device) IOS_CC_SDK=iphoneos IOS_TRIPLE=arm64-apple-ios15.1 IOS_SDK_VARIANT=arm64
+            IOS_HERMES_SLICE=ios-arm64 ;;
+    *) echo "ios-sim: IOS_PLATFORM is simulator or device, not '$IOS_PLATFORM'"; return 1 ;;
+  esac
+}
+
+# RNI_IOS_SDK: a dir with include/impeller.h + lib/libimpeller.a for the
+# platform (ios_platform). Default: the one tools/sdk-fetch-ios.sh stages on the Mac.
 ios_sdk_resolve() {
-  local d="${RNI_IOS_SDK:-$IOS_ROOT/engine/third_party/impeller-sdk-ios-simulator-arm64}"
+  ios_platform || return 1
+  local d="${RNI_IOS_SDK:-$IOS_ROOT/engine/third_party/impeller-sdk-ios-$IOS_SDK_VARIANT}"
   if [ -f "$d/include/impeller.h" ] && [ -f "$d/lib/libimpeller.a" ]; then
     IOS_SDK_INC="$d/include" IOS_SDK_LIB="$d/lib/libimpeller.a"
     return 0
   fi
-  echo "ios-sim: no iOS Simulator Impeller SDK at $d (run tools/sdk-fetch-ios.sh)"
+  echo "ios-sim: no iOS ($IOS_SDK_VARIANT) Impeller SDK at $d (run tools/sdk-fetch-ios.sh ${IOS_PLATFORM:-simulator})"
   return 1
 }
 
@@ -105,10 +119,11 @@ ios_build_testhost() {
   rm -rf "$IOS_APP" && mkdir -p "$IOS_APP"
   local t0=$SECONDS srcs=("${IOS_SRCS[@]}") link=() what="${#IOS_SRCS[@]} sources"
   if [ "${1:-}" = engine ]; then
-    local lib="${RNI_IOS_ENGINE_LIB:-$IOS_ROOT/engine/build-ios-simulator/librni_ios_all.a}"
+    local lib="${RNI_IOS_ENGINE_LIB:-$IOS_ROOT/engine/build-ios-${IOS_PLATFORM:-simulator}/librni_ios_all.a}"
     local hx="$IOS_ROOT/engine/third_party/hermes-ios"
     local fw
-    fw="$(ls -d "$hx"/hermesvm.xcframework/ios-*simulator 2> /dev/null | head -1)"
+    # shellcheck disable=SC2086  # IOS_HERMES_SLICE may be a glob
+    fw="$(ls -d "$hx"/hermesvm.xcframework/$IOS_HERMES_SLICE 2> /dev/null | head -1)"
     [ -f "$lib" ] || { echo "ios-sim: no engine library at $lib (run tools/engine-build-ios.sh)"; return 1; }
     [ -d "$fw/hermesvm.framework" ] || { echo "ios-sim: no hermesvm.framework under $hx (run tools/hermes-build-ios.sh)"; return 1; }
     srcs=()
@@ -123,7 +138,7 @@ ios_build_testhost() {
   # -lc++abi: libimpeller.a is staged without Flutter's C++ exception runtime
   # (tools/impeller-sdk-ios-build.sh), so the system's is the one runtime; an
   # app links it explicitly, as libc++ alone does not re-export all of it.
-  if ! xcrun --sdk iphonesimulator clang++ -std=c++20 -fobjc-arc -target arm64-apple-ios15.1-simulator \
+  if ! xcrun --sdk "$IOS_CC_SDK" clang++ -std=c++20 -fobjc-arc -target "$IOS_TRIPLE" \
       -Wall -Wextra -Wno-unused-parameter -Werror \
       -I engine -I engine/ios/testhost -isystem "$IOS_SDK_INC" "${srcs[@]}" ${link[@]+"${link[@]}"} "$IOS_SDK_LIB" \
       -lc++abi -framework UIKit -framework Metal -framework MetalPerformanceShaders -framework QuartzCore \
@@ -133,6 +148,10 @@ ios_build_testhost() {
     return 1
   fi
   cp engine/ios/testhost/Info.plist "$IOS_APP/Info.plist"
+  if [ "${IOS_PLATFORM:-simulator}" = device ]; then  # the plist says iPhoneSimulator
+    plutil -replace CFBundleSupportedPlatforms -json '["iPhoneOS"]' "$IOS_APP/Info.plist"
+    plutil -replace DTPlatformName -string iphoneos "$IOS_APP/Info.plist"
+  fi
   if [ -d "$IOS_APP/Frameworks" ]; then
     codesign --force --sign - --timestamp=none "$IOS_APP"/Frameworks/*.framework > "$IOS_WORK/sign.log" 2>&1 \
       || { echo "ios-sim: codesign (frameworks) FAILED: $(cat "$IOS_WORK/sign.log")"; return 1; }
