@@ -69,9 +69,13 @@ The first attach creates the Metal context and typography, boots `EngineSession`
 (`setRenderContext`, `Boot`, `RunScript`, JS idle, `StartSurface`, JS idle; the
 desktop headless order), installs the GPU-availability observers, then paints on
 every `DisplayLinkIOS` tick: `PumpNativeAnimated`, `RecordFrame`, `RasterFrame` onto
-the drawable, `Present`, inside a `rni::gpu::Section`. RECORD and RASTER both run on
+the drawable, `Present`, inside a `rni::gpu::Section`. Each frame also ticks
+`LayoutAnimation` and flushes `requestAnimationFrame`: rAF is paced to the
+display link (attached at boot), and pauses while the app is in the
+background, like a browser's hidden tab. RECORD and RASTER both run on
 the main thread; the desktop windowed pipeline's raster thread is later work. An app
-links `librni_ios_all.a`, `libimpeller.a` and `hermesvm.framework` (embedded).
+links `librni_ios_all.a`, `libimpeller.a`, `-lc++abi` and `hermesvm.framework`
+(embedded).
 
 ## Touch and keyboard
 
@@ -134,6 +138,12 @@ No prebuilt Impeller SDK exists for iOS: flutter_infra publishes none, and
   the checkout and reapplies every patch on each run.
 - `tools/sdk-fetch-ios.sh` runs that build on a Mac from linux and checks ABI
   parity: the 189 exported `Impeller*` functions match the linux SDK's.
+- ⛔ The staged `libimpeller.a` has no C++ exception runtime of its own.
+  Flutter's archive bundles its libc++abi and a `libc++` `exception.o` built
+  without exception support. Linked into an app, those copies won over the
+  system's, and a JS error thrown in a task ended in `std::terminate` (a crash)
+  instead of RN's error handler. `tools/impeller-sdk-ios-build.sh` drops those
+  17 members and fails if any of the runtime is left. Apps link `-lc++abi`.
 - `tools/hermes-build-ios.sh` builds `hermesvm.xcframework` (device arm64,
   simulator arm64 + x86_64) at the tag RN pins, with Hermes's own Apple packaging
   (`utils/build-apple-framework.sh`), on a copy of the checkout.
@@ -150,6 +160,7 @@ bash tools/ci-ios-sim.sh               # M1: builds the engine (librni_ios_all.a
 bash tools/ci-ios-input.sh             # real UIKit taps and keyboard keys (XCUITest)
 bash tools/ci-ios-text-input.sh        # autocorrect and Japanese composition (XCUITest)
 bash tools/ci-ios-keyboard.sh          # Keyboard events + KeyboardAvoidingView (XCUITest)
+bash tools/ci-ios-raf.sh               # requestAnimationFrame paced to the display link
 ```
 
 From linux, point the same commands at a Mac over ssh:
@@ -234,8 +245,10 @@ drawn there.
 - Selection UI (loupe, handles, edit menu), an underline for composing text, a
   per-glyph caret rectangle, hardware keyboards (`pressesBegan`), multi-touch,
   VoiceOver.
-- `requestAnimationFrame` pacing: on iOS it runs on the 16 ms timer fallback,
-  not on the display link.
+- JS errors thrown inside a task reach RN's error handler as "Non-js exception:
+  ..." with no JS stack: `jsi::JSError` thrown inside `hermesvm.framework` is
+  not matched as the engine's own `jsi::JSError` (two copies of jsi's type
+  info). Desktop reports the same throw as "Error: ...".
 - iOS 16+ shows a paste-consent alert when an app reads another app's
   pasteboard; the Clipboard module's `getString` will hit it,
   as RN's does.

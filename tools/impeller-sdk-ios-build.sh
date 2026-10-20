@@ -3,7 +3,8 @@
 # (arm64) on the Mac, from the pinned engine (engine/IMPELLER_SHA) plus
 # engine/impeller-sdk-patches/*.patch and engine/impeller-sdk-patches/ios/*.patch,
 # staged as <dest> (default engine/third_party/impeller-sdk-ios-simulator-arm64):
-#   include/impeller.h, include/impeller.hpp, lib/libimpeller.a,
+#   include/impeller.h, include/impeller.hpp, lib/libimpeller.a (without
+#   Flutter's C++ exception runtime; see below),
 #   lib/exports.txt (the exported Impeller* C functions), .stamp
 #   bash tools/impeller-sdk-ios-build.sh [dest]          (darwin; from linux: tools/sdk-fetch-ios.sh)
 # Env: RNI_SDK_WORK  the checkout tools/impeller-sdk-custom-build.sh synced on this Mac
@@ -76,7 +77,27 @@ TMP="$(mktemp -d "$(dirname "$DEST")/.sdk-ios.XXXXXX")"
 mkdir -p "$TMP/include" "$TMP/lib"
 cp "$SRC/flutter/impeller/toolkit/interop/impeller.h" "$SRC/flutter/impeller/toolkit/interop/impeller.hpp" "$TMP/include/"
 cp -c "$LIB" "$TMP/lib/libimpeller.a" 2> /dev/null || cp "$LIB" "$TMP/lib/libimpeller.a"  # APFS clone
+# ⛔ ONE C++ EXCEPTION RUNTIME PER APP. The archive carries Flutter's own
+# libc++abi (libcxxabi.*.o: __cxa_throw, __cxa_begin_catch, __cxa_rethrow,
+# __gxx_personality_v0, std::terminate, std::exception's typeinfo) and, in
+# libcxx.exception.o, its own std::current_exception / std::rethrow_exception /
+# std::exception_ptr, built WITHOUT exception support. Linked into an app, an
+# archive member wins over the system library for every symbol it defines, so
+# engine code captured and re-threw exceptions through those copies while
+# Hermes (a framework) throws through the system's. Measured: a re-thrown
+# std::runtime_error ends in "terminating due to uncaught exception" even with
+# a catch right beside it, and a throwing requestAnimationFrame callback
+# crashed the app instead of reaching RN's error handler. Flutter's libc++
+# proper is namespaced std::__fl and stays; everything dropped here is
+# un-namespaced, and the system libc++ / libc++abi export all of it (an app
+# links -lc++abi).
+ABI_MEMBERS=$(ar -t "$TMP/lib/libimpeller.a" | grep -E '^(libcxxabi\..*|libcxx\.exception\.o)$' || true)
+[ -n "$ABI_MEMBERS" ] && ar -d "$TMP/lib/libimpeller.a" $ABI_MEMBERS
+ranlib "$TMP/lib/libimpeller.a" 2> /dev/null || true
 nm -gU "$TMP/lib/libimpeller.a" 2> /dev/null > "$TMP/nm.txt" || true   # to a file: nm | grep SIGPIPEs
+LEFT=$(grep -cE ' T (___cxa_(throw|rethrow|begin_catch|end_catch|current_primary_exception)|___gxx_personality_v0|__ZSt9terminatev|__ZSt17current_exceptionv|__ZSt17rethrow_exceptionSt13exception_ptr)$' "$TMP/nm.txt" || true)
+[ "${LEFT:-0}" = 0 ] || die "libimpeller.a still defines $LEFT C++ exception-runtime symbols"
+say "dropped $(echo "$ABI_MEMBERS" | grep -c . || true) C++ exception-runtime members (the system's is the only one)"
 sed -nE 's/^[0-9a-f]+ T _(Impeller[A-Za-z0-9_]+)$/\1/p' "$TMP/nm.txt" | sort -u > "$TMP/lib/exports.txt"
 rm -f "$TMP/nm.txt"
 printf 'sha=%s\npatch_sha256=%s\ntarget=ios-simulator-arm64\nbuild_seconds=%s\n' "$SHA" "$PATCH_SUM" "$secs" > "$TMP/.stamp"
