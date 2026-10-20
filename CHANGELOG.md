@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.5.0...v0.6.0) (2026-10-20)
+
+
+### Features
+
+* **ios:** pace requestAnimationFrame to the display link ([4dc7c7e](https://github.com/blbaker/react-native-impeller-platform/commit/4dc7c7e682450adba880ce87d19dda1a175172c8))
+
+
+### Bug Fixes
+
+* **engine:** one jsi on Apple, so JS errors keep their message and stack ([9c2c516](https://github.com/blbaker/react-native-impeller-platform/commit/9c2c516dab1cf3690d9690abdb146dfb458c9987))
+* **engine:** one jsi on Apple, so JS errors keep their message and stack ([e8b64cd](https://github.com/blbaker/react-native-impeller-platform/commit/e8b64cda649434998aadd883656104736c781acd))
+* **ios:** one C++ exception runtime, so a JS error in a task no longer crashes the app ([fabdd88](https://github.com/blbaker/react-native-impeller-platform/commit/fabdd88d00744d051d96853be225bce3c7a02787))
+* **ios:** rAF paced to the display link, and a JS error in a task no longer crashes the app ([3268b11](https://github.com/blbaker/react-native-impeller-platform/commit/3268b11e33f4137b5c92ac95dec5a83d6fc63c4b))
+
 ## [0.5.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.4.0...v0.5.0) (2026-10-20)
 
 
