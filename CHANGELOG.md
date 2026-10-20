@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.4.0...v0.5.0) (2026-10-20)
+
+
+### Features
+
+* **ios:** keyboard events for RN's Keyboard and KeyboardAvoidingView ([1e76351](https://github.com/blbaker/react-native-impeller-platform/commit/1e76351714b67bfb344b5e530db608f407c95a63))
+* **ios:** keyboard events for RN's Keyboard and KeyboardAvoidingView ([22dd7ef](https://github.com/blbaker/react-native-impeller-platform/commit/22dd7efb196fe90bb08b1fb46496bcfbeb5fc69d))
+
+
+### Bug Fixes
+
+* **engine:** make DeviceEventSink.h self-contained ([0a169ae](https://github.com/blbaker/react-native-impeller-platform/commit/0a169aee821286e4a843aff1deebfb5e3b8a0161))
+
 ## [0.4.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.3.1...v0.4.0) (2026-10-20)
 
 
