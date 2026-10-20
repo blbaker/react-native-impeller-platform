@@ -323,6 +323,7 @@ add_executable(rn-impeller
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/DisplayLinkDarwin.cpp>
   # FP-23: headless darwin on Metal (offscreen MTLTexture, SDK patch 0005).
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm>
+  runtime/AnimationFrameScheduler.cpp
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
   runtime/EngineSession.cpp
@@ -386,6 +387,7 @@ add_executable(rn-impeller
   scenegraph/BackdropBlur.cpp
   scenegraph/BlendGroup.cpp
   scenegraph/EllipsizeText.cpp
+  scenegraph/ParagraphCache.cpp
   scenegraph/BorderCurve.cpp
   scenegraph/BorderDashRounded.cpp
   scenegraph/DrawOpLog.cpp

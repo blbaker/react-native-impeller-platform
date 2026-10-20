@@ -112,6 +112,11 @@ size_t AddFont(const std::string& path, std::shared_ptr<const std::vector<uint8_
   return gFonts.size() - 1;
 }
 
+uint64_t FontEpoch() {
+  return (gGeneration.load(std::memory_order_acquire) << 32) +
+         (uint64_t)gCount.load(std::memory_order_acquire);
+}
+
 bool RegisteredHere(size_t index) {
   ForThisThread();
   return index < tSlot.ok.size() && tSlot.ok[index];

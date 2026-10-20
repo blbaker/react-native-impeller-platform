@@ -49,6 +49,7 @@
 #include "text/TextStyle.h"
 #include "text/TextTransform.h"
 #include "text/TypographyContexts.h"
+#include "scenegraph/ParagraphCache.h"
 
 // FP-20: no GL here. Textures and the supersample offscreen go through the
 // RenderBackend (scenegraph/GpuBackend.h); the GL pieces live in
@@ -380,7 +381,9 @@ bool ParseTransformOps(const folly::dynamic& value, react::Transform& out) {
 }  // namespace
 
 SceneGraph::SceneGraph(ImpellerTypographyContext typography)
-    : typography_(typography) {}
+    : typography_(typography), paraCache_(std::make_unique<ParagraphCache>()) {}
+
+void SceneGraph::printParagraphCacheSummary() const { paraCache_->PrintSummary(); }
 
 ImpellerTypographyContext SceneGraph::threadTypography() const {
   return typography_ != nullptr ? rni::typography::ForThisThread() : nullptr;
@@ -1249,6 +1252,7 @@ void SceneGraph::applyMutations(
       case react::ShadowViewMutation::Delete: {
         damage_.MarkTag(m.oldChildShadowView.tag);  // FP-18: its old bounds
         nodes_.erase(m.oldChildShadowView.tag);
+        paraCache_->Erase(m.oldChildShadowView.tag);
         if (log) {
           std::printf("[fabric] DELETE tag=%d\n", m.oldChildShadowView.tag);
         }
@@ -1957,6 +1961,15 @@ ImpellerParagraph SceneGraph::buildRunParagraph(const SceneNode& node, float w, 
   return buildRunParagraphFrom(node, node.runs, w, shadow);
 }
 
+ImpellerParagraph SceneGraph::paintParagraph(const SceneNode& node, float w, int shadow) {
+  if (typography_ == nullptr) return nullptr;
+  // Epoch BEFORE the context: the context then holds at least those fonts, and
+  // a font added in between changes the epoch again, so the entry misses.
+  const uint64_t epoch = rni::typography::FontEpoch();
+  return paraCache_->Get(node, w, shadow, OwnAlpha(node), threadTypography(), epoch,
+                         [&] { return buildRunParagraph(node, w, shadow); });
+}
+
 ImpellerParagraph SceneGraph::buildRunParagraphFrom(const SceneNode& node, const std::vector<TextRun>& runs,
                                                     float w, int shadow) {
   if (typography_ == nullptr) return nullptr;
@@ -2046,7 +2059,7 @@ void SceneGraph::paintTextShadows(ImpellerDisplayListBuilder builder, const Scen
     for (size_t d : done) seen = seen || SameShadow(node.runs[d], r);
     if (seen) continue;
     done.push_back(i);
-    ImpellerParagraph sp = buildRunParagraph(node, w, (int)i);
+    ImpellerParagraph sp = paintParagraph(node, w, (int)i);
     if (sp == nullptr) continue;
     rni::ShadowSpec spec;
     spec.offsetX = r.shadowOffX;
@@ -2601,7 +2614,7 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
     const auto& pins = node.layoutMetrics.contentInsets;
     const float px = x + (float)pins.left, py = y + (float)pins.top;
     ImpellerParagraph paragraph =
-        buildRunParagraph(node, std::max(0.0f, w - (float)(pins.left + pins.right)));
+        paintParagraph(node, std::max(0.0f, w - (float)(pins.left + pins.right)));
     if (paragraph != nullptr) {
       const float vOff =
           ParagraphVOffset(node, paragraph, h - (float)(pins.top + pins.bottom));

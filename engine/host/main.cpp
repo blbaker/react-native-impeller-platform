@@ -1394,6 +1394,11 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // repaints promptly. M3 installs NO wake, so the off-thread witness stalls the
   // full budget, proving the wake is load-bearing. Wired only under --idle-skip:
   // every existing gate keeps its unconditional paint-every-frame loop.
+  // rAF pacing (runtime/AnimationFrameScheduler.h): from here the frame loop
+  // owns requestAnimationFrame's cadence, one flush per BeginFrame. Attached
+  // in both loop modes; the wake matters under --idle-skip, where a rAF
+  // registered while the loop sleeps must ask for the frame it waits on.
+  host.attachAnimationFramesToLoop([&scheduler]() { scheduler.RequestFrame("raf"); });
   if (idleSkip) {
     // FP-11: every damage source is a frame request; the scheduler posts the
     // wake (glfwPostEmptyEvent) unless M3 built it without one.
@@ -1628,6 +1633,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     bool animatedThisFrame = false;
     if (shouldPaint) {
       scheduler.BeginFrame();
+      // rAF: this frame's requestAnimationFrame callbacks, once, on JS.
+      host.beginAnimationFrame();
       // FP-40: RN's animationTick (LayoutAnimation half), platform thread.
       if (fabric.tickLayoutAnimations()) animatedThisFrame = true;
       const unsigned long ticksBefore = host.nativeAnimatedTicks();
@@ -2108,6 +2115,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::exttexprobe::PrintSummary();  // FP-42 test hook
   host.snapshots()->PrintSummary();  // FP-43
   rni::typography::PrintSummary();  // FP-12
+  sceneGraph.printParagraphCacheSummary();
+  printf("rn-impeller: %s\n", host.animationFrameSummary().c_str());
   // ⛔ ALWAYS EMITTED, INCLUDING THE ZEROES.
   // touch_downs=0 says the mouse callback never fired — the pre-fix state, and
   // a completely different failure from touch_downs=3 touch_hits=0 (clicks
@@ -3512,10 +3521,13 @@ int main(int argc, char** argv) {
     if (frames > 0) {
       // Per-frame JS-work baseline, taken after boot settled: everything
       // counted from here on happened DURING the stepped frames.
-      const unsigned long loopTimers0 = host.jsTimersFired();
+      const unsigned long loopTimers0 =
+          host.jsTimersFired() + host.animationFrameCallbacks();
       const unsigned long loopMountTx0 = sceneGraph.mountTransactions();
       const unsigned long loopTicks0 = host.nativeAnimatedTicks();
       const unsigned long long loopTickUs0 = host.nativeAnimatedTickMicros();
+      // rAF pacing: one flush per stepped frame (no wake: this loop never sleeps).
+      host.attachAnimationFramesToLoop([] {});
       for (int frameIndex = 1; frameIndex <= frames; ++frameIndex) {
         // One NativeAnimated step, run on this thread (FP-10). The idle wait
         // still drains what it posts to JS (onEnd, layout-prop commits).
@@ -3525,6 +3537,7 @@ int main(int argc, char** argv) {
         layoutAnimFrames.fetch_add(1);
         fabric.tickLayoutAnimations();  // FP-40
         session.PumpNativeAnimated();
+        host.beginAnimationFrame();
         host.waitForJsIdle(5000);
         // FP-33: decodes finish off-thread. Their load events are queued to JS before WaitIdle
         // returns, so the NEXT frame's waitForJsIdle mounts what they trigger, and every frame
@@ -3592,8 +3605,9 @@ int main(int argc, char** argv) {
       printf("rn-impeller: directprop_updates=%lu\n",
              sceneGraph.directPropUpdates());
       // Cost of an animation DURING the stepped frames, per the Mac's ask
-      // (DS-INPUT-SPIN item 4). js_timers = JS timer callbacks run (rAF is a
-      // setTimeout(0) here, so a JS-driven Animated loop shows ~1 per frame);
+      // (DS-INPUT-SPIN item 4). js_timers = JS timer callbacks run, plus
+      // requestAnimationFrame callbacks (paced, AnimationFrameScheduler), so
+      // a JS-driven Animated loop shows ~1 per frame;
       // mount_tx = React commits that reached the scene (a JS-driven loop
       // commits every frame). Both stay 0 for a native-driven loop.
       // tick_us = time inside RN's C++ onRender, on the frame-loop thread
@@ -3603,7 +3617,8 @@ int main(int argc, char** argv) {
           host.nativeAnimatedTickMicros() - loopTickUs0;
       printf("rn-impeller: frameloop frames=%d js_timers=%lu mount_tx=%lu "
              "nativeanimated_ticks=%lu tick_us_total=%llu tick_us_avg=%.1f\n",
-             frames, host.jsTimersFired() - loopTimers0,
+             frames,
+             host.jsTimersFired() + host.animationFrameCallbacks() - loopTimers0,
              sceneGraph.mountTransactions() - loopMountTx0, loopTicks,
              loopTickUs, loopTicks ? (double)loopTickUs / loopTicks : 0.0);
       fflush(stdout);
@@ -3670,6 +3685,8 @@ int main(int argc, char** argv) {
     rni::PrintGpuTextureTotals();  // FP-20
     host.snapshots()->PrintSummary();  // FP-43
     rni::typography::PrintSummary();  // FP-12
+    sceneGraph.printParagraphCacheSummary();
+    printf("rn-impeller: %s\n", host.animationFrameSummary().c_str());
   }
 
   std::vector<rni::Px> px;

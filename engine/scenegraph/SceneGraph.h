@@ -74,6 +74,9 @@ struct TextRun {
   // RN measured for the child (same source as measure's placeholder).
   bool attachment{false};
   float attachW{0}, attachH{0};
+  // ParagraphCache compares runs by value, member-wise: a field added here is
+  // part of the cache key with no other change.
+  bool operator==(const TextRun&) const = default;
 };
 
 // Everything we need to paint one node, snapshotted from its ShadowView. We
@@ -477,10 +480,15 @@ struct SceneNode {
   facebook::react::Tag parent{};
 };
 
+class ParagraphCache;  // scenegraph/ParagraphCache.h
+
 class SceneGraph {
  public:
   explicit SceneGraph(ImpellerTypographyContext typography);
   ~SceneGraph();
+
+  // rn-impeller: paragraph_cache hits= misses= live= (one line, at exit).
+  void printParagraphCacheSummary() const;
 
   // ENG item 2 — SUPERSAMPLE-RNSVG.
   //
@@ -1172,6 +1180,10 @@ class SceneGraph {
   ImpellerParagraph buildRunParagraph(const SceneNode& node, float w, int shadow = -1);
   ImpellerParagraph buildRunParagraphFrom(const SceneNode& node, const std::vector<TextRun>& runs,
                                           float w, int shadow);
+  // The paint path's buildRunParagraph: the same paragraph, served from
+  // paraCache_ while nothing that shaped it changed. Caller releases it.
+  ImpellerParagraph paintParagraph(const SceneNode& node, float w, int shadow = -1);
+  std::unique_ptr<ParagraphCache> paraCache_;
   void paintTextShadows(ImpellerDisplayListBuilder builder, const SceneNode& node, float w,
                         float px, float py);
   // item 11: focused non-TextInput View (focus ring). 0 = none.

@@ -184,9 +184,17 @@ ReactHost::ReactHost(bool withInspector) {
 
   // Weak: TimerManager outlives us only through ReactInstance, and a strong
   // capture here would keep it alive past the runtime it calls into.
+  // requestAnimationFrame paced to frames, not setTimeout(0). See
+  // AnimationFrameScheduler.h (Jim v5 chat-loop, 2026-10-19).
+  animationFrames_ = std::make_shared<AnimationFrameScheduler>(jsThread_);
   jsThread_->setTimerFireCallback(
       [weak = std::weak_ptr<react::TimerManager>(timerManager),
+       raf = std::weak_ptr<AnimationFrameScheduler>(animationFrames_),
        fired = jsTimersFired_](uint32_t id) {
+        if (id == AnimationFrameScheduler::kTimerId) {
+          if (auto r = raf.lock()) r->onTimer();
+          return;
+        }
         fired->fetch_add(1, std::memory_order_relaxed);
         if (auto tm = weak.lock()) {
           tm->callTimer(static_cast<react::TimerHandle>(id));
@@ -210,6 +218,7 @@ ReactHost::ReactHost(bool withInspector) {
       /*parentInspectorTarget*/ inspector_ ? inspector_->hostTarget() : nullptr);
 
   timerManager->setRuntimeExecutor(instance_->getBufferedRuntimeExecutor());
+  animationFrames_->setRuntimeExecutor(instance_->getBufferedRuntimeExecutor());
 
   // ⛔ BUFFERED, matching the timer manager and NOT runtimeExecutor().
   // The unbuffered executor exists so Fabric's UIManagerBinding install is not
@@ -423,8 +432,11 @@ ReactHost::ReactHost(bool withInspector) {
       {.isProfiling = false},
       [moduleProvider = std::move(moduleProvider),
        known = knownComponents_, expo = expoModules_, expoConfig = expoConfig_,
-       jsInvoker](jsi::Runtime& runtime) {
+       raf = animationFrames_, jsInvoker](jsi::Runtime& runtime) {
         installConsole(runtime);
+        // After TimerManager::attachGlobals, so these replace RN's
+        // setTimeout(0) requestAnimationFrame/cancelAnimationFrame.
+        raf->install(runtime);
         installCryptoGlobal(runtime);  // ENG-31: crypto.getRandomValues
         installHasComponent(runtime, known);
         react::TurboModuleBinding::install(
@@ -487,6 +499,7 @@ ReactHost::~ReactHost() {
   // objects must be released on it.
   if (jsThread_) {
     jsThread_->runOnQueueSync([this] {
+      if (animationFrames_) animationFrames_->releaseCallbacks();
       if (modules_) modules_->clearInstances();
       instance_.reset();
     });
@@ -533,6 +546,22 @@ void ReactHost::pumpNativeAnimated() {
   advanceAnimationClock();
   TRACE_EVENT0("animated", "NativeAnimatedPump");
   nativeAnimatedPump_->tick();
+}
+
+void ReactHost::attachAnimationFramesToLoop(std::function<void()> wake) {
+  if (animationFrames_) animationFrames_->attachFrameLoop(std::move(wake));
+}
+
+void ReactHost::beginAnimationFrame() {
+  if (animationFrames_) animationFrames_->beginFrame();
+}
+
+std::string ReactHost::animationFrameSummary() const {
+  return animationFrames_ ? animationFrames_->summary() : std::string();
+}
+
+unsigned long ReactHost::animationFrameCallbacks() const {
+  return animationFrames_ ? animationFrames_->callbacksRun() : 0UL;
 }
 
 bool ReactHost::nativeAnimatedActive() const {

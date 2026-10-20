@@ -27,6 +27,7 @@
 #include "scenegraph/TextureRegistry.h"
 #include "modules/ClipboardBridge.h"
 #include "modules/ExpoHost.h"
+#include "runtime/AnimationFrameScheduler.h"
 #include "runtime/DeviceEventSink.h"
 #include "runtime/JsThread.h"
 #include "runtime/NativeAnimatedPump.h"
@@ -145,6 +146,15 @@ class ReactHost {
   // the frame loop, never from the JS thread.
   void pumpNativeAnimated();
 
+  // requestAnimationFrame pacing (AnimationFrameScheduler.h). The frame loop
+  // attaches once (wake: any thread, asks a sleeping loop for a frame) and
+  // calls beginAnimationFrame() at every BeginFrame. Without a loop rAF runs
+  // on a 16 ms JS-thread timer.
+  void attachAnimationFramesToLoop(std::function<void()> wake);
+  void beginAnimationFrame();
+  std::string animationFrameSummary() const;
+  unsigned long animationFrameCallbacks() const;
+
   // How many times RN's animation engine actually ran, for gates. See
   // NativeAnimatedPump.h for why a pixel diff alone cannot prove ENG-06.
   unsigned long nativeAnimatedTicks() const;
@@ -154,9 +164,11 @@ class ReactHost {
   void setNativeAnimatedStartHook(std::function<void()> hook);
 
   // Per-frame JS-work instruments for the native-driven-loop cost check.
-  // jsTimersFired: JS timer callbacks run (setTimeout/setInterval and
-  // requestAnimationFrame, which IS a setTimeout(0) here). A JS-driven
-  // Animated loop fires one per frame; a native-driven one fires none.
+  // jsTimersFired: setTimeout/setInterval callbacks run. rAF callbacks are
+  // counted apart (animationFrameCallbacks): AnimationFrameScheduler paces
+  // them, they are not JsThread timers. The frameloop line's js_timers sums
+  // both, so a JS-driven Animated loop shows ~1 per frame and a
+  // native-driven one shows 0.
   // nativeAnimatedTickMicros: wall time spent inside RN's C++ onRender (the
   // node-graph walk + prop apply), summed over every tick. That walk runs on
   // the frame-loop thread (see pumpNativeAnimated) and executes no JS.
@@ -220,6 +232,7 @@ class ReactHost {
   // clock the manager does not have. Both outlive the module, which is created
   // lazily by the registry on first JS access.
   std::shared_ptr<NativeAnimatedPump> nativeAnimatedPump_;
+  std::shared_ptr<AnimationFrameScheduler> animationFrames_;
   std::shared_ptr<facebook::react::NativeAnimatedNodesManagerProvider>
       nativeAnimatedProvider_;
 };

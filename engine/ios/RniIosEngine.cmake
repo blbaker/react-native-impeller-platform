@@ -52,7 +52,7 @@ add_library(rni_ios_engine STATIC
   ${_E}/host/ExternalTextureProbe.cpp ${_E}/host/ResizeProbe.cpp
   ${_E}/base/Trace.cpp ${_E}/base/DevToolsFrames.cpp ${_E}/base/SanitizerHooks.cpp
   ${_E}/base/TestSync.cpp ${_E}/base/ContextFlags.cpp
-  ${_E}/runtime/JsThread.cpp ${_E}/runtime/ReactHost.cpp ${_E}/runtime/EngineSession.cpp
+  ${_E}/runtime/AnimationFrameScheduler.cpp ${_E}/runtime/JsThread.cpp ${_E}/runtime/ReactHost.cpp ${_E}/runtime/EngineSession.cpp
   ${_E}/runtime/InspectorHost.cpp ${_E}/runtime/DevToolsTracing.cpp
   ${_E}/modules/PlatformModules.cpp ${_E}/modules/NetworkingModule.cpp
   ${_E}/modules/ImageLoaderModule.cpp ${_E}/modules/WebSocketModule.cpp ${_E}/modules/ExpoHost.cpp
@@ -76,6 +76,7 @@ add_library(rni_ios_engine STATIC
   ${_E}/scenegraph/ContentFilters.cpp ${_E}/scenegraph/PrewarmTour.cpp
   ${_E}/scenegraph/BackdropBlur.cpp ${_E}/scenegraph/BlendGroup.cpp
   ${_E}/scenegraph/EllipsizeText.cpp ${_E}/scenegraph/BorderCurve.cpp
+  ${_E}/scenegraph/ParagraphCache.cpp
   ${_E}/scenegraph/BorderDashRounded.cpp ${_E}/scenegraph/DrawOpLog.cpp
   ${_E}/scenegraph/DrawOpHooks.cpp ${_E}/scenegraph/DrawOpHooksObjects.cpp
   ${_E}/text/ImpellerTextLayoutManager.cpp ${_E}/text/FontRegistry.cpp
