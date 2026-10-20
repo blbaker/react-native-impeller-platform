@@ -159,10 +159,14 @@ jobs:
           ICP_DIAG: '1'
         run: |
           rc=0
-          for i in 1 2 3; do
-            echo "=== run $i ==="
-            bash tools/ci-idle-commit-paint.sh || rc=1
+          for arm in light heavy click; do
+            for i in 1 2; do
+              echo "=== $arm run $i ==="
+              ICP_MODE=$arm bash tools/ci-idle-commit-paint.sh || rc=1
+            done
           done
+          echo "=== heavy, 1600x900 ==="
+          ICP_MODE=heavy ICP_WIDTH=1600 ICP_HEIGHT=900 bash tools/ci-idle-commit-paint.sh || rc=1
           exit $rc
 
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
