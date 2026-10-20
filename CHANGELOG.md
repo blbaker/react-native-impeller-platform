@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.7.0...v0.8.0) (2026-10-20)
+
+
+### Features
+
+* **ios:** an Xcode project for the test host, to run on an iPhone or a Mac ([d31c327](https://github.com/blbaker/react-native-impeller-platform/commit/d31c3278e2f69665f91d0e30921375010bd6f1c1))
+* **ios:** an Xcode project for the test host, to run on an iPhone or a Mac ([f09214d](https://github.com/blbaker/react-native-impeller-platform/commit/f09214d067e760ae8015715e8da04dc6f302d1a5))
+
+
+### Bug Fixes
+
+* **window:** a commit on an idle loop must reach the screen ([06bf5ea](https://github.com/blbaker/react-native-impeller-platform/commit/06bf5ea30f19e6b687eb4d8199be167ed47f7ffe))
+
 ## [0.7.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.6.0...v0.7.0) (2026-10-20)
 
 
