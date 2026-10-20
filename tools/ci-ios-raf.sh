@@ -8,12 +8,13 @@
 #   C  the rAF contract: same-batch cancel, cancel-before-flush, a throwing
 #      callback neither stops the rest nor goes unreported, a rAF registered
 #      inside a callback runs on a LATER frame
-#      (rafsem a=1 b=0 c=1 d=0 nested_later=1, plus the [js-exception] line).
-#      Until the C++ exception-runtime fix in tools/impeller-sdk-ios-build.sh,
-#      the throwing callback crashed the app here (std::terminate). iOS still
-#      reports it as "Non-js exception: ..." where desktop says "Error: ...":
-#      jsi::JSError thrown inside hermesvm.framework is not matched as the
-#      engine's own jsi::JSError (a separate defect, docs/eng/ios-platform.md).
+#      (rafsem a=1 b=0 c=1 d=0 nested_later=1), and the throw reported as the
+#      JS error it is: "[js-exception] ... Error: raf-semantics expected throw".
+#      Two past defects fail here: the throwing callback crashed the app
+#      (std::terminate: Flutter's C++ exception runtime inside libimpeller.a,
+#      see tools/impeller-sdk-ios-build.sh), and then it was reported as
+#      "Non-js exception: ..." with no JS stack (two copies of jsi's type info,
+#      see engine/cmake/ReactCommonCore.cmake reactcommon_jsi).
 #   R  the 2 s rAF loop runs at frame rate (20..150/s)
 #   F  frame-paced: the engine reports mode=frame, its flushes come from frames
 #      (frame_flushes > 0, timer_flushes == 0), and there were no more flushes
@@ -48,6 +49,9 @@ echo "== C: contract =="
 grep -q 'rafsem a=1 b=0 c=1 d=0 nested_later=1' "$LOG" \
   || bad C "$(grep -m1 'rafsem' "$LOG" || echo 'no rafsem line') (want a=1 b=0 c=1 d=0 nested_later=1)"
 grep -q 'js-exception.*raf-semantics expected throw' "$LOG" || bad C "a throwing rAF callback was swallowed, not reported"
+if grep -q 'js-exception.*Non-js exception: raf-semantics expected throw' "$LOG"; then
+  bad C "reported as a Non-js exception: Hermes's jsi::JSError did not match the engine's (two jsi copies)"
+fi
 
 echo "== R: rate =="
 RATE=$(sed -nE 's/.*rafrate per_s=([0-9]+).*/\1/p' "$LOG" | tail -1)
