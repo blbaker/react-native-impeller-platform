@@ -1,6 +1,6 @@
 {
   "name": "@blbaker/react-native-impeller-platform-engine-darwin-arm64",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Prebuilt Impeller engine host for darwin-arm64 (installed automatically by react-native-impeller-platform)",
   "license": "MIT",
   "repository": {

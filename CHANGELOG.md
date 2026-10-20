@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.6.0...v0.7.0) (2026-10-20)
+
+
+### Features
+
+* **ios:** build Impeller and the engine for iPhone (iphoneos arm64) ([e431fb9](https://github.com/blbaker/react-native-impeller-platform/commit/e431fb9fe7d98fecbc419ea0d68e7f9080cdf3a4))
+* **ios:** the engine builds, links and signs for a real iPhone ([56b6a8a](https://github.com/blbaker/react-native-impeller-platform/commit/56b6a8a0e34937ded76bc6d8262166d90d089628))
+
 ## [0.6.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.5.0...v0.6.0) (2026-10-20)
 
 
