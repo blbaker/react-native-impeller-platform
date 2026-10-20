@@ -103,6 +103,18 @@ While attached, `RNIEngine` takes the view's input (`engine/ios/RNIInputIOS.mm`)
   submitting and a new line, as on desktop. While text is marked, Return
   confirms the composition instead.
 
+- **Keyboard events.** UIKit's keyboard notifications become RN's `Keyboard`
+  events (`keyboardWillShow`, `keyboardDidShow`, `keyboardWillHide`,
+  `keyboardDidHide`, `keyboardWillChangeFrame`, `keyboardDidChangeFrame`;
+  `engine/ios/RNIKeyboardEventsIOS.mm`). The payload has the shape RN's iOS
+  `RCTKeyboardObserver` sends: `startCoordinates`, `endCoordinates`, `duration`
+  in ms, `easing` and `isEventFromThisApp`. Coordinates are in the attached
+  view's points. `Platform.OS` is `'impeller'`, so RN's `Keyboard` module listens
+  on the device event emitter directly, and `KeyboardAvoidingView` takes its
+  non-iOS path (`keyboardDidShow` / `keyboardDidHide`). The padding animates
+  with `LayoutAnimation`, which RNIEngine's frame loop ticks once per frame, as
+  the desktop frame loop does.
+
 Not done yet: the composing text is not underlined, the keyboard gets no
 selection rectangles (no loupe or selection handles), and the caret rectangle
 the keyboard positions against is the field's box at the caret's x.
@@ -137,6 +149,7 @@ bash tools/ci-metal-ios-sim.sh         # any gate
 bash tools/ci-ios-sim.sh               # M1: builds the engine (librni_ios_all.a) first
 bash tools/ci-ios-input.sh             # real UIKit taps and keyboard keys (XCUITest)
 bash tools/ci-ios-text-input.sh        # autocorrect and Japanese composition (XCUITest)
+bash tools/ci-ios-keyboard.sh          # Keyboard events + KeyboardAvoidingView (XCUITest)
 ```
 
 From linux, point the same commands at a Mac over ssh:
@@ -175,6 +188,15 @@ which proves the field's props reach the keyboard. In a third field it switches
 to the Japanese romaji keyboard, types `nihonn` and confirms. The engine must receive the marked text while composing,
 JS must see kana before the confirm, and the final value must be `にほん`.
 
+`tools/ci-ios-keyboard.sh` puts a `TextInput` and a green footer at the bottom
+of RN's own `KeyboardAvoidingView` (`fixtures/ios-keyboard`), brings the
+keyboard up, then takes it down. JS must get all four show and hide events with
+a height, a duration and an easing. The footer's layout must end at or above
+the keyboard's top while it's up, and back at the bottom after. The footer's
+colour must be on screen where that layout says, in both screenshots. Layout
+alone can't prove that: `onLayout` reports the new position before anything is
+drawn there.
+
 ## Simulator facts the gates depend on
 
 - `simctl launch --stdout=<file>` stays empty when the file is under
@@ -210,9 +232,12 @@ JS must see kana before the confirm, and the final value must be `にほん`.
 - A raster thread for the iOS host (RECORD and RASTER share the main thread).
 - `Linking.openURL`, TLS, and image upload on an IO thread (GL-only on desktop).
 - Selection UI (loupe, handles, edit menu), an underline for composing text, a
-  per-glyph caret rectangle, hardware keyboards (`pressesBegan`), moving
-  content above the keyboard, multi-touch, VoiceOver. iOS 16+ also shows a paste-consent alert when an app
-  reads another app's pasteboard; the Clipboard module's `getString` will hit it,
+  per-glyph caret rectangle, hardware keyboards (`pressesBegan`), multi-touch,
+  VoiceOver.
+- `requestAnimationFrame` pacing: on iOS it runs on the 16 ms timer fallback,
+  not on the display link.
+- iOS 16+ shows a paste-consent alert when an app reads another app's
+  pasteboard; the Clipboard module's `getString` will hit it,
   as RN's does.
 - CI: the gates need a Mac with the iOS SDK built from a full engine checkout,
   which the GitHub macOS runners do not have cached.

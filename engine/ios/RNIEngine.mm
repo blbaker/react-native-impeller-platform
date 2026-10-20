@@ -10,6 +10,7 @@
 //   like headless); the desktop windowed pipeline's raster thread is later work.
 #import "ios/RNIEngine.h"
 #import "ios/RNIInputIOS.h"
+#import "ios/RNIKeyboardEventsIOS.h"
 
 #include <cstdio>
 #include <fstream>
@@ -43,6 +44,7 @@ struct EngineState {
   std::unique_ptr<rni::EngineSession> session;
   std::unique_ptr<rni::DisplayLinkIOS> link;
   RNIInputBridge* input = nil;  // touches + keyboard (Phase 4 spike)
+  RNIKeyboardEvents* keyboard = nil;  // keyboard show/hide -> RN's Keyboard events
   int width = 0, height = 0;
   float scale = 1;
   bool destroyed = false;
@@ -131,6 +133,10 @@ struct EngineState {
   }
   if (!s.input) s.input = [[RNIInputBridge alloc] initWithFabric:&s.session->fabricHost()];
   [s.input attachToView:view];
+  if (!s.keyboard) {
+    s.keyboard = [[RNIKeyboardEvents alloc] initWithSink:s.session->reactHost().deviceEvents()];
+  }
+  [s.keyboard attachToView:view];
   __weak RNIEngine* weakSelf = self;
   s.link = std::make_unique<rni::DisplayLinkIOS>([weakSelf](int64_t, int64_t, int64_t) {
     [weakSelf frame];
@@ -155,6 +161,10 @@ struct EngineState {
     rni::gpu::Note(rni::gpu::Counter::kSkippedFrame);
     return;
   }
+  // LayoutAnimation (FP-40) advances only when the host ticks it, as the
+  // desktop frame loop does; without it a configureNext (KeyboardAvoidingView
+  // sends one with every keyboard event) never reaches the screen.
+  s.session->fabricHost().tickLayoutAnimations();
   s.session->PumpNativeAnimated();
   auto timings = std::make_unique<rni::FrameTimingsRecorder>();
   timings->RecordVsync();
@@ -180,6 +190,7 @@ struct EngineState {
 - (void)detach {
   if (!_s) return;
   _s->link.reset();
+  [_s->keyboard detach];
   [_s->input detach];
   _s->surface.Release();
 }
@@ -189,6 +200,7 @@ struct EngineState {
   [self detach];
   rni::gpu::RemoveGpuAvailabilityObservers();
   _s->input = nil;  // holds a FabricHost*: gone before the session
+  _s->keyboard = nil;  // holds the session's DeviceEventSink
   _s->session.reset();
   if (_s->typography) {
     rni::typography::Unbind(_s->typography);
