@@ -77,6 +77,11 @@ struct EngineState {
   return _presented;
 }
 
+- (NSString*)animationFrameSummary {
+  if (!_s || !_s->session) return @"";
+  return @(_s->session->reactHost().animationFrameSummary().c_str());
+}
+
 // First attach only: context, typography, EngineSession, JS boot.
 - (BOOL)bootWithView:(UIView*)view {
   EngineState& s = *_s;
@@ -103,6 +108,11 @@ struct EngineState {
   options.colorScheme =
       view.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? "dark" : "light";
   s.session->Boot(s.width, s.height, s.scale, options);
+  // requestAnimationFrame paced to the display link (AnimationFrameScheduler):
+  // callbacks run once per frame, at frame(). The link ticks every vsync and
+  // never sleeps, so no wake is needed. Without this, rAF falls back to a
+  // 16 ms JS-thread timer that runs out of step with the screen.
+  s.session->reactHost().attachAnimationFramesToLoop([] {});
   s.session->RunScript(std::move(s.bundle), s.sourceUrl);
   s.bundle.clear();
   const bool evaluated = s.session->WaitForJsIdle(kBootIdleMs);
@@ -161,6 +171,9 @@ struct EngineState {
     rni::gpu::Note(rni::gpu::Counter::kSkippedFrame);
     return;
   }
+  // This frame's requestAnimationFrame callbacks, once, on JS. After the GPU
+  // check: like a browser's hidden tab, rAF pauses while backgrounded.
+  s.session->reactHost().beginAnimationFrame();
   // LayoutAnimation (FP-40) advances only when the host ticks it, as the
   // desktop frame loop does; without it a configureNext (KeyboardAvoidingView
   // sends one with every keyboard event) never reaches the screen.

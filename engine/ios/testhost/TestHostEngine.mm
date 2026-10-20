@@ -84,6 +84,8 @@
   if (n >= _lastLogged + 60) {
     _lastLogged = n;
     TestLog("engine presented=%lu", (unsigned long)n);
+    // --log-raf=1: the engine's requestAnimationFrame counters (ci-ios-raf.sh).
+    if (TestArg("log-raf") == "1") TestLog("engine %s", _engine.animationFrameSummary.UTF8String);
   }
   if (_detachAfter > 0 && !_reattached && n >= (NSUInteger)_detachAfter) {
     _reattached = YES;

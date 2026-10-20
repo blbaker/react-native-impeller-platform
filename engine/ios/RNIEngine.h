@@ -36,6 +36,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Frames presented since the first attach.
 @property(nonatomic, readonly) NSUInteger presentedFrames;
+// Diagnostics: requestAnimationFrame pacing counters ("raf_pacing enabled=1
+// mode=frame requests=... frame_flushes=... timer_flushes=... callbacks=...").
+@property(nonatomic, readonly) NSString* animationFrameSummary;
 // Runs once, on the main thread, after the first frame with content presents.
 @property(nonatomic, copy, nullable) void (^onFirstFrame)(void);
 
