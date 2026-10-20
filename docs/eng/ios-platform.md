@@ -243,7 +243,25 @@ Running it needs one of:
   (Designed for iPad)" with automatic signing), the app signed with it and
   installed in the App Store wrapper layout (`X.app/Wrapper/X.app`).
 
-Measured on this Mac: a flat iOS bundle won't open ("incorrect executable
+### Running it with Xcode
+
+```bash
+bash tools/ios-xcode-project.sh          # engine/ios/testhost/xcode/RniTestHost.xcodeproj
+bash tools/ios-xcode-project.sh --build  # also builds it for iphoneos and the Simulator, signing off
+```
+
+The script stages the fixture bundles and runs XcodeGen on
+`engine/ios/testhost/xcode/project.yml`, so the engine test host becomes an
+ordinary Xcode app with automatic signing. The team defaults to the one on the
+keychain's Apple Development certificate (`RNI_IOS_TEAM` overrides it). Open
+the project, pick a connected iPhone or "My Mac (Designed for iPad)", and run.
+The first run makes Xcode create an iOS development profile ("iOS Team
+Provisioning Profile: *"). Measured on an M3 Mac running macOS 26.1: the app ran
+as Mach-O platform `IOS` arm64 from the App Store wrapper layout. It used real
+Metal ("Apple M3"), not the Simulator's, in a 1024×1366-point iPad window, and
+presented 293,580 frames in 81 minutes (60 fps).
+
+Measured on this Mac without Xcode: a flat iOS bundle won't open ("incorrect executable
 format"). The wrapper layout reaches macOS's installer, which rejects any
 app whose signature it can't validate. `codesign` with an Apple Development
 identity fails over SSH (`errSecInternalComponent`: the login keychain is
