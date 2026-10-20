@@ -87,11 +87,11 @@ class DeviceEventSink {
       return;
     }
 
-    executor([eventName, payload](jsi::Runtime& rt) {
+    executor([eventName, payload](facebook::jsi::Runtime& rt) {
       // Same global RN's own emitter uses. Reading it here rather than caching
       // a reference: the bundle can replace it, and a stale handle would
       // deliver into an emitter nothing is listening to.
-      jsi::Value emitter = rt.global().getProperty(rt, "__rctDeviceEventEmitter");
+      facebook::jsi::Value emitter = rt.global().getProperty(rt, "__rctDeviceEventEmitter");
       if (emitter.isUndefined() || !emitter.isObject()) {
         // THE BRANCH THAT COST THE HOUR. Native did everything right and JS
         // still never heard. Without this line the only symptom is a layout
@@ -102,14 +102,14 @@ class DeviceEventSink {
         std::fflush(stdout);
         return;
       }
-      jsi::Object emitterObject = emitter.asObject(rt);
-      jsi::Function emitFunction =
+      facebook::jsi::Object emitterObject = emitter.asObject(rt);
+      facebook::jsi::Function emitFunction =
           emitterObject.getPropertyAsFunction(rt, "emit");
-      std::vector<jsi::Value> args;
-      args.emplace_back(jsi::String::createFromAscii(rt, eventName.c_str()));
-      args.emplace_back(jsi::valueFromDynamic(rt, payload));
+      std::vector<facebook::jsi::Value> args;
+      args.emplace_back(facebook::jsi::String::createFromAscii(rt, eventName.c_str()));
+      args.emplace_back(facebook::jsi::valueFromDynamic(rt, payload));
       emitFunction.callWithThis(rt, emitterObject,
-                                (const jsi::Value*)args.data(), args.size());
+                                (const facebook::jsi::Value*)args.data(), args.size());
       // DELIVERED means the emit function ran. It does NOT mean a listener
       // existed -- RCTDeviceEventEmitter.emit on an unsubscribed event is a
       // silent no-op, and no native-side check can see that. Worth saying
