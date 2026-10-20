@@ -219,10 +219,27 @@ while time.time() < deadline:
 for n, name, ok, note in sorted(results):
     print("  swap %d -> %-9s %s  %s" % (n, name, "on screen" if ok else "NOT ON SCREEN", note))
 bad = [r for r in results if not r[2]]
+# darwin + --vsync-log (ICP_DIAG=1): did Core Animation actually DISPLAY the
+# present each capture served? presented_us=0 means the compositor dropped
+# that drawable; the capture above reads the drawable BEFORE present, so only
+# this line can see a compositor-level drop. VM runners report 0 for every
+# present (no real display), so it is enforced only with ICP_REQUIRE_DISPLAYED=1.
+text = open(log_path, errors="replace").read()
+shown = {int(a): int(b) for a, b in re.findall(r"vsync_displayed n=(\d+) presented_us=(-?\d+)", text)}
+served = {int(a): int(b) for a, b in re.findall(r"presented_capture k=(\d+) ok=1 present=(\d+)", text)}
+undisplayed = []
+if shown:
+    for n in sorted(served):
+        p = served[n]
+        state = "displayed" if shown.get(p, 0) > 0 else ("DROPPED by the compositor" if p in shown else "no report")
+        print("  swap %d: present %d %s" % (n, p, state))
+        if shown.get(p, 0) <= 0: undisplayed.append(n)
+need_displayed = os.environ.get("ICP_REQUIRE_DISPLAYED") == "1"
 if not ready: print("VERDICT FAIL (ICP_READY never logged: the fixture did not mount)")
 elif len(results) < swaps: print("VERDICT FAIL (only %d of %d swaps captured; engine alive=%d)" % (len(results), swaps, alive()))
 elif not idle_before_first and mode != "click": print("VERDICT FAIL (the loop never parked before swap 1: not an idle-loop commit)")
 elif bad: print("VERDICT FAIL (%d of %d whole-screen commits were not on screen %d ms later)" % (len(bad), swaps, delay_ms))
+elif need_displayed and (not shown or undisplayed): print("VERDICT FAIL (presented but not displayed: swaps %s)" % (undisplayed or "all (no vsync_displayed lines; run with ICP_DIAG=1)"))
 else: print("VERDICT PASS (%d of %d whole-screen commits on screen %d ms after an idle-loop commit)" % (swaps, swaps, delay_ms))
 PY
 ) | tee "$OUT/verdict.txt"
