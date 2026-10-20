@@ -85,6 +85,7 @@
 #endif
 #include "host/AnimRowProbe.h"
 #include "host/UniformProbe.h"
+#include "host/PresentedCapture.h"
 #include "host/ExternalTextureProbe.h"
 #include "host/PoisonProbe.h"
 #include "base/GpuAvailability.h"
@@ -907,6 +908,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         rni::uniformprobe::OnPresent(px, surface.gpuWidth(), surface.gpuHeight(), n);
       }
     }
+    if (rni::presentedcapture::Enabled()) {  // ci-idle-commit-paint: what is on screen
+      std::vector<rni::Px> px;
+      if (surface.readPixels(&px)) {
+        rni::presentedcapture::OnPresent(px, surface.gpuWidth(), surface.gpuHeight(), n,
+                                         frameNumber);
+      }
+    }
     if (rni::poisonprobe::Enabled()) {  // FP-17 hand-off-before-fence probe
       std::vector<rni::Px> px;
       if (surface.readPixels(&px)) {
@@ -1485,6 +1493,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 
   if (gQuitOnTerm) rni::testsync::InstallQuitSignals();
   rni::image_event_probe::Arm();  // FP-57: only loads mounted while the loop runs park
+  rni::presentedcapture::Start();  // test hook; never requests a frame
   if (rni::testsync::FrameDelayMs() > 0) {
     printf("rn-impeller: test_frame_delay_ms=%d\n", rni::testsync::FrameDelayMs());
     fflush(stdout);
@@ -2041,6 +2050,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     }
     if (frames > 0 && frameIndex >= frames) break;
   }
+
+  rni::presentedcapture::Stop();  // test hook watcher
 
   // ⛔ CLEAR THE HANDLER BEFORE ANYTHING IT CAPTURED IS DESTROYED.
   // `surface` is declared FIRST in this function, so it is destroyed LAST —

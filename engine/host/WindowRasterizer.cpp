@@ -176,7 +176,14 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
     }
     return surface_.drawDisplayList(dl);
   });
-  if (!drawn) drawFailed_.fetch_add(1, std::memory_order_relaxed);
+  if (!drawn) {
+    const uint64_t fails = drawFailed_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (fails <= 20 || fails % 100 == 0) {
+      std::printf("rn-impeller: raster_draw_failed frame=%llu n=%llu\n",
+                  (unsigned long long)item->frameNumber, (unsigned long long)fails);
+      std::fflush(stdout);
+    }
+  }
   const int n = presents_.load(std::memory_order_relaxed) + 1;
   if (readback) {
     std::vector<Px> px;
