@@ -560,6 +560,10 @@ std::string ReactHost::animationFrameSummary() const {
   return animationFrames_ ? animationFrames_->summary() : std::string();
 }
 
+unsigned long ReactHost::animationFrameCallbacks() const {
+  return animationFrames_ ? animationFrames_->callbacksRun() : 0UL;
+}
+
 bool ReactHost::nativeAnimatedActive() const {
   return nativeAnimatedPump_ && nativeAnimatedPump_->isActive();
 }

@@ -153,6 +153,7 @@ class ReactHost {
   void attachAnimationFramesToLoop(std::function<void()> wake);
   void beginAnimationFrame();
   std::string animationFrameSummary() const;
+  unsigned long animationFrameCallbacks() const;
 
   // How many times RN's animation engine actually ran, for gates. See
   // NativeAnimatedPump.h for why a pixel diff alone cannot prove ENG-06.
@@ -163,9 +164,11 @@ class ReactHost {
   void setNativeAnimatedStartHook(std::function<void()> hook);
 
   // Per-frame JS-work instruments for the native-driven-loop cost check.
-  // jsTimersFired: JS timer callbacks run (setTimeout/setInterval and
-  // requestAnimationFrame, which IS a setTimeout(0) here). A JS-driven
-  // Animated loop fires one per frame; a native-driven one fires none.
+  // jsTimersFired: setTimeout/setInterval callbacks run. rAF callbacks are
+  // counted apart (animationFrameCallbacks): AnimationFrameScheduler paces
+  // them, they are not JsThread timers. The frameloop line's js_timers sums
+  // both, so a JS-driven Animated loop shows ~1 per frame and a
+  // native-driven one shows 0.
   // nativeAnimatedTickMicros: wall time spent inside RN's C++ onRender (the
   // node-graph walk + prop apply), summed over every tick. That walk runs on
   // the frame-loop thread (see pumpNativeAnimated) and executes no JS.

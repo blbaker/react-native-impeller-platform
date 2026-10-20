@@ -72,6 +72,7 @@ class AnimationFrameScheduler
 
   // One summary line for gates.
   std::string summary() const;
+  unsigned long callbacksRun() const { return callbacksRun_.load(); }
 
   // JS thread, at teardown BEFORE the runtime goes: drops every held
   // jsi::Function (their destructors call into the runtime that made them).

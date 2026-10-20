@@ -3521,7 +3521,8 @@ int main(int argc, char** argv) {
     if (frames > 0) {
       // Per-frame JS-work baseline, taken after boot settled: everything
       // counted from here on happened DURING the stepped frames.
-      const unsigned long loopTimers0 = host.jsTimersFired();
+      const unsigned long loopTimers0 =
+          host.jsTimersFired() + host.animationFrameCallbacks();
       const unsigned long loopMountTx0 = sceneGraph.mountTransactions();
       const unsigned long loopTicks0 = host.nativeAnimatedTicks();
       const unsigned long long loopTickUs0 = host.nativeAnimatedTickMicros();
@@ -3604,8 +3605,9 @@ int main(int argc, char** argv) {
       printf("rn-impeller: directprop_updates=%lu\n",
              sceneGraph.directPropUpdates());
       // Cost of an animation DURING the stepped frames, per the Mac's ask
-      // (DS-INPUT-SPIN item 4). js_timers = JS timer callbacks run (rAF is a
-      // setTimeout(0) here, so a JS-driven Animated loop shows ~1 per frame);
+      // (DS-INPUT-SPIN item 4). js_timers = JS timer callbacks run, plus
+      // requestAnimationFrame callbacks (paced, AnimationFrameScheduler), so
+      // a JS-driven Animated loop shows ~1 per frame;
       // mount_tx = React commits that reached the scene (a JS-driven loop
       // commits every frame). Both stay 0 for a native-driven loop.
       // tick_us = time inside RN's C++ onRender, on the frame-loop thread
@@ -3615,7 +3617,8 @@ int main(int argc, char** argv) {
           host.nativeAnimatedTickMicros() - loopTickUs0;
       printf("rn-impeller: frameloop frames=%d js_timers=%lu mount_tx=%lu "
              "nativeanimated_ticks=%lu tick_us_total=%llu tick_us_avg=%.1f\n",
-             frames, host.jsTimersFired() - loopTimers0,
+             frames,
+             host.jsTimersFired() + host.animationFrameCallbacks() - loopTimers0,
              sceneGraph.mountTransactions() - loopMountTx0, loopTicks,
              loopTickUs, loopTicks ? (double)loopTickUs / loopTicks : 0.0);
       fflush(stdout);
