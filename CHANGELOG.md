@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.3.1...v0.4.0) (2026-10-20)
+
+
+### Features
+
+* **engine:** range editing and keyboard traits for host text systems ([6f91234](https://github.com/blbaker/react-native-impeller-platform/commit/6f912341f11bc3a518ecb9b9b29a15d96342ea9c))
+* **ios:** autocorrect, Japanese composition and keyboard props through UITextInput ([e468cf6](https://github.com/blbaker/react-native-impeller-platform/commit/e468cf6cd5f81c36deab1b8ee7d6fea138f8c5b6))
+* **ios:** UITextInput for the system keyboard: autocorrect, IME, field traits ([d823de3](https://github.com/blbaker/react-native-impeller-platform/commit/d823de31e13ab500f72c7e0f473fb5b2252abd3c))
+
+
+### Bug Fixes
+
+* **runtime:** keep rAF callbacks in the frameloop js_timers instrument ([937ea40](https://github.com/blbaker/react-native-impeller-platform/commit/937ea4037a686a1202dfe821a3bc51a074fcb42c))
+
+
+### Performance Improvements
+
+* paragraph layout cache + requestAnimationFrame paced to frames (Jim chat-loop freeze) ([6dd8adc](https://github.com/blbaker/react-native-impeller-platform/commit/6dd8adce405c77714fe34c9d51099b4db2b714b9))
+* **runtime:** pace requestAnimationFrame to the frame loop ([a8d6b16](https://github.com/blbaker/react-native-impeller-platform/commit/a8d6b168b2807dbf637b0733e30bc737de724d2d))
+* **text:** cache paragraph layout per node ([1732bad](https://github.com/blbaker/react-native-impeller-platform/commit/1732bad4ffb459fc441d5c64752250561faa180d))
+
 ## [0.3.1](https://github.com/blbaker/react-native-impeller-platform/compare/v0.3.0...v0.3.1) (2026-10-19)
 
 
