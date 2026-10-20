@@ -13,8 +13,7 @@
 set(RC "${REACT_COMMON}")
 
 set(reactcommon_SRC
-  # jsi
-  ${RC}/jsi/jsi/jsi.cpp
+  # jsi (jsi.cpp itself is reactcommon_jsi, below)
   ${RC}/jsi/jsi/JSIDynamic.cpp
   ${RC}/jsi/jsi/jsilib-posix.cpp
   # cxxreact (all portable in 0.86.2)
@@ -162,6 +161,24 @@ rni_compile_flags(reactcommon_core
   FORCE_INCLUDE cstdint mutex)
 
 target_link_libraries(reactcommon_core PUBLIC folly_runtime)
+
+# ⛔ ONE jsi PER APPLE PROCESS. jsi.cpp defines jsi's classes' type info and
+# vtables (JSError, JSIException, JSINativeException, ...). Hermes exports its
+# own copy (libhermesvm.dylib, hermesvm.framework), and an Apple app keeps
+# both: with the two-level namespace, the engine's references bind to the
+# engine's copy and Hermes's to Hermes's. A jsi::JSError thrown inside Hermes
+# then does not match the engine's catch (jsi::JSError&), so RN's task loop
+# reported every JS error as "Non-js exception: ..." with no JS stack.
+# Measured on iOS and on the 0.5.0 macOS engine; Linux merges the two copies
+# at load time and reported "Error: ..." correctly. So on Apple, targets that
+# link Hermes take jsi from Hermes, and only Hermes-free targets
+# (rni-scenegraph-tests) link reactcommon_jsi.
+add_library(reactcommon_jsi STATIC ${RC}/jsi/jsi/jsi.cpp)
+target_include_directories(reactcommon_jsi SYSTEM PUBLIC ${RC} ${RC}/jsi)
+rni_compile_flags(reactcommon_jsi EXCEPTIONS RTTI NO_DEPRECATED FORCE_INCLUDE cstdint mutex)
+if(NOT APPLE)
+  target_link_libraries(reactcommon_core PUBLIC reactcommon_jsi)
+endif()
 # ReactNativeFeatureFlagsAccessor's wide atomics lower to libatomic calls with
 # GCC/Clang on Linux. MSVC and Apple have no such library and need none.
 if(NOT MSVC AND NOT APPLE)

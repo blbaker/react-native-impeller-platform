@@ -144,6 +144,14 @@ No prebuilt Impeller SDK exists for iOS: flutter_infra publishes none, and
   system's, and a JS error thrown in a task ended in `std::terminate` (a crash)
   instead of RN's error handler. `tools/impeller-sdk-ios-build.sh` drops those
   17 members and fails if any of the runtime is left. Apps link `-lc++abi`.
+- ⛔ The engine takes jsi from Hermes on Apple platforms. `hermesvm.framework`
+  (and macOS's `libhermesvm.dylib`) exports jsi's classes, and the engine used
+  to compile RN's `jsi.cpp` as well. Under the two-level namespace an app kept
+  both copies, so a `jsi::JSError` thrown inside Hermes didn't match the
+  engine's `catch (jsi::JSError&)`, and every JS error reached RN as
+  "Non-js exception: ..." with no JS stack. On Apple, `jsi.cpp` is now its own
+  library (`reactcommon_jsi`, `engine/cmake/ReactCommonCore.cmake`), linked only
+  by targets without Hermes.
 - `tools/hermes-build-ios.sh` builds `hermesvm.xcframework` (device arm64,
   simulator arm64 + x86_64) at the tag RN pins, with Hermes's own Apple packaging
   (`utils/build-apple-framework.sh`), on a copy of the checkout.
@@ -245,10 +253,6 @@ drawn there.
 - Selection UI (loupe, handles, edit menu), an underline for composing text, a
   per-glyph caret rectangle, hardware keyboards (`pressesBegan`), multi-touch,
   VoiceOver.
-- JS errors thrown inside a task reach RN's error handler as "Non-js exception:
-  ..." with no JS stack: `jsi::JSError` thrown inside `hermesvm.framework` is
-  not matched as the engine's own `jsi::JSError` (two copies of jsi's type
-  info). Desktop reports the same throw as "Error: ...".
 - iOS 16+ shows a paste-consent alert when an app reads another app's
   pasteboard; the Clipboard module's `getString` will hit it,
   as RN's does.

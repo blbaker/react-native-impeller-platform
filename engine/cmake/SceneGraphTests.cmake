@@ -66,6 +66,10 @@ if(NOT WIN32 AND NOT ANDROID)
   rni_compile_flags(rni-scenegraph-tests EXCEPTIONS RTTI NO_DEPRECATED FORCE_INCLUDE cstdint)
   target_link_libraries(rni-scenegraph-tests PRIVATE reactcommon_fabric reactcommon_core rc_ssl
     "${IMPELLER_LINK_LIB}")
+  if(APPLE)
+    # No Hermes here, so jsi comes from RN's own jsi.cpp (ReactCommonCore.cmake).
+    target_link_libraries(rni-scenegraph-tests PRIVATE reactcommon_jsi)
+  endif()
   if(RNI_WITH_RNSVG)
     target_compile_definitions(rni-scenegraph-tests PRIVATE RNI_WITH_RNSVG=1)
     target_link_libraries(rni-scenegraph-tests PRIVATE rnsvg_common)
