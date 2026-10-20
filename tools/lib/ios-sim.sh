@@ -97,7 +97,8 @@ ios_sdk_resolve() {
 #   RNI_IOS_ENGINE_LIB) instead of IOS_SRCS, hermesvm.framework embedded, and
 #   the fixture bundles in IOS_BUNDLES copied in as <name>.jsbundle.
 IOS_BUNDLES=(fixtures/ios-smoke/prebuilt/ios-smoke.bundle fixtures/ios-input/prebuilt/ios-input.bundle
-  fixtures/ios-text-input/prebuilt/ios-text-input.bundle fixtures/ios-keyboard/prebuilt/ios-keyboard.bundle)
+  fixtures/ios-text-input/prebuilt/ios-text-input.bundle fixtures/ios-keyboard/prebuilt/ios-keyboard.bundle
+  fixtures/native-anim-dots/prebuilt/native-anim-dots.bundle)
 ios_build_testhost() {
   ios_sdk_resolve || return 1
   IOS_APP="$IOS_WORK/RniTestHost.app"
@@ -119,10 +120,13 @@ ios_build_testhost() {
     link=("$lib" -F "$fw" -framework hermesvm -Wl,-rpath,@executable_path/Frameworks)
     what="engine host, ${lib#"$IOS_ROOT"/} $(du -h "$lib" | cut -f1)"
   fi
+  # -lc++abi: libimpeller.a is staged without Flutter's C++ exception runtime
+  # (tools/impeller-sdk-ios-build.sh), so the system's is the one runtime; an
+  # app links it explicitly, as libc++ alone does not re-export all of it.
   if ! xcrun --sdk iphonesimulator clang++ -std=c++20 -fobjc-arc -target arm64-apple-ios15.1-simulator \
       -Wall -Wextra -Wno-unused-parameter -Werror \
       -I engine -I engine/ios/testhost -isystem "$IOS_SDK_INC" "${srcs[@]}" ${link[@]+"${link[@]}"} "$IOS_SDK_LIB" \
-      -framework UIKit -framework Metal -framework MetalPerformanceShaders -framework QuartzCore \
+      -lc++abi -framework UIKit -framework Metal -framework MetalPerformanceShaders -framework QuartzCore \
       -framework CoreGraphics -framework CoreText -framework Foundation \
       -o "$IOS_APP/RniTestHost" > "$IOS_WORK/build.log" 2>&1; then
     echo "ios-sim: testhost build FAILED:"; grep -m12 -E 'error|warning|Undefined|referenced from' "$IOS_WORK/build.log"
