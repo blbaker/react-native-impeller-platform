@@ -273,6 +273,7 @@ add_executable(rn-impeller
   host/AnimRowProbe.cpp
   host/MemoryPressure.cpp
   host/UniformProbe.cpp
+  host/PresentedCapture.cpp  # ci-idle-commit-paint test hook
   host/RasterThread.cpp
   host/IoContextEgl.cpp
   host/PoisonProbe.cpp

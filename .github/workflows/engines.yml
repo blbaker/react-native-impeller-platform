@@ -33,6 +33,8 @@ on:
       - 'tools/sdk-fetch-custom.sh'
       - 'tools/angle-fetch.sh'
       - '.github/workflows/engines.yml'
+      - 'tools/ci-idle-commit-paint.sh'
+      - 'fixtures/idle-commit-paint/**'
 
 permissions:
   contents: read
@@ -143,6 +145,25 @@ jobs:
       - name: Prove the pack gate can fail (macOS)
         if: runner.os == 'macOS'
         run: bash tools/mutation-verify-engine-pack.sh "packages-engine/engine-${{ matrix.triple }}"
+
+      # A whole-screen JS commit on an IDLE windowed loop must be on screen
+      # 300 ms later (fixtures/idle-commit-paint). Runs here because the loss it
+      # guards was darwin-only: Metal drawables, CVDisplayLink pacing and the
+      # AppKit event loop exist on no Linux runner. A real window on the
+      # runner's own session; node-free (committed bundle, staged binary).
+      # Three runs x four swaps, because the defect class is a race.
+      - name: Idle commit reaches the screen (macOS windowed)
+        if: runner.os == 'macOS'
+        env:
+          RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+          ICP_DIAG: '1'
+        run: |
+          rc=0
+          for i in 1 2 3; do
+            echo "=== run $i ==="
+            bash tools/ci-idle-commit-paint.sh || rc=1
+          done
+          exit $rc
 
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
       # symlinks, so uploading the folder directly would hand the release job

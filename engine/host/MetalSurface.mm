@@ -196,14 +196,26 @@ void MetalSurface::SetDrawableSize(int w, int h) {
 bool MetalSurface::Draw(ImpellerContext context, ImpellerDisplayList dl) {
   @autoreleasepool {
     impl_->DropDrawable();
-    if (!impl_->layer || !context) return false;
+    // A failed draw leaves the window on its last frame: say which step failed
+    // (silence would read exactly like a frame nobody asked for).
+    auto failed = [](const char* why) {
+      static std::atomic<int> fails{0};
+      const int n = ++fails;
+      if (n <= 20 || n % 100 == 0) {
+        std::printf("rn-impeller: metal_draw_failed reason=%s n=%d\n", why, n);
+        std::fflush(stdout);
+      }
+      return false;
+    };
+    if (!impl_->layer || !context) return failed("no_layer_or_context");
     id<CAMetalDrawable> drawable = [impl_->layer nextDrawable];  // WaitForNextDrawable
-    if (!drawable) return false;
+    if (!drawable) return failed("next_drawable_nil");
     ImpellerSurface s = ImpellerSurfaceCreateWrappedMetalDrawableNew(context, (__bridge void*)drawable);
-    if (!s) return false;
+    if (!s) return failed("wrap_drawable");
     impl_->drawable = drawable;
     impl_->surface = s;
-    return ImpellerSurfaceDrawDisplayList(s, dl);
+    if (!ImpellerSurfaceDrawDisplayList(s, dl)) return failed("draw_display_list");
+    return true;
   }
 }
 
