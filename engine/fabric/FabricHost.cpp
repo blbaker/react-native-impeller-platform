@@ -4,6 +4,7 @@
 #include <cmath>
 #include <mutex>
 #include "fabric/FabricHost.h"
+#include "fabric/Utf16Offsets.h"
 #include "fabric/ComponentRegistry.h"
 #include "fabric/ImageStore.h"
 
@@ -460,6 +461,36 @@ size_t Utf8WordRight(const std::string& s, size_t pos) {
   return i;
 }
 
+
+// Escapes control bytes for the `rn-impeller: caret ...` log line so a
+// newline/tab embedded in the buffer can never split the machine-readable
+// line a gate greps. Multi-byte UTF-8 sequences pass through RAW (not
+// escaped) so a gate can grep for the literal UTF-8 bytes of e.g. the emoji
+// it typed.
+std::string EscapeForLog(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (unsigned char c : s) {
+    if (c == '\n') {
+      out += "\\n";
+    } else if (c == '\t') {
+      out += "\\t";
+    } else if (c == '\r') {
+      out += "\\r";
+    } else if (c < 0x20 || c == 0x7F) {
+      char buf[8];
+      std::snprintf(buf, sizeof(buf), "\\x%02x", c);
+      out += buf;
+    } else {
+      out.push_back((char)c);
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+// Declared in fabric/Utf16Offsets.h (shared with FabricHostTextEdit.cpp).
 // UTF-8 byte offset -> UTF-16 code unit count, the units RN's selection event
 // expects (TextInputEventEmitter::Metrics::selectionRange mirrors iOS
 // NSString / Android jchar, both UTF-16). A codepoint above U+FFFF is a
@@ -491,34 +522,6 @@ size_t Utf16UnitsToUtf8Offset(const std::string& s, size_t units) {
   }
   return i;
 }
-
-// Escapes control bytes for the `rn-impeller: caret ...` log line so a
-// newline/tab embedded in the buffer can never split the machine-readable
-// line a gate greps. Multi-byte UTF-8 sequences pass through RAW (not
-// escaped) so a gate can grep for the literal UTF-8 bytes of e.g. the emoji
-// it typed.
-std::string EscapeForLog(const std::string& s) {
-  std::string out;
-  out.reserve(s.size());
-  for (unsigned char c : s) {
-    if (c == '\n') {
-      out += "\\n";
-    } else if (c == '\t') {
-      out += "\\t";
-    } else if (c == '\r') {
-      out += "\\r";
-    } else if (c < 0x20 || c == 0x7F) {
-      char buf[8];
-      std::snprintf(buf, sizeof(buf), "\\x%02x", c);
-      out += buf;
-    } else {
-      out.push_back((char)c);
-    }
-  }
-  return out;
-}
-
-}  // namespace
 
 std::vector<std::string> FabricHost::knownComponentNames() {
   // MUST match the provider registry below. A component in one list and not

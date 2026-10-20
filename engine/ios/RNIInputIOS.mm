@@ -1,5 +1,6 @@
 // iOS Phase 4 spike: see RNIInputIOS.h. Built with -fobjc-arc.
 #import "ios/RNIInputIOS.h"
+#import "ios/RNITextInputView.h"
 
 #import <UIKit/UIGestureRecognizerSubclass.h>
 
@@ -12,75 +13,10 @@ static_assert(__has_feature(objc_arc), "RNIInputIOS.mm must be built with -fobjc
 using rni::FabricHost;
 
 // ---------------------------------------------------------------------------
-// Keyboard: the first responder the system keyboard types into.
-@interface RNIKeyboardProxy : UIView <UIKeyInput>
-@property(nonatomic, assign) FabricHost* fabric;
-@property(nonatomic) UITextAutocorrectionType autocorrectionType;
-@property(nonatomic) UITextAutocapitalizationType autocapitalizationType;
-@property(nonatomic) UITextSpellCheckingType spellCheckingType;
-@property(nonatomic) UITextSmartQuotesType smartQuotesType;
-@property(nonatomic) UITextSmartDashesType smartDashesType;
-@property(nonatomic) UITextSmartInsertDeleteType smartInsertDeleteType;
-@end
-
-@implementation RNIKeyboardProxy
-- (instancetype)initWithFrame:(CGRect)frame {
-  if ((self = [super initWithFrame:frame])) {
-    self.autocorrectionType = UITextAutocorrectionTypeNo;
-    self.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    self.spellCheckingType = UITextSpellCheckingTypeNo;
-    self.smartQuotesType = UITextSmartQuotesTypeNo;
-    self.smartDashesType = UITextSmartDashesTypeNo;
-    self.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
-    self.userInteractionEnabled = NO;  // never the target of a touch
-    self.hidden = YES;                 // draws nothing; first responder status is all it needs
-  }
-  return self;
-}
-- (BOOL)canBecomeFirstResponder {
-  return YES;
-}
-- (BOOL)becomeFirstResponder {
-  const BOOL ok = [super becomeFirstResponder];
-  std::printf("rni-ios: keyboard first_responder=%d\n", ok);
-  std::fflush(stdout);
-  return ok;
-}
-- (BOOL)resignFirstResponder {
-  const BOOL ok = [super resignFirstResponder];
-  std::printf("rni-ios: keyboard resigned=%d\n", ok);
-  std::fflush(stdout);
-  return ok;
-}
-- (BOOL)hasText {
-  return YES;  // so deleteBackward always arrives; the engine's buffer decides
-}
-- (void)insertText:(NSString*)text {
-  if (!_fabric) return;
-  NSData* utf32 = [text dataUsingEncoding:NSUTF32LittleEndianStringEncoding];
-  const uint32_t* cp = static_cast<const uint32_t*>(utf32.bytes);
-  const size_t n = utf32.length / 4;
-  int tag = 0;
-  for (size_t i = 0; i < n; ++i) {
-    tag = cp[i] == '\n' ? _fabric->dispatchKey(FabricHost::KeyAction::Submit, 0)
-                        : _fabric->dispatchKey(FabricHost::KeyAction::InsertChar, cp[i]);
-  }
-  std::printf("rni-ios: key insert scalars=%zu tag=%d\n", n, tag);
-  std::fflush(stdout);
-}
-- (void)deleteBackward {
-  if (!_fabric) return;
-  const int tag = _fabric->dispatchKey(FabricHost::KeyAction::Backspace, 0);
-  std::printf("rni-ios: key backspace tag=%d\n", tag);
-  std::fflush(stdout);
-}
-@end
-
-// ---------------------------------------------------------------------------
 // Touch: forwards the first touch without cancelling or delaying UIKit's.
 @interface RNITouchForwarder : UIGestureRecognizer
 @property(nonatomic, assign) FabricHost* fabric;
-@property(nonatomic, weak) RNIKeyboardProxy* keyboard;
+@property(nonatomic, weak) RNITextInputView* keyboard;
 @end
 
 @implementation RNITouchForwarder {
@@ -102,8 +38,13 @@ using rni::FabricHost;
   const int hit = _fabric->beginTouchCapture((float)p.x, (float)p.y);
   const int focused = _fabric->focusTextInputAt((float)p.x, (float)p.y);
   if (focused == 0) _fabric->beginTextSelection((float)p.x, (float)p.y);
-  RNIKeyboardProxy* kb = self.keyboard;
-  if (focused != 0 && !kb.isFirstResponder) [kb becomeFirstResponder];
+  RNITextInputView* kb = self.keyboard;
+  if (focused != 0 && !kb.isFirstResponder) {
+    [kb loadFromEngine];  // text, selection and traits before the keyboard comes up
+    [kb becomeFirstResponder];
+  } else if (focused != 0) {
+    [kb syncFromEngine];  // another field, or the caret moved
+  }
   if (focused == 0 && kb.isFirstResponder) [kb resignFirstResponder];
   std::printf("rni-ios: touch_down hit=%d textinput_focus=%d at=%.1f,%.1f\n", hit, focused, p.x, p.y);
   std::fflush(stdout);
@@ -148,7 +89,7 @@ using rni::FabricHost;
 @implementation RNIInputBridge {
   FabricHost* _fabric;
   RNITouchForwarder* _touch;
-  RNIKeyboardProxy* _keyboard;
+  RNITextInputView* _keyboard;
   id _keyboardObserver;
 }
 
@@ -175,7 +116,7 @@ using rni::FabricHost;
 
 - (void)attachToView:(UIView*)view {
   [self detach];
-  _keyboard = [[RNIKeyboardProxy alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
+  _keyboard = [[RNITextInputView alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
   _keyboard.fabric = _fabric;
   [view addSubview:_keyboard];
   _touch = [RNITouchForwarder new];
@@ -194,6 +135,10 @@ using rni::FabricHost;
 }
 
 - (void)syncFocus {
-  if (_keyboard.isFirstResponder && !_fabric->hasTextInputFocus()) [_keyboard resignFirstResponder];
+  if (_keyboard.isFirstResponder && !_fabric->hasTextInputFocus()) {
+    [_keyboard resignFirstResponder];
+    return;
+  }
+  [_keyboard syncFromEngine];
 }
 @end

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "impeller.h"
+#include "scenegraph/TextInputKeyboardTraits.h"
 
 namespace facebook::react {
 class ComponentDescriptorProviderRegistry;
@@ -286,6 +287,30 @@ class FabricHost {
   // True when a field is focused, so the windowed host knows whether to route a
   // character/key event here at all.
   bool hasTextInputFocus();
+
+  // Range editing, for a host whose text system edits by range rather than by
+  // keystroke (iOS UITextInput: autocorrect, marked text / IME). Defined in
+  // FabricHostTextEdit.cpp. Offsets are UTF-16 code units: UIKit's NSString
+  // index and RN's selection unit.
+  struct TextInputState {
+    int tag{0};
+    std::string value;   // the live edit buffer, UTF-8
+    size_t selStart{0};  // ordered; equal when collapsed
+    size_t selEnd{0};
+  };
+  // The focused field's buffer and selection. False when nothing is focused.
+  bool textInputState(TextInputState* out);
+  // Replaces [start, end) of the focused field's buffer with `text`, then puts
+  // the selection at [selStart, selEnd) of the NEW buffer, and fires onChange
+  // (only if the text changed) and onSelectionChange, as dispatchKey does.
+  // start == end with empty text moves only the selection. Everything is
+  // clamped. Returns the focused tag, or 0 when nothing is focused.
+  int replaceTextInputRange(size_t start, size_t end, const std::string& text,
+                            size_t selStart, size_t selEnd);
+  // The focused field's caret at UTF-16 `offset`, in layout points.
+  bool textInputCaretRect(size_t offset, float* x, float* y, float* w, float* h);
+  // The focused field's keyboard traits. False when nothing is focused.
+  bool textInputKeyboardTraits(TextInputKeyboardTraits* out);
   // Non-mutating probe: is a real TextInput field under (x,y)? Used by the
   // --type harness to settle the mount before the first focus. See the .cpp.
   bool isTextInputAt(float x, float y);
