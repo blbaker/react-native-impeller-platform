@@ -1,6 +1,7 @@
 // FP-15: see WindowRasterizer.h (model: shell/common/rasterizer.cc + shell.cc).
 #include "host/WindowRasterizer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -52,6 +53,19 @@ WindowRasterizer::WindowRasterizer(GlfwSurface& surface, FrameTimings& timings,
   log_ = log && std::strcmp(log, "1") == 0;
   const char* probe = std::getenv("RNI_TEST_GPU_AVAIL_PROBE");
   availProbe_ = probe && std::strcmp(probe, "1") == 0;
+  if (const char* lose = std::getenv("RNI_TEST_LOSE_FRAME_AFTER_IDLE_MS")) {
+    // ms[:count[:hold_ms]]. hold_ms: the raster thread holds each lost frame
+    // that long first, as [CAMetalLayer nextDrawable] does before it gives up
+    // (up to 1 s), so the loop is parked by the time the loss lands.
+    loseAfterIdleMs_ = std::max(0, std::atoi(lose));
+    if (const char* c1 = std::strchr(lose, ':')) {
+      loseCount_ = std::max(1, std::atoi(c1 + 1));
+      if (const char* c2 = std::strchr(c1 + 1, ':')) loseHoldMs_ = std::max(0, std::atoi(c2 + 1));
+    }
+    std::printf("rn-impeller: test_lose_frame_after_idle ms=%d count=%d hold_ms=%d\n",
+                loseAfterIdleMs_, loseCount_, loseHoldMs_);
+    std::fflush(stdout);
+  }
 }
 
 WindowRasterizer::~WindowRasterizer() { Shutdown(); }
@@ -123,6 +137,40 @@ void WindowRasterizer::DrawOnRaster() {
   cv_.notify_all();
 }
 
+void WindowRasterizer::NoteLost(const FrameItem& item, const char* reason) {
+  const uint64_t n = lost_.fetch_add(1, std::memory_order_acq_rel) + 1;
+  lastLostUs_.store(NowUs(), std::memory_order_release);
+  if (mutantMarkLost_) {  // mutant: count the lost frame as on screen
+    uint64_t prev = presentedRevision_.load(std::memory_order_relaxed);
+    while (prev < item.sceneRevision &&
+           !presentedRevision_.compare_exchange_weak(prev, item.sceneRevision)) {
+    }
+  }
+  if (n <= 20 || n % 100 == 0) {
+    std::printf("rn-impeller: frame_lost reason=%s frame=%llu scene_rev=%llu n=%llu\n", reason,
+                (unsigned long long)item.frameNumber, (unsigned long long)item.sceneRevision,
+                (unsigned long long)n);
+    std::fflush(stdout);
+  }
+}
+
+bool WindowRasterizer::TestLoseThis(const FrameItem& item) {
+  if (loseAfterIdleMs_ <= 0) return false;
+  const int64_t now = NowUs();
+  const int64_t idleUs = lastRasterUs_ > 0 ? now - lastRasterUs_ : 0;
+  lastRasterUs_ = now;
+  if (loseLeft_ == 0 && idleUs >= (int64_t)loseAfterIdleMs_ * 1000) loseLeft_ = loseCount_;
+  if (loseLeft_ == 0) return false;
+  --loseLeft_;
+  if (loseHoldMs_ > 0) std::this_thread::sleep_for(std::chrono::milliseconds(loseHoldMs_));
+  lastRasterUs_ = NowUs();
+  std::printf("rn-impeller: test_lost_frame frame=%llu scene_rev=%llu idle_ms=%lld left=%d\n",
+              (unsigned long long)item.frameNumber, (unsigned long long)item.sceneRevision,
+              (long long)(idleUs / 1000), loseLeft_);
+  std::fflush(stdout);
+  return true;
+}
+
 void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   int delay = everyFrameDelayMs_;
   bool readback = false;
@@ -137,7 +185,8 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   // recorded for another size than the surface's current one never presents.
   // Retires an item that never reaches the screen: unrun jobs mark their
   // entries failed (dependents redo them), timings are discarded.
-  auto retireDropped = [&] {
+  auto retireDropped = [&](const char* why) {
+    NoteLost(*item, why);
     if (item->jobs) item->jobs->AfterRaster();
     if (item->timings) timings_.Discard(std::move(item->timings));
     {
@@ -146,9 +195,12 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
       retired_.fetch_add(1, std::memory_order_acq_rel);
     }
     cv_.notify_all();
+    // AFTER the retire: the woken loop must see nothing in flight, or it
+    // parks again and the lost frame waits out the idle budget.
+    if (scheduler_ && !mutantNoLostWake_) scheduler_->Wake();
   };
   if (resizeSync_ && resizeSync_->ShouldDiscard(item->width, item->height, item->frameNumber)) {
-    retireDropped();
+    retireDropped("size");
     return;
   }
   // FP-31 (rasterizer.cc DrawToSurfaces + SyncSwitch): everything below is GPU
@@ -156,13 +208,18 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   // the frame is dropped like kGpuUnavailable: no draw, no upload, no present.
   if (ctxloss::Lost()) {  // FP-32: the context is dead; main rebuilds it
     ctxloss::NoteDropped();
-    retireDropped();
+    retireDropped("context_lost");
     return;
   }
   gpu::Section gpuSection;
   if (!gpuSection.available()) {
     gpu::Note(gpu::Counter::kSkippedFrame);
-    retireDropped();
+    retireDropped("gpu_unavailable");
+    return;
+  }
+  // Test hook: lost like a nil Metal drawable (nothing drawn, nothing presented).
+  if (TestLoseThis(*item)) {
+    retireDropped("test_hook");
     return;
   }
   // DrawToSurfaces acquires the frame at the layer tree's size.
@@ -183,6 +240,9 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
                   (unsigned long long)item->frameNumber, (unsigned long long)fails);
       std::fflush(stdout);
     }
+    // The present below still runs (on Metal it is a no-op without a
+    // drawable), but this frame's scene never reached the screen.
+    NoteLost(frame, "draw_failed");
   }
   const int n = presents_.load(std::memory_order_relaxed) + 1;
   if (readback) {
@@ -247,6 +307,12 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
   TRACE_COUNTER("presents", n);
   // Counted at the present: refresh_paints and presents= come from here.
   presents_.store(n, std::memory_order_release);
+  if (drawn) {  // host/UnpresentedDamage.h: this revision is on screen now
+    uint64_t prev = presentedRevision_.load(std::memory_order_relaxed);
+    while (prev < frame.sceneRevision &&
+           !presentedRevision_.compare_exchange_weak(prev, frame.sceneRevision)) {
+    }
+  }
   gpu::NotePresent(n, !item->damage.partial);
   ctxloss::NotePresent(n);
   {  // FP-32: a lost context shows up as a failed swap or a robust reset status
@@ -276,6 +342,7 @@ void WindowRasterizer::RasterAndPresent(std::unique_ptr<FrameItem> item) {
     retired_.fetch_add(1, std::memory_order_acq_rel);
   }
   cv_.notify_all();
+  if (!drawn && scheduler_ && !mutantNoLostWake_) scheduler_->Wake();  // see retireDropped
 }
 
 bool WindowRasterizer::WaitPresented(uint64_t ticket, int timeoutMs) {

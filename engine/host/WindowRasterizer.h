@@ -87,6 +87,26 @@ class WindowRasterizer {
   int presents() const { return presents_.load(std::memory_order_acquire); }
   // FP-30: items finished, presented or discarded (tickets retire in order).
   uint64_t retired() const { return retired_.load(std::memory_order_acquire); }
+  // Main. True while a submitted item has not retired yet.
+  bool inFlight() const { return retired() < submitted_; }
+  // The newest FrameItem::sceneRevision that reached the screen: drawn and
+  // presented. Frames that were discarded or failed to draw do not count
+  // (host/UnpresentedDamage.h).
+  uint64_t presentedRevision() const {
+    return presentedRevision_.load(std::memory_order_acquire);
+  }
+  // Frames retired without reaching the screen, and when the last one did
+  // (steady clock us, 0 = never).
+  uint64_t lostFrames() const { return lost_.load(std::memory_order_acquire); }
+  int64_t lastLostUs() const { return lastLostUs_.load(std::memory_order_acquire); }
+  // Mutation-gate switches (tools/mutation-verify-idle-commit-paint.sh), set
+  // by --idle-mutant before the loop starts. markLostPresented: a lost frame
+  // still advances presentedRevision. noLostWake: a lost frame does not wake
+  // the parked loop.
+  void SetLostFrameMutants(bool markLostPresented, bool noLostWake) {
+    mutantMarkLost_ = markLostPresented;
+    mutantNoLostWake_ = noLostWake;
+  }
   // Drains queued items (they present), releases the GPU objects ON the raster
   // thread, then joins it. Main; idempotent.
   void Shutdown();
@@ -101,6 +121,12 @@ class WindowRasterizer {
  private:
   void DrawOnRaster();  // one Consume (Rasterizer::Draw)
   void RasterAndPresent(std::unique_ptr<FrameItem> item);
+  // Raster thread: an item retired without reaching the screen.
+  void NoteLost(const FrameItem& item, const char* reason);
+  // RNI_TEST_LOSE_FRAME_AFTER_IDLE_MS=ms[:count]: the first `count` items
+  // drawn after the raster thread sat idle for >= ms are lost the way a nil
+  // Metal drawable loses them (no draw, no present). Raster thread.
+  bool TestLoseThis(const FrameItem& item);
 
   GlfwSurface& surface_;
   FrameTimings& timings_;
@@ -130,6 +156,16 @@ class WindowRasterizer {
   std::atomic<uint64_t> retired_{0};
   std::atomic<uint64_t> drawFailed_{0};
   std::atomic<uint64_t> slotWaits_{0};
+  std::atomic<uint64_t> presentedRevision_{0};
+  std::atomic<uint64_t> lost_{0};
+  std::atomic<int64_t> lastLostUs_{0};
+  bool mutantMarkLost_ = false;
+  bool mutantNoLostWake_ = false;
+  int loseAfterIdleMs_ = 0;  // RNI_TEST_LOSE_FRAME_AFTER_IDLE_MS (raster thread)
+  int loseCount_ = 1;
+  int loseHoldMs_ = 0;
+  int loseLeft_ = 0;
+  int64_t lastRasterUs_ = 0;
   int everyFrameDelayMs_ = 0;  // RNI_TEST_RASTER_DELAY_MS
   bool log_ = false;           // RNI_TEST_RASTER_LOG=1
   bool availProbe_ = false;    // FP-31: RNI_TEST_GPU_AVAIL_PROBE=1

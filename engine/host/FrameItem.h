@@ -53,6 +53,9 @@ struct FrameItem {
   std::shared_ptr<PlatformViewFrame> platformViews;
   int64_t vsyncUs = 0;  // FP-15: the scheduler tick this frame began on (0 = none)
   int64_t targetUs = 0;  // FP-27: the vblank that tick targets (displaylink)
+  // SceneGraph::version() read before the walk: a present of this item puts
+  // at least this revision on screen (host/UnpresentedDamage.h).
+  uint64_t sceneRevision = 0;
   // FP-18: damage against the previous walk. When damage.partial, displayList
   // is the walk clipped to the damage rect (device coordinates), and fullList
   // is the unclipped walk, kept so RASTER can repaint in full when its back

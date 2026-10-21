@@ -108,6 +108,7 @@
 #include "base/ProgramCount.h"
 #include "host/MemoryPressure.h"
 #include "host/OsAppearance.h"
+#include "host/UnpresentedDamage.h"
 #include "modules/NetworkingModule.h"
 #include "runtime/ReactHost.h"
 #include "scenegraph/SceneGraph.h"
@@ -868,6 +869,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
         rasterizer.thread().PostSync([&] { surface.setSwapInterval(interval); });
       });
   rasterizer.SetScheduler(&scheduler);
+  // tools/mutation-verify-idle-commit-paint.sh: M5 counts a lost frame as on
+  // screen, M6 does not wake the loop when a frame is lost.
+  rasterizer.SetLostFrameMutants(idleSkip && idleMutant == 5, idleSkip && idleMutant == 6);
   // FP-31 (FlutterEngine.mm setIsGpuDisabled): window iconify/restore, and the
   // RN AppState it maps to, flip the one switch. JS keeps running; it is told
   // the new AppState. A restore asks for the repaint.
@@ -1000,9 +1004,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     const bool afterLoss = rni::ctxloss::ConsumeFullRepaint();  // FP-32: new buffer, no history
     const bool allowPartial =
         rasterizer.partialRepaint() && !rni::gpu::ConsumeRestore() && !afterLoss;
+    // Read BEFORE the walk: a commit that lands during it may or may not be in
+    // this list, so this frame only vouches for the revision it saw at start.
+    const uint64_t sceneRevision = sceneGraph.version();
     auto recorded = session.RecordFrame(pointScale, surface.width(),
                                         surface.height(), std::move(frame),
                                         nullptr, allowPartial);
+    recorded->sceneRevision = sceneRevision;
     recorded->vsyncUs = scheduler.lastTickUs();
     recorded->targetUs = scheduler.lastTargetUs();
     const int painted = recorded->painted;
@@ -1027,6 +1035,8 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   bool capturedTimed = false;
   bool capturedFirst = false;
   int frameIndex = 0;
+  // host/UnpresentedDamage.h: the idle check that re-asks for a lost frame.
+  rni::UnpresentedDamage unpresented;
   // Paints produced from the GLFW window-refresh callback rather than from the
   // loop below. Printed at exit so a gate has a machine-readable signal that
   // the modal-loop path actually ran, instead of inferring it from a pixel
@@ -1996,6 +2006,34 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 
       const bool clean = !shouldPaint;
       int sleptMs = 0;
+      // host/UnpresentedDamage.h. Damage newer than anything that reached the
+      // screen, with no frame in flight, is a frame that was lost after its
+      // request was consumed (nil drawable, failed draw, size discard): ask
+      // again rather than park on a stale screen. The raster thread wakes the
+      // loop when it loses one, so this runs at once. M4 skips the check
+      // (the 0.6.0 loop).
+      int parkMs = idleBudgetMs;
+      if (clean && idleMutant != 4 && rni::gpu::Available() && !scheduler.FramePending()) {
+        const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count();
+        const uint64_t sceneRev = sceneGraph.version();
+        const uint64_t shownRev = rasterizer.presentedRevision();
+        const auto d = unpresented.Check(sceneRev, shownRev, rasterizer.inFlight(), nowUs);
+        if (d.request) {
+          if (d.retry <= 10 || d.retry % 60 == 0) {
+            const int64_t lostUs = rasterizer.lastLostUs();
+            printf("rn-impeller: unpresented_damage scene_rev=%llu presented_rev=%llu retry=%d "
+                   "since_lost_ms=%lld\n",
+                   (unsigned long long)sceneRev, (unsigned long long)shownRev, d.retry,
+                   (long long)(lostUs > 0 ? (nowUs - lostUs) / 1000 : -1));
+            fflush(stdout);
+          }
+          scheduler.RequestFrame("unpresented");
+        } else if (d.waitMs >= 0) {
+          parkMs = std::min(parkMs, d.waitMs);
+        }
+      }
       // A request that landed after the decision posted its wake already, so
       // the wait below returns at once; skip it outright when one is pending.
       // THE SLEEP THAT DROPS CPU. Block up to budget ms; any input OR a posted
@@ -2004,7 +2042,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       // wrong fix, proving the sleep, not the paint-skip, is what matters.
       if (clean && idleMutant != 2 && !scheduler.FramePending()) {
         const auto t0 = std::chrono::steady_clock::now();
-        surface.waitEvents((double)idleBudgetMs / 1000.0);
+        surface.waitEvents((double)parkMs / 1000.0);
         sleptMs = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::steady_clock::now() - t0)
                       .count();
@@ -2100,6 +2138,11 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   printf("rn-impeller: refresh_paints=%d\n", refreshPaints);
   // FP-01: presents counted at surface.present(), independent of the recorder.
   printf("rn-impeller: presents=%d\n", rasterizer.presents());
+  printf("rn-impeller: unpresented_summary requests=%llu lost_frames=%llu presented_rev=%llu "
+         "scene_rev=%llu\n",
+         (unsigned long long)unpresented.requests(), (unsigned long long)rasterizer.lostFrames(),
+         (unsigned long long)rasterizer.presentedRevision(),
+         (unsigned long long)sceneGraph.version());
   rni::programcount::PrintSummary();  // FP-34
   scheduler.PrintSummary();
   {  // FP-54: frames handed to React Native DevTools (0 unless a trace recorded)
@@ -2369,7 +2412,10 @@ int main(int argc, char** argv) {
     //                         skips happened.
     //   --idle-mutant N       1=M1 always-dirty, 2=M2 skip paint but keep the
     //                         non-blocking poll (no sleep), 3=M3 never install
-    //                         the wake. For mutation-verify ONLY.
+    //                         the wake, 4=M4 no lost-frame re-ask (0.6.0),
+    //                         5=M5 a lost frame counts as on screen, 6=M6 a
+    //                         lost frame does not wake the loop
+    //                         (host/UnpresentedDamage.h). For mutation-verify ONLY.
     //   --idle-offthread-after F  at frame F fire an OFF-thread scene bump once;
     //                         the off-thread repaint witness uses it with
     //                         --idle-log to prove M3 stalls and HEAD wakes.

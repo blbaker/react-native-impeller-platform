@@ -63,6 +63,12 @@ class FrameScheduler {
   // BeginFrame collapse into the one outstanding request.
   void RequestFrame(const char* reason);
   bool FramePending() const;
+  // Any thread. Wakes a parked loop WITHOUT requesting a frame, so it re-runs
+  // its idle checks (the raster thread calls it when a frame retires without
+  // reaching the screen; host/UnpresentedDamage.h decides what to do).
+  void Wake() {
+    if (wake_) wake_();
+  }
 
   // Main thread. Blocks until the vsync that services the outstanding request
   // (software clock), or returns at once (the swap blocks instead).
