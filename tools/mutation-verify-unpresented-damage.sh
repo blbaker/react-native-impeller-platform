@@ -23,9 +23,13 @@ run() {  # run <name> <expect pass|fail> <header dir>
   rc=$?
   local first
   first="$(printf '%s\n' "$out" | grep -m1 -E 'FAIL [A-D]|GATE_(PASS|FAIL)' | sed 's/^ *//')"
+  [ -n "$first" ] || first="$(printf '%s\n' "$out" | tail -1)"
   if [ "$2" = pass ] && [ $rc -eq 0 ]; then
     echo "  $1: PASS (expected)"
-  elif [ "$2" = fail ] && [ $rc -ne 0 ] && printf '%s\n' "$out" | grep -q UNPRESENTED_DAMAGE_GATE_FAIL; then
+  # Caught means a behaviour check failed. A mutant that does not compile
+  # proved nothing about the schedule (Apple clang's -Wunused-private-field
+  # once "caught" M1 this way), so that counts as WRONG.
+  elif [ "$2" = fail ] && [ $rc -ne 0 ] && printf '%s\n' "$out" | grep -qE '^  FAIL [A-D] '; then
     echo "  $1: FAIL (caught)  $first"
   else
     echo "  $1: WRONG (expected $2, rc=$rc)  $first"
@@ -44,7 +48,8 @@ mutant() {  # mutant <name> <perl -0pe expression>
 }
 
 run head pass engine/host
-mutant m1 's/    if \(presentedRevision != lastPresented_\) \{.*?\n    \}\n//s' &&
+# M1 also drops the then-unused member, or clang's -Werror stops it compiling.
+mutant m1 's/    if \(presentedRevision != lastPresented_\) \{.*?\n    \}\n//s; s/  uint64_t lastPresented_ = 0;\n//' &&
   run m1-no-progress-reset fail "$WORK/m1"
 # shellcheck disable=SC2016  # $1 is perl's capture, not a shell variable
 mutant m2 's/(lastPresented_ = presentedRevision;\n      consecutive_ = 0;\n)      retryAtUs_ = 0;\n/$1/' &&
