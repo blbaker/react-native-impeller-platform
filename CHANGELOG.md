@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.1](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.0...v0.8.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ios:** pick the signing team from the iOS profile that covers this Mac ([98f89b8](https://github.com/blbaker/react-native-impeller-platform/commit/98f89b8698a2d8bdcf35d47d41fe49f56b3bd5aa))
+* **window:** a frame lost after its request no longer leaves the old screen up ([c61d1d9](https://github.com/blbaker/react-native-impeller-platform/commit/c61d1d998db4c79b6acd2c90534f6d3421d6ffce))
+* **window:** a frame lost after its request no longer leaves the old screen up ([4fd1ff3](https://github.com/blbaker/react-native-impeller-platform/commit/4fd1ff35882f73829f8a0b7e5e7d8b0f88cb3d30))
+
 ## [0.8.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.7.0...v0.8.0) (2026-10-20)
 
 
