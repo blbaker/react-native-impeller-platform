@@ -265,6 +265,9 @@ need_displayed = os.environ.get("ICP_REQUIRE_DISPLAYED") == "1"
 lost = re.findall(r"test_lost_frame frame=(\d+) scene_rev=(\d+) idle_ms=(\d+) left=(\d+)", text)
 bursts = sum(1 for f in lost if int(f[3]) == lose - 1)
 retries = [int(m) for m in re.findall(r"unpresented_damage scene_rev=\d+ presented_rev=\d+ retry=\d+ since_lost_ms=(-?\d+)", text)]
+# The raster thread wakes the parked loop when it loses a frame, so the re-ask
+# follows the loss at once; without that wake it waits out the park budget.
+max_reask = int(os.environ.get("ICP_MAX_REASK_MS", "100"))
 if lose:
     print("  lost frames: %d in %d bursts of %d; loop re-asked %d times (since_lost_ms max %s)" % (
         len(lost), bursts, lose, len(retries), max(retries) if retries else "-"))
@@ -274,6 +277,7 @@ elif not idle_before_first and mode != "click": print("VERDICT FAIL (the loop ne
 elif bad: print("VERDICT FAIL (%d of %d whole-screen commits were not on screen %d ms later)" % (len(bad), swaps, delay_ms))
 elif need_displayed and (not shown or undisplayed): print("VERDICT FAIL (presented but not displayed: swaps %s)" % (undisplayed or "all (no vsync_displayed lines; run with ICP_DIAG=1)"))
 elif lose and bursts < swaps: print("VERDICT FAIL (the lose hook fired for %d of %d swaps: no lost frame was exercised)" % (bursts, swaps))
+elif lose and (not retries or max(retries) > max_reask): print("VERDICT FAIL (the loop re-asked %s ms after a lost frame; bound %d ms: the loss did not wake it)" % (max(retries) if retries else "never", max_reask))
 else: print("VERDICT PASS (%d of %d whole-screen commits on screen %d ms after an idle-loop commit%s)" % (
     swaps, swaps, delay_ms, ", each swap's own frame lost %d time(s)" % lose if lose else ""))
 PY

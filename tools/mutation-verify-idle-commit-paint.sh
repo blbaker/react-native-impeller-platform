@@ -10,6 +10,8 @@
 #   M5 a lost frame counts as presented            -> loop thinks it is caught up
 #   M6 a lost frame does not wake the parked loop  -> re-ask waits out the
 #                                                     1000 ms idle budget
+#                                                     (late swap, or a re-ask
+#                                                     > ICP_MAX_REASK_MS)
 #
 # Each must FAIL the arm, for the on-screen reason. Controls:
 #   HEAD with the loss                -> PASS (the fix recovers)
@@ -56,7 +58,7 @@ expect_fail() {  # $4 = the verdict text that names the right reason
   if run "$1" "$2" "$3"; then
     echo "  $1: PASS (SURVIVED: the gate cannot see this mutant)  $(verdict "$1")"
     fails=$((fails + 1))
-  elif grep -q "$4" "$OUT/$1.log"; then
+  elif grep -Eq "$4" "$OUT/$1.log"; then
     echo "  $1: FAIL (caught)  $(verdict "$1")"
   else
     echo "  $1: FAIL but for another reason  $(verdict "$1")"
@@ -69,7 +71,7 @@ expect_pass head-loss "$LOSE" ""
 expect_pass m4-noloss 0 "--idle-mutant 4"
 expect_fail m4-loss "$LOSE" "--idle-mutant 4" "were not on screen"
 expect_fail m5-loss "$LOSE" "--idle-mutant 5" "were not on screen"
-expect_fail m6-loss "$LOSE" "--idle-mutant 6" "were not on screen"
+expect_fail m6-loss "$LOSE" "--idle-mutant 6" "were not on screen|did not wake it"
 expect_pass head-after "$LOSE" ""
 
 if [ "$fails" -eq 0 ]; then
