@@ -4,9 +4,8 @@ title: Contributing and releasing
 
 # Contributing and releasing
 
-This page covers working on the repository itself. If you want to use the
-published package in an app, you don't need any of this. See
-[Get started](./getting-started).
+If you want to use the published package in an app, you don't need any
+of this. See [Get started](./getting-started) instead.
 
 Read [AGENTS.md](https://github.com/blbaker/react-native-impeller-platform/blob/main/AGENTS.md)
 and [docs/engineering-standards.md](https://github.com/blbaker/react-native-impeller-platform/blob/main/docs/engineering-standards.md)
@@ -49,8 +48,7 @@ rebuilding it for you.
 Every `tools/ci-*.sh` gate has a matching `tools/mutation-verify-*.sh`
 script. It re-introduces the exact defect the gate exists to catch,
 confirms the gate goes red for that reason, then confirms the gate goes
-green again after you revert the defect. A gate nobody has watched fail
-isn't proof of anything.
+green again after you revert the defect.
 
 To run a mutation-verify script, run the following command:
 
@@ -81,8 +79,8 @@ The following conventions apply to branches and commits:
 - Branch names: `feat/SHORT_DESCRIPTION`, `fix/...`, `refactor/...`,
   `docs/...`, `ci/...`, `chore/...`. Replace `SHORT_DESCRIPTION` with a
   short, hyphenated summary of the change.
-- One change per branch. A fix you notice along the way goes in its own
-  branch.
+- One change per branch. A fix you notice along the way goes in a
+  separate branch.
 - Commit subjects follow [Conventional Commits](https://www.conventionalcommits.org/).
 - Keep new files at or under 300 lines. If a file you're editing is
   already bigger, split off only the part your change touches.
@@ -115,14 +113,14 @@ A separate workflow builds engine binaries per OS: a Linux runner builds
 `linux-x64`, a macOS runner builds `darwin-arm64`, and a Windows runner
 builds `win32-x64`. Before any real publish step runs,
 `tools/ci-release-meta.sh` checks, with `RNI_REQUIRE_ENGINE_BINARIES=1`,
-that every engine package actually holds a binary for its own OS and CPU,
+that every engine package holds a binary for its OS and CPU,
 with its exec bit set, the same binary that `npm pack` ships. That check
 exists because `packages-engine/*/bin` is left out of git. Without the
 check, a tag could publish an engine package holding only a `README.md`
 file.
 
 A separate policy gate, `tools/ci-workflows.sh`, checks the workflow
-files themselves rather than trusting review alone. It confirms that a
+files. It confirms that a
 real publish stays reachable only from a version tag, runs after the
 gates in the same workflow, stays behind the one guard variable, and that
 the OIDC token used for trusted publishing stays scoped to the publishing

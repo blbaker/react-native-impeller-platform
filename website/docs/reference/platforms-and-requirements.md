@@ -15,8 +15,8 @@ support status for each platform:
 | Android (arm64) | none yet | Vulkan, with a GLES fallback for known-bad drivers | Experimental: an embeddable view that draws Impeller display lists into a `SurfaceView`. No React Native runtime on it yet. |
 | iOS | none | n/a | Not supported yet. Flutter uses Metal there. An iOS host is future work. |
 
-A platform is listed as supported only after its engine package actually
-exists and renders correctly outside this repository. npm silently skips
+A platform is listed as supported only after its engine package exists
+and renders correctly outside this repository. npm silently skips
 a missing optional dependency and exits `0`. If the platform isn't ready,
 you get a clean install with no engine, and then a runtime error telling
 you to install a package that doesn't exist.
@@ -54,7 +54,7 @@ through Impeller. There's no published engine package for Android yet.
 ## iOS: not supported yet
 
 Flutter renders through Metal directly on iOS. An iOS host for this
-engine is future work. Nothing is published for it today.
+engine is future work.
 
 ## Build an engine for any of these platforms
 

@@ -4,7 +4,7 @@ title: Supported components and style props
 
 # Supported components and style props
 
-This page lists what the style-coverage gates actually pass today, drawn
+This page lists what the style-coverage gates pass, drawn
 straight from the tiles the audit tracks (`tools/style-coverage-keep.txt`
 and `tools/style-coverage-landed.txt`), not from a feature list written by
 hand. A *tile* is one small fixture rendered and checked pixel by pixel.
@@ -55,7 +55,7 @@ and Image styling (`backgroundImage`-style background, `contain`,
 
 ## NativeWind utility classes
 
-A wide set of NativeWind utilities passes directly: background color and
+A wide set of NativeWind utilities passes: background color and
 opacity modifiers, arbitrary colors, CSS variables, padding, row gap,
 fractional widths, rounded corners (including `rounded-full` and
 per-corner), borders (including dashed), shadows (including an arbitrary
@@ -80,8 +80,8 @@ The following items are known gaps:
 - **Tabular figures.** The `nw:tabularNums` utility isn't implemented.
   For more information, see
   [Fonts and text](../guides/fonts-and-text#a-caveat-on-tabular-figures).
-- **Platform colors, emoji, CJK, and Arabic text** render correctly, but
-  through a dedicated fallback path rather than the primary font directly.
+- **Platform colors, emoji, CJK, and Arabic text** render correctly
+  through a dedicated fallback path, not the primary font.
   For more information, see
   [Fonts and text](../guides/fonts-and-text#fallback-for-glyphs-the-primary-face-doesnt-have).
 - **Stroked SVG icons on the GL backend** (Linux, Windows, and macOS until
@@ -92,5 +92,5 @@ The following items are known gaps:
   elsewhere while it's validated further.
 
 This list reflects the gates as they exist on `main`. A platform that is
-listed but hasn't passed its own `tools/ci-style-coverage.sh` run isn't
+listed but hasn't passed its `tools/ci-style-coverage.sh` run isn't
 claimed as supported anywhere in these docs.

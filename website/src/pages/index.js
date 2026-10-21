@@ -20,10 +20,10 @@ const BACKENDS = [
 ];
 
 const DOCS = [
-  { href: '/docs/intro', title: 'Introduction', dek: 'Why this exists and what it is today.' },
+  { href: '/docs/intro', title: 'Introduction', dek: "What it is and why it's built on Impeller." },
   { href: '/docs/getting-started', title: 'Get started', dek: 'Install the package, add the platform to your app, and run it.' },
   { href: '/docs/guides/how-it-works', title: 'How it works', dek: 'Fabric, the scene graph, the raster thread, engine resolution.' },
-  { href: '/docs/reference/supported-components-and-style-props', title: 'Supported components and style props', dek: "What renders today, and what's still gated off." },
+  { href: '/docs/reference/supported-components-and-style-props', title: 'Supported components and style props', dek: "What renders, and what's tracked as a known gap." },
   { href: '/docs/reference/platforms-and-requirements', title: 'Platforms and requirements', dek: 'Backend and OS requirements for Linux, macOS, and Windows.' },
   { href: '/docs/contributing-and-releasing', title: 'Contributing and releasing', dek: 'Gates, mutation-verify, commit conventions, and how a release ships.' },
 ];
@@ -61,7 +61,7 @@ export default function Home() {
       <main>
         <section className={styles.section}>
           <div className={styles.sectionHead}>
-            <h2 className={styles.sectionTitle}>Why this exists</h2>
+            <h2 className={styles.sectionTitle}>React Native beyond iOS and Android</h2>
             <p className={styles.sectionIntro}>
               React Native creates matching native views on iOS and Android. Every
               other platform needs someone to build that layer.
@@ -69,18 +69,17 @@ export default function Home() {
           </div>
           <div className={styles.prose}>
             <p>
-              React Native's own docs list partner platforms for macOS and Windows.
+              React Native's docs list partner platforms for macOS and Windows.
               For Linux they point to a renderer built on Skia whose README still
               calls it a proof of concept, with no commit since March 2023.
             </p>
             <p>
-              This platform renders on Linux, macOS, and Windows through Impeller
-              instead of Skia. Flutter built Impeller to fix the problems it had
-              with Skia, and it now ships as a standalone SDK with a C API meant
-              for projects outside Flutter: a prebuilt binary for every Flutter
-              commit, text layout and shaping included, and shaders compiled ahead
-              of time so nothing compiles at runtime. It already renders a React
-              Native app in daily use.
+              This platform renders on Linux, macOS, and Windows through Impeller.
+              Flutter built Impeller to fix problems it had with Skia, and Impeller
+              now ships as a standalone SDK with a C API meant for projects outside
+              Flutter: a prebuilt binary for every Flutter commit, text layout and
+              shaping included, and shaders compiled ahead of time so nothing
+              compiles at runtime. It renders a React Native app in daily use.
             </p>
           </div>
         </section>

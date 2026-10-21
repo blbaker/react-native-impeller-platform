@@ -19,7 +19,7 @@ npx react-native init-impeller
 
 The command scaffolds an `impeller/` folder into the current React Native
 app and wraps `metro.config.js` with `withImpeller` so Metro knows about
-the `impeller` platform. The scaffold is generated from the app's own
+the `impeller` platform. The scaffold is generated from the app's
 `app.json` or `package.json` file, not copied from a fixed template.
 
 The following table lists the options for `init-impeller`:
@@ -58,8 +58,8 @@ npx impeller-engine-path
 
 The command prints the resolved engine binary's absolute path to stdout,
 or a message naming the expected package to stderr, and exits `1`. It
-takes no options. Use it to check what an install actually resolved, and
-during continuous integration.
+takes no options. Use it to check what an install resolved, and during
+continuous integration.
 
 ## Environment variables
 
