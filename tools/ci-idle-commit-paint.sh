@@ -30,6 +30,10 @@
 # capture delay, so a commit that did not wake the loop cannot be rescued by
 # the park timing out.
 #
+# ICP_LOSE_FRAMES=N (the arm that fails on 0.6.0's loop): each swap's own
+# frame is lost after its request was consumed (see the MODE block below).
+# tools/mutation-verify-idle-commit-paint.sh runs it against M4/M5/M6.
+#
 # Node-free: the bundle is committed. Mac (no npm):
 #   RNI_BIN=<darwin rn-impeller> bash tools/ci-idle-commit-paint.sh
 # Darwin uses --window unless ICP_WINDOW_FLAG=--window-hidden.
@@ -80,6 +84,19 @@ fi
 MODE="${ICP_MODE:-light}"
 MODE_FLAGS=""
 XTEST_CLICK=0
+# ICP_LOSE_FRAMES=N: the engine loses the first N frames drawn after >= 500 ms
+# of raster idleness (RNI_TEST_LOSE_FRAME_AFTER_IDLE_MS), so each swap's own
+# frame never reaches the screen, the way a nil Metal drawable or a failed
+# draw loses it. Each lost frame is held ICP_LOSE_HOLD_MS (default 100 / N)
+# first, as nextDrawable does before it gives up, so the loop is parked when
+# the loss lands. The swap must STILL be on screen 300 ms later: the loop has
+# to notice the lost frame and ask for another (host/UnpresentedDamage.h).
+# 0.6.0's loop never asks again: tools/mutation-verify-idle-commit-paint.sh.
+LOSE="${ICP_LOSE_FRAMES:-0}"
+if [ "$LOSE" -gt 0 ]; then
+  HOLD="${ICP_LOSE_HOLD_MS:-$((100 / LOSE))}"
+  export RNI_TEST_LOSE_FRAME_AFTER_IDLE_MS="500:$LOSE:$HOLD"
+fi
 case "$MODE" in
   light) MODE_FLAGS="--initial-url icp://swap" ;;
   heavy) MODE_FLAGS="--initial-url icp://swap?heavy=1" ;;
@@ -93,7 +110,7 @@ case "$MODE" in
     fi ;;
   *) fail "ICP_MODE must be light|heavy|click (got $MODE)" ;;
 esac
-echo "  mode=$MODE delay_ms=$DELAY_MS idle_budget_ms=$BUDGET_MS xtest_click=$XTEST_CLICK"
+echo "  mode=$MODE delay_ms=$DELAY_MS idle_budget_ms=$BUDGET_MS xtest_click=$XTEST_CLICK lose=${RNI_TEST_LOSE_FRAME_AFTER_IDLE_MS:-off}"
 
 RNI_TEST_PRESENTED_CAPTURE="$OUT/cap" "$RNI_BIN" "$WINDOW_FLAG" --probe-banner off \
   --bundle "$BUNDLE" --app-name "$APP_NAME" ${ICP_EXTRA_FLAGS:-} $DIAG_FLAGS $MODE_FLAGS \
@@ -102,10 +119,11 @@ RNI_TEST_PRESENTED_CAPTURE="$OUT/cap" "$RNI_BIN" "$WINDOW_FLAG" --probe-banner o
 PID=$!
 
 set +e
-(ICP_XTEST="$XTEST_CLICK" python3 - "$OUT" "$PID" "$DELAY_MS" "$SWAPS" "${ICP_X11_CROSSCHECK:-0}" "$MODE" <<'PY'
+(ICP_XTEST="$XTEST_CLICK" python3 - "$OUT" "$PID" "$DELAY_MS" "$SWAPS" "${ICP_X11_CROSSCHECK:-0}" "$MODE" "$LOSE" <<'PY'
 import os, re, sys, time
 out, pid, delay_ms, swaps, x11 = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), sys.argv[5] == "1"
 mode = sys.argv[6]
+lose = int(sys.argv[7])
 log_path, cap = os.path.join(out, "run.log"), os.path.join(out, "cap")
 SCREEN0 = (30, 79, 216)
 
@@ -228,6 +246,13 @@ text = open(log_path, errors="replace").read()
 shown = {int(a): int(b) for a, b in re.findall(r"vsync_displayed n=(\d+) presented_us=(-?\d+)", text)}
 served = {int(a): int(b) for a, b in re.findall(r"presented_capture k=(\d+) ok=1 present=(\d+)", text)}
 undisplayed = []
+# A swap back to an earlier colour (swap 4 returns to screen 0's) would pass a
+# screen that never changed at all: each capture must also come from a NEWER
+# present than the swap before it.
+for n in sorted(served):
+    if n - 1 in served and served[n] <= served[n - 1]:
+        print("  swap %d: capture served present %d again (no present since swap %d)" % (n, served[n], n - 1))
+        bad = [r for r in bad if r[0] != n] + [(n, "stale", False, "no new present")]
 if shown:
     for n in sorted(served):
         p = served[n]
@@ -235,12 +260,26 @@ if shown:
         print("  swap %d: present %d %s" % (n, p, state))
         if shown.get(p, 0) <= 0: undisplayed.append(n)
 need_displayed = os.environ.get("ICP_REQUIRE_DISPLAYED") == "1"
+# ICP_LOSE_FRAMES: prove the hook really lost each swap's frame (a gate whose
+# loss never fired would pass on any engine), and show how the loop recovered.
+lost = re.findall(r"test_lost_frame frame=(\d+) scene_rev=(\d+) idle_ms=(\d+) left=(\d+)", text)
+bursts = sum(1 for f in lost if int(f[3]) == lose - 1)
+retries = [int(m) for m in re.findall(r"unpresented_damage scene_rev=\d+ presented_rev=\d+ retry=\d+ since_lost_ms=(-?\d+)", text)]
+# The raster thread wakes the parked loop when it loses a frame, so the re-ask
+# follows the loss at once; without that wake it waits out the park budget.
+max_reask = int(os.environ.get("ICP_MAX_REASK_MS", "100"))
+if lose:
+    print("  lost frames: %d in %d bursts of %d; loop re-asked %d times (since_lost_ms max %s)" % (
+        len(lost), bursts, lose, len(retries), max(retries) if retries else "-"))
 if not ready: print("VERDICT FAIL (ICP_READY never logged: the fixture did not mount)")
 elif len(results) < swaps: print("VERDICT FAIL (only %d of %d swaps captured; engine alive=%d)" % (len(results), swaps, alive()))
 elif not idle_before_first and mode != "click": print("VERDICT FAIL (the loop never parked before swap 1: not an idle-loop commit)")
 elif bad: print("VERDICT FAIL (%d of %d whole-screen commits were not on screen %d ms later)" % (len(bad), swaps, delay_ms))
 elif need_displayed and (not shown or undisplayed): print("VERDICT FAIL (presented but not displayed: swaps %s)" % (undisplayed or "all (no vsync_displayed lines; run with ICP_DIAG=1)"))
-else: print("VERDICT PASS (%d of %d whole-screen commits on screen %d ms after an idle-loop commit)" % (swaps, swaps, delay_ms))
+elif lose and bursts < swaps: print("VERDICT FAIL (the lose hook fired for %d of %d swaps: no lost frame was exercised)" % (bursts, swaps))
+elif lose and (not retries or max(retries) > max_reask): print("VERDICT FAIL (the loop re-asked %s ms after a lost frame; bound %d ms: the loss did not wake it)" % (max(retries) if retries else "never", max_reask))
+else: print("VERDICT PASS (%d of %d whole-screen commits on screen %d ms after an idle-loop commit%s)" % (
+    swaps, swaps, delay_ms, ", each swap's own frame lost %d time(s)" % lose if lose else ""))
 PY
 ) | tee "$OUT/verdict.txt"
 PYRC=${PIPESTATUS[0]}
@@ -251,7 +290,7 @@ grep -E 'presented_capture|backend_select|\[idle\] enabled' "$OUT/run.log" | hea
 [ "$PYRC" -eq 0 ] || fail "watcher crashed (rc=$PYRC); log: $OUT/run.log"
 if ! grep -q '^VERDICT PASS' "$OUT/verdict.txt" || [ "${ICP_DIAG:-0}" = "1" ]; then
   echo "  --- engine log (filtered, last 150) ---"
-  grep -E 'ICP_|frame_discarded|draw_failed|vsync_request|raster_present|vsync_displayed|painted=1|presented_capture|backend|metal_|FATAL|WARN' \
+  grep -E 'ICP_|frame_discarded|frame_lost|test_lost_frame|unpresented|draw_failed|vsync_request|raster_present|vsync_displayed|painted=1|presented_capture|backend|metal_|FATAL|WARN' \
     "$OUT/run.log" | tail -150 | sed 's/^/  | /'
 fi
 grep -q '^VERDICT PASS' "$OUT/verdict.txt" || fail "$(grep '^VERDICT' "$OUT/verdict.txt" || echo 'no verdict')"
