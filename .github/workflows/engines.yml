@@ -34,6 +34,7 @@ on:
       - 'tools/angle-fetch.sh'
       - '.github/workflows/engines.yml'
       - 'tools/ci-idle-commit-paint.sh'
+      - 'tools/mutation-verify-idle-commit-paint.sh'
       - 'fixtures/idle-commit-paint/**'
 
 permissions:
@@ -167,6 +168,27 @@ jobs:
           done
           echo "=== heavy, 1600x900 ==="
           ICP_MODE=heavy ICP_WIDTH=1600 ICP_HEIGHT=900 bash tools/ci-idle-commit-paint.sh || rc=1
+          exit $rc
+
+      # The arm that fails on 0.6.0's loop: each swap's own frame is lost
+      # after its request was consumed (a nil drawable, a failed draw), and
+      # the loop must ask again (host/UnpresentedDamage.h). The mutation run
+      # proves the arm fails with each part of the fix removed (M4/M5/M6),
+      # here on Metal + CVDisplayLink.
+      - name: Lost frame still reaches the screen (macOS windowed)
+        if: runner.os == 'macOS'
+        env:
+          RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+        run: |
+          rc=0
+          for lose in 1 3; do
+            echo "=== light, lose=$lose ==="
+            ICP_LOSE_FRAMES=$lose bash tools/ci-idle-commit-paint.sh || rc=1
+          done
+          echo "=== heavy, lose=1 ==="
+          ICP_MODE=heavy ICP_LOSE_FRAMES=1 bash tools/ci-idle-commit-paint.sh || rc=1
+          echo "=== mutation verify ==="
+          bash tools/mutation-verify-idle-commit-paint.sh || rc=1
           exit $rc
 
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
