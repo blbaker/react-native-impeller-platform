@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.1...v0.8.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **window:** a new lost frame is re-asked at once, not after an old backoff ([c8424f9](https://github.com/blbaker/react-native-impeller-platform/commit/c8424f9e0e6bc02748f82e6ab7f6f1ce5f1caf81))
+
 ## [0.8.1](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.0...v0.8.1) (2026-10-21)
 
 
