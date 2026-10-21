@@ -4,9 +4,9 @@ title: Debugging
 
 # Debugging
 
-The resolver and build scripts are written to name the exact problem
-rather than fail somewhere obscure. The following sections list the real
-messages you see, and what each one means.
+The resolver and build scripts name the exact problem when something
+goes wrong. The following sections list the real messages you see, and
+what each one means.
 
 ## GLFW not found during the CMake configure step
 

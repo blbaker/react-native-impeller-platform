@@ -6,27 +6,27 @@ title: Introduction
 
 The react-native-impeller-platform package is an out-of-tree React Native
 platform. Its renderer is [Impeller](https://github.com/flutter/engine/tree/main/impeller),
-Flutter's graphics engine, not Skia and not a native UI toolkit. React
-components mount through Fabric into a scene graph that Impeller paints.
-There is no DOM, no native view hierarchy, and no per-platform UI toolkit
+Flutter's graphics engine. Impeller isn't Skia or a native UI toolkit.
+React components mount through Fabric into a scene graph that Impeller
+paints. There's no DOM, native view hierarchy, or per-platform UI toolkit
 underneath it.
 
-## Why this exists
+For the background, read [Why I put React Native on Impeller](https://bbaker.dev/blog/why-react-native-on-impeller).
+
+## React Native beyond iOS and Android
 
 React Native creates matching native views for your components on iOS and
 Android. Every other platform needs someone to build that layer. React
-Native's own docs list partner platforms for macOS and Windows. For Linux
+Native's docs list partner platforms for macOS and Windows. For Linux
 they point to a renderer built on Skia whose README still calls it a proof
 of concept, with no commit since March 2023.
 
-This project started as a Skia-based renderer for Linux, macOS, and
-Windows. The rendering worked, but the packaging didn't, and none of it
-was reusable the way it needed to be.
+## Why Impeller
 
-Impeller turned out to be a better fit. Flutter built it to fix the
-problems it had with Skia, and Impeller is now the only renderer Flutter
-uses on iOS and the default renderer on Android, macOS, Linux, and
-Windows. The following reasons made Impeller the right choice here:
+Flutter built Impeller to fix problems it had with Skia. Impeller is now
+the only renderer Flutter uses on iOS and the default renderer on
+Android, macOS, Linux, and Windows. Impeller has the following
+properties:
 
 - Google publishes a prebuilt Impeller SDK for every Flutter commit, for
   macOS, Linux, Windows, and Android.
@@ -36,26 +36,25 @@ Windows. The following reasons made Impeller the right choice here:
 - Impeller draws from a display list, and this engine builds one from
   React Native's view tree every frame.
 
-Impeller needs a GPU. Its own README says a software renderer probably
-isn't coming. Running tests on a GPU machine for every commit wasn't an
-option, so the first commit in this repo checked that Impeller renders on
-Linux with no GPU at all, through Mesa's `llvmpipe`. That check still runs
-as `tools/ci-headless.sh`.
+Impeller needs a GPU, and its README says a software renderer probably
+isn't coming. The `tools/ci-headless.sh` check confirms that Impeller
+renders on Linux with no GPU, through Mesa's `llvmpipe`, so the gates
+don't need a GPU machine for every commit.
 
-From there, the engine follows how Flutter runs Impeller: React Native's
-JS thread takes the place of Flutter's UI thread, a separate raster thread
-does the drawing, and each OS gets the graphics backend Flutter ships
-there. The platform installs next to stock React Native, the same way
-React Native for Windows does. It already renders a React Native app in
+The engine follows Flutter's thread model for Impeller: React Native's
+JS thread takes the place of Flutter's UI thread, a separate raster
+thread does the drawing, and each OS gets the graphics backend Flutter
+ships there. The platform installs next to stock React Native, the same
+way React Native for Windows does. It renders a React Native app in
 daily use.
 
 ## Status
 
-This project is pre-release software, and these docs say so directly. The
-rendering, the JS to native module seam, and the packaging are gated by
-pixel tests on every commit, but the API surface is small and the
-published platform list is short. Every package is versioned `0.1.0`.
-Expect breaking changes between releases until a `1.0.0` is tagged.
+This project is pre-release software. The rendering, the JS to native
+module seam, and the packaging are gated by pixel tests on every commit,
+but the API surface is small and the published platform list is short.
+Every package is versioned `0.1.0`. Expect breaking changes between
+releases until a `1.0.0` is tagged.
 
 ## Supported platforms
 
@@ -70,8 +69,8 @@ support status for each platform:
 | Android (arm64) | none yet | Vulkan, with a GLES fallback for known-bad drivers | Experimental: an embeddable view that draws Impeller display lists into a `SurfaceView`. No React Native runtime on it yet. |
 | iOS | none | n/a | Not supported yet. Flutter uses Metal there. An iOS host is future work. |
 
-A platform is listed as supported only after its engine package actually
-exists and renders correctly outside this repo. npm silently skips a
+A platform is listed as supported only after its engine package exists
+and renders correctly outside this repository. npm silently skips a
 missing optional dependency and exits `0`. If the platform isn't ready,
 you get a clean install with no engine, and then a runtime error telling
 you to install a package that doesn't exist.

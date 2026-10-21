@@ -5,8 +5,8 @@ title: Build the engine from source
 # Build the engine from source
 
 You only need this if you're developing the engine itself. If you're
-consuming the published package in an app, npm install already gives you
-a prebuilt engine binary. For more information, see
+consuming the published package in an app, npm install gives you a
+prebuilt engine binary. For more information, see
 [Get started](../getting-started).
 
 ## Requirements

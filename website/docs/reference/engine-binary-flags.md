@@ -7,7 +7,7 @@ title: Engine binary flags
 The `rn-impeller` binary is the C++ engine host that `run-impeller`
 launches for you. The following sections list its user-facing flags. Run
 `rn-impeller --help` to see the full list. The full usage text also lists
-flags for the engine's own test harness (synthetic input injection,
+flags for the engine's test harness (synthetic input injection,
 self-tests, draw-op dumps). Those flags aren't listed here because
 they're not meant for an app developer to pass.
 
@@ -70,7 +70,7 @@ The following table lists the related environment variables:
 |---|---|---|---|
 | `RNI_IMAGE_CACHE_MB` | integer | `100` | Same as `--image-cache-mb`. |
 | `RNI_IMAGE_CACHE_FLOOR_MB` | integer | `0` | Minimum cache size kept during a low-memory purge. |
-| `RNI_FONT_DIRS` | path list | unset | Extra font directories for the Linux font resolver, same effect as `--font-dir`. For more information, see [Fonts and text](../guides/fonts-and-text#add-your-own-fonts-on-linux). |
+| `RNI_FONT_DIRS` | path list | unset | Extra font directories for the Linux font resolver, same effect as `--font-dir`. For more information, see [Fonts and text](../guides/fonts-and-text#add-fonts-on-linux). |
 
 ## Profiling
 
@@ -90,6 +90,6 @@ loading a bundle, run the following command:
 rn-impeller --list-modules
 ```
 
-`--test-openurl`, `--test-urlparse`, and `--test-http` run the engine's own
+`--test-openurl`, `--test-urlparse`, and `--test-http` run the engine's
 networking and URL-handling self-tests the same way. None of the four
 take a `--bundle` flag.
