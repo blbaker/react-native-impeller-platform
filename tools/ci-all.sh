@@ -309,4 +309,12 @@ bash tools/ci-notifications.sh | grep -E "NOTIFY_GATE_PASS|OK BUS"
 echo "### gate 25: Networking TurboModule + TLS (P10)"
 bash tools/ci-p10.sh | grep -E "P10_NETWORKING_PASS|TLS negative controls|NOT proven by this run|net_requests_completed|OK NATIVE HALF"
 
+# CPU only, no engine build: the lost-frame re-ask schedule
+# (host/UnpresentedDamage.h) on a simulated clock. The windowed lost-frame arms
+# run on the darwin engines job and only see a given ordering when the runner's
+# timing produces it; this replays each ordering every run. Mutants:
+# mutation-verify-unpresented-damage.sh (also run on the darwin engines job).
+echo "### gate 26: lost-frame re-ask schedule (simulated clock)"
+bash tools/ci-unpresented-damage.sh | grep -E "UNPRESENTED_DAMAGE_GATE_PASS|OK [A-D]:"
+
 echo "ALL_GATES_PASS"

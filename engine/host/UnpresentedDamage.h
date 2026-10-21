@@ -17,6 +17,15 @@
 // (0, 0, 25, 50 ... 1000 ms) so a draw that keeps failing cannot spin a core.
 // Model: Flutter's Rasterizer resubmits a frame whose draw returned
 // kRetry/kResubmit (shell/common/rasterizer.cc ShouldResubmitFrame).
+//
+// The backoff counts failures IN A ROW, so any present ends the run. It is not
+// enough to reset only when a check finds the screen caught up: after a
+// present the loop parks for the whole idle budget (a present does not wake
+// it), and a commit landing inside that park means the next check already
+// sees new damage. The count then carried into the next commit's losses, and
+// a single fresh loss waited 400-800 ms (PR #35 darwin run 39537571277:
+// retry=7..10 on swaps 3-4, since_lost_ms=730). Gate:
+// tools/ci-unpresented-damage.sh.
 #pragma once
 
 #include <algorithm>
@@ -37,8 +46,17 @@ class UnpresentedDamage {
   Decision Check(uint64_t sceneRevision, uint64_t presentedRevision, bool inFlight,
                  int64_t nowUs) {
     Decision d;
+    if (presentedRevision != lastPresented_) {
+      // A frame reached the screen since the last check: the failure run is
+      // over even if newer damage is already waiting. Clear the pending
+      // deadline too, or a new loss waits out the old run's backoff.
+      lastPresented_ = presentedRevision;
+      consecutive_ = 0;
+      retryAtUs_ = 0;
+    }
     if (presentedRevision >= sceneRevision) {
       consecutive_ = 0;  // caught up: the next loss starts the schedule again
+      retryAtUs_ = 0;
       return d;
     }
     if (inFlight) return d;  // its retire wakes the loop
@@ -67,6 +85,7 @@ class UnpresentedDamage {
  private:
   int consecutive_ = 0;
   int64_t retryAtUs_ = 0;
+  uint64_t lastPresented_ = 0;
   uint64_t requests_ = 0;
 };
 

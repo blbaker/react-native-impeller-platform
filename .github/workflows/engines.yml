@@ -36,6 +36,9 @@ on:
       - 'tools/ci-idle-commit-paint.sh'
       - 'tools/mutation-verify-idle-commit-paint.sh'
       - 'fixtures/idle-commit-paint/**'
+      - 'tools/ci-unpresented-damage.sh'
+      - 'tools/mutation-verify-unpresented-damage.sh'
+      - 'tools/unpresented-damage-test.cpp'
 
 permissions:
   contents: read
@@ -192,6 +195,12 @@ jobs:
           ICP_MODE=heavy ICP_LOSE_FRAMES=1 bash tools/ci-idle-commit-paint.sh || rc=1
           echo "=== mutation verify ==="
           bash tools/mutation-verify-idle-commit-paint.sh || rc=1
+          # The re-ask schedule on a simulated clock, with Apple clang: the
+          # orderings the windowed arms only see when runner timing allows
+          # (the PR #35 run lost the race this replays).
+          echo "=== re-ask schedule (CPU) ==="
+          bash tools/ci-unpresented-damage.sh || rc=1
+          bash tools/mutation-verify-unpresented-damage.sh || rc=1
           exit $rc
 
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
