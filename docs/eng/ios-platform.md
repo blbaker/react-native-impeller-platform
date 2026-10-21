@@ -261,6 +261,35 @@ as Mach-O platform `IOS` arm64 from the App Store wrapper layout. It used real
 Metal ("Apple M3"), not the Simulator's, in a 1024×1366-point iPad window, and
 presented 293,580 frames in 81 minutes (60 fps).
 
+### A repeatable run on the Mac
+
+```bash
+bash tools/ci-ios-mac-run.sh   # build, sign, launch on this Mac, check the engine draws
+```
+
+`tools/ci-ios-mac-run.sh` does the Xcode run without Xcode's window. It
+generates the project, then builds and signs it with `xcodebuild` in the
+logged-in GUI session. That uses a launchd job bootstrapped into `gui/<uid>`
+(`tools/lib/mac-gui-job.sh`), because `codesign` can't reach the keychain
+from SSH. It then installs the app in the App Store wrapper layout, launches
+it on the M1 smoke fixture with `open --args`, and reads its log from the app's
+container. It checks the app was signed by an Apple Development identity with
+a profile that covers this Mac, the running binary is platform `IOS`, and the
+engine booted on a non-Simulator Metal device and keeps presenting frames.
+Measured on an M3 MacBook Pro: `IOS_MAC_RUN_PASS (device=Apple M3 frames_in_3s=180)`.
+Its mutants: a surface that never starts fails E ("no first frame"), and an
+ad hoc signature fails S (`xcodebuild` won't build an ad hoc app for this
+destination).
+
+It needs someone logged in at the Mac, and an iOS development profile that
+covers the Mac. Make the profile once by running the project in Xcode on "My
+Mac (Designed for iPad)". The generator picks the team from that profile, so a
+second team on the same Mac, whose certificate may not be able to sign (for
+example one with an unaccepted program license agreement, "PLA Update
+available"), isn't used by accident. There's no pixel check: macOS gives no
+screen-recording permission to background jobs, so the evidence is the
+engine's own frame counters on the real GPU. The Simulator gates check pixels.
+
 Measured on this Mac without Xcode: a flat iOS bundle won't open ("incorrect executable
 format"). The wrapper layout reaches macOS's installer, which rejects any
 app whose signature it can't validate. `codesign` with an Apple Development

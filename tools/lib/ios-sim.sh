@@ -52,7 +52,7 @@ ios_on_mac_or_reexec() {
   fi
   # Only these knobs cross over; everything else a gate needs is in the tree.
   RNI_MAC_TREE="${RNI_MAC_TREE:-rni-ios}" \
-    RNI_MAC_ENV="IOS_DEVICE IOS_SETTLE IOS_KEEP_SIM RNI_IOS_SDK RNI_IOS_CI_DIR IOS_SIM_SHOT_EARLY IOS_INPUT_TEST RNI_IOS_ENGINE_LIB" \
+    RNI_MAC_ENV="IOS_DEVICE IOS_SETTLE IOS_KEEP_SIM RNI_IOS_SDK RNI_IOS_CI_DIR IOS_SIM_SHOT_EARLY IOS_INPUT_TEST RNI_IOS_ENGINE_LIB RNI_MAC_RUN_ADHOC" \
     exec bash "$IOS_ROOT/tools/mac-run.sh" bash "$rel" "$@"
 }
 
