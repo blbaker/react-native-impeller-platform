@@ -128,15 +128,16 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
   color: var(--ink-2); font-weight: var(--fw-medium); border-radius: var(--radius-xs);
   text-decoration: none !important;
 }
-.menu__link:hover { color: var(--ink); background: var(--tier-1); }
+/* Hover and the current page change the text only: no band, no bar (Baker, 2026-10-21). */
+.menu__link:hover { color: var(--ink); background: transparent; }
 .menu__list-item-collapsible:hover { background: transparent; }
 .menu__list-item-collapsible .menu__link--sublist { color: var(--ink-3); font-weight: var(--fw-semibold); font-size: 0.8125rem; font-family: var(--font-body); }
 .menu__list-item-collapsible .menu__link--sublist:hover { color: var(--ink); background: transparent; }
-.menu__link--active:not(.menu__link--sublist) {
+.menu__link--active:not(.menu__link--sublist),
+.menu__link--active:not(.menu__link--sublist):hover {
   color: var(--ink);
   background: transparent;
   font-weight: var(--fw-semibold);
-  box-shadow: inset 2px 0 0 0 var(--ink);
 }
 .menu__caret:before { background: currentColor; -webkit-mask-size: 1.5rem 1.5rem; }
 .menu__list-item--collapsed .menu__link--sublist:after { opacity: 0.7; }
