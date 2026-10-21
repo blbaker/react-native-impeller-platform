@@ -6,10 +6,8 @@ title: Introduction
 
 The react-native-impeller-platform package is an out-of-tree React Native
 platform. Its renderer is [Impeller](https://github.com/flutter/engine/tree/main/impeller),
-Flutter's graphics engine. Impeller isn't Skia or a native UI toolkit.
-React components mount through Fabric into a scene graph that Impeller
-paints. There's no DOM, native view hierarchy, or per-platform UI toolkit
-underneath it.
+Flutter's graphics engine. React components mount through Fabric into a
+scene graph, and Impeller paints that scene graph.
 
 For the background, read [Why I put React Native on Impeller](https://bbaker.dev/blog/why-react-native-on-impeller).
 

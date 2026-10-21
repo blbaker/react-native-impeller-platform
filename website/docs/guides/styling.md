@@ -7,8 +7,8 @@ title: Styling
 Style props on a React Native component work the same way here as on iOS
 and Android: Fabric commits a style record for each node, and this engine
 reads it at mount or update time and builds the matching Impeller draw
-calls. There's no CSS engine and no second style resolution pass. Whatever
-value React Native's style layer resolves is what gets painted.
+calls. The value React Native's style layer resolves is the value that
+gets painted.
 
 Two things differ from a native host because the renderer is Impeller
 rather than a platform UI toolkit.
