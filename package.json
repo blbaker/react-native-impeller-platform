@@ -1,6 +1,6 @@
 {
   "name": "react-native-impeller-repo",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "private": true,
   "description": "Release Please anchor for this repo. Not published -- the published packages are package/ and packages-engine/*/."
 }
