@@ -1403,6 +1403,13 @@ void SceneGraph::recordDamage(ImpellerDisplayListBuilder builder, const SceneNod
   const bool caret = node.isTextInput && node.tag == tiFocused_;
   damage_.Record(builder, node.tag, node.parent, ImpellerRect{x, y, w, h}, outset, unbounded,
                  node.overflowHidden, spinning || caret);
+  // FP-41: a BlurView blurs what is already drawn under it, sampling ~3 sigma
+  // past its box (BackdropBlur.cpp, clamp tile mode). Recorded here, not where
+  // it paints, so a culled or early-out visit still registers the reader.
+  if (node.isBlurView && node.blurIntensity > 0.0f) {
+    const float reach = 3.0f * rni::BlurSigmaForIntensity(node.blurIntensity) + 2.0f;
+    damage_.RecordReadback(builder, node.tag, ImpellerRect{x, y, w, h}, reach, unbounded);
+  }
 }
 
 void SceneGraph::setDamageWake(std::function<void()> wake) {
