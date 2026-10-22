@@ -6,7 +6,8 @@
 #   M3 no below-the-last-line rule                             -> J all
 #   M4 no above-the-first-line rule                            -> F below
 #   M5 only the anchor paragraph paints its highlight          -> C across (pixels)
-#   M6 middle paragraphs are dropped from the selection        -> I span3
+#   M6 middle paragraphs are dropped from the selection        -> D runs (the
+#      middle run) or I span3
 #   M7 a backwards drag is walked as if it were forwards       -> G reverse
 #   M8 no same-line rule: a point beside a line goes elsewhere -> L margin
 # Not claimed: the clip clamp for ScrollView/overflow:hidden and the modal
@@ -56,7 +57,7 @@ run_mutant() {  # $1 name  $2 ERE the FAIL line must match
     PASS=$((PASS + 1))
   else
     echo "   killed, but not by the expected arm ($2):"
-    grep TEXT_SELECT_GATE_FAIL "$LOG-gate.log" | head -1 | sed 's/^/     /'
+    { grep TEXT_SELECT_GATE_FAIL "$LOG-gate.log" || tail -3 "$LOG-gate.log"; } | head -3 | sed 's/^/     /'
   fi
   restore
 }
@@ -91,7 +92,7 @@ fi
 if want M6; then
 mutate "$TS" "    if (lo < hi) textSelParts_.push_back(TextSelPart{*it, lo, hi});" \
              "    if (lo < hi && (*it == firstTag || *it == lastTag)) textSelParts_.push_back(TextSelPart{*it, lo, hi});  // MUTANT M6"
-run_mutant "M6 middle paragraphs dropped" "span3:"
+run_mutant "M6 middle paragraphs dropped" "runs:|span3:"
 fi
 if want M7; then
 mutate "$TS" "  const bool forward = ia < iff;" \
