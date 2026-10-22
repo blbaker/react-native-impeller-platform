@@ -288,6 +288,12 @@ bash tools/ci-style-audit.sh | grep -E "STYLE_AUDIT_GATE_PASS|item [0-9]+:"
 echo "### gate 24e2: text selection across paragraphs (ENG-43)"
 bash tools/ci-text-select.sh | grep -E "TEXT_SELECT_GATE_PASS|^   [a-z0-9]+: '"
 
+# Static, no Mac: every shared engine file the desktop build compiles is also
+# in the iOS engine's hand-written list (PR #40 missed one and broke every iOS
+# link while desktop CI stayed green). Mutants: mutation-verify-ios-sources.sh.
+echo "### gate 24e3: iOS engine source list matches desktop"
+bash tools/ci-ios-sources.sh | grep -E "IOS_SOURCES_PASS"
+
 # Windowed (xvfb on linux), prebuilt bundle. --type types into a WINDOWED run
 # through the real char/key entry points and --screenshot shows the result.
 # Mutants: mutation-verify-window-type.sh.
