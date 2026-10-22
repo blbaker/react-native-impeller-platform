@@ -73,6 +73,14 @@ class DamageTracker {
   void Record(ImpellerDisplayListBuilder builder, int tag, int parent,
               ImpellerRect local, float outset, bool unbounded, bool clipsChildren,
               bool volatileNow);
+  // FP-41 readback: `tag` (an expo-blur BlurView) paints a filter of the pixels
+  // ALREADY DRAWN under `local`, sampling up to `readOutset` past it. Damage
+  // that reaches this read area joins all of it, so a partial frame redraws
+  // every pixel the filter samples (flow/diff_context.cc AddReadbackRegion +
+  // ComputeDamage). Without it a partial frame blurs a blank scratch outside
+  // the damage and leaves the rest of the blur showing the old content.
+  void RecordReadback(ImpellerDisplayListBuilder builder, int tag, ImpellerRect local,
+                      float readOutset, bool unbounded);
   void ForceFull(const char* reason) { walkFull_ = reason; }
   // `exists(tag)`: is the tag a live scene node (unpainted live node = we
   // cannot bound it).
@@ -87,10 +95,19 @@ class DamageTracker {
  private:
   struct Rec {
     Box own, sub;
+    Box read;  // FP-41 readback area (device px), when readsBack
     bool unbounded = false, subUnbounded = false;
     bool clips = false, isVolatile = false;
+    bool readsBack = false, readUnbounded = false;
     int parent = 0;
   };
+  // `local` grown by `outset` through the builder's transform, plus the AA
+  // fringe. False when it cannot be boxed (perspective, non-finite).
+  static bool DeviceBox(ImpellerDisplayListBuilder builder, ImpellerRect local, float outset,
+                        Box* out);
+  // Joins every readback area the damage reaches, until nothing grows. Returns
+  // a full-frame reason when a reached reader cannot be boxed.
+  const char* JoinReadbacks(Box* d) const;
   using Map = std::unordered_map<int, Rec>;
   void Finish(FrameDamage* out, const std::vector<int>& unknown);
 

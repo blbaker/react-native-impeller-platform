@@ -61,39 +61,44 @@ void DamageTracker::BeginWalk() {
   walkFull_ = nullptr;
 }
 
+bool DamageTracker::DeviceBox(ImpellerDisplayListBuilder builder, ImpellerRect local,
+                              float outset, Box* out) {
+  ImpellerMatrix m{};
+  ImpellerDisplayListBuilderGetTransform(builder, &m);
+  // Column-major: x' = m0 x + m4 y + m12, w' = m3 x + m7 y + m15.
+  if (m.m[3] != 0.0f || m.m[7] != 0.0f || m.m[15] != 1.0f) {
+    return false;  // perspective: the box is not an affine image
+  }
+  Box box;
+  const float x0 = local.x - outset, y0 = local.y - outset;
+  const float x1 = local.x + local.width + outset, y1 = local.y + local.height + outset;
+  const float xs[4] = {x0, x1, x0, x1}, ys[4] = {y0, y0, y1, y1};
+  for (int i = 0; i < 4; ++i) {
+    const float dx = m.m[0] * xs[i] + m.m[4] * ys[i] + m.m[12];
+    const float dy = m.m[1] * xs[i] + m.m[5] * ys[i] + m.m[13];
+    Box p;
+    p.l = p.r = dx;
+    p.t = p.b = dy;
+    p.empty = false;
+    box.Add(p);
+  }
+  box.l -= kAaFringePx;
+  box.t -= kAaFringePx;
+  box.r += kAaFringePx;
+  box.b += kAaFringePx;
+  if (!std::isfinite(box.l) || !std::isfinite(box.t) || !std::isfinite(box.r) ||
+      !std::isfinite(box.b)) {
+    return false;
+  }
+  *out = box;
+  return true;
+}
+
 void DamageTracker::Record(ImpellerDisplayListBuilder builder, int tag, int parent,
                            ImpellerRect local, float outset, bool unbounded,
                            bool clipsChildren, bool volatileNow) {
   Box box;
-  if (!unbounded) {
-    ImpellerMatrix m{};
-    ImpellerDisplayListBuilderGetTransform(builder, &m);
-    // Column-major: x' = m0 x + m4 y + m12, w' = m3 x + m7 y + m15.
-    if (m.m[3] != 0.0f || m.m[7] != 0.0f || m.m[15] != 1.0f) {
-      unbounded = true;  // perspective: the box is not an affine image
-    } else {
-      const float x0 = local.x - outset, y0 = local.y - outset;
-      const float x1 = local.x + local.width + outset, y1 = local.y + local.height + outset;
-      const float xs[4] = {x0, x1, x0, x1}, ys[4] = {y0, y0, y1, y1};
-      for (int i = 0; i < 4; ++i) {
-        const float dx = m.m[0] * xs[i] + m.m[4] * ys[i] + m.m[12];
-        const float dy = m.m[1] * xs[i] + m.m[5] * ys[i] + m.m[13];
-        Box p;
-        p.l = p.r = dx;
-        p.t = p.b = dy;
-        p.empty = false;
-        box.Add(p);
-      }
-      box.l -= kAaFringePx;
-      box.t -= kAaFringePx;
-      box.r += kAaFringePx;
-      box.b += kAaFringePx;
-      if (!std::isfinite(box.l) || !std::isfinite(box.t) || !std::isfinite(box.r) ||
-          !std::isfinite(box.b)) {
-        unbounded = true;
-      }
-    }
-  }
+  if (!unbounded && !DeviceBox(builder, local, outset, &box)) unbounded = true;
   auto [it, inserted] = cur_.try_emplace(tag);
   Rec& rec = it->second;
   if (inserted) {
@@ -104,6 +109,37 @@ void DamageTracker::Record(ImpellerDisplayListBuilder builder, int tag, int pare
   rec.unbounded = rec.unbounded || unbounded;
   rec.clips = rec.clips || clipsChildren;
   rec.isVolatile = rec.isVolatile || volatileNow;
+}
+
+void DamageTracker::RecordReadback(ImpellerDisplayListBuilder builder, int tag,
+                                   ImpellerRect local, float readOutset, bool unbounded) {
+  Box read;
+  if (!unbounded && !DeviceBox(builder, local, readOutset, &read)) unbounded = true;
+  Rec& rec = cur_[tag];  // Record ran for this visit first
+  rec.readsBack = true;
+  rec.read.Add(read);
+  rec.readUnbounded = rec.readUnbounded || unbounded;
+}
+
+const char* DamageTracker::JoinReadbacks(Box* d) const {
+  // One reader's area can reach another's: join until nothing grows. Both
+  // walks' readers: a blur that just moved or went away read the old pixels.
+  for (bool grew = !d->empty; grew;) {
+    grew = false;
+    for (const Map* m : {&cur_, &prev_}) {
+      for (const auto& [tag, rec] : *m) {
+        if (!rec.readsBack) continue;
+        if (rec.readUnbounded) return "readback_unbounded";
+        Box hit = rec.read;
+        hit.Intersect(*d);
+        if (hit.empty) continue;
+        const Box before = *d;
+        d->Add(rec.read);
+        grew = grew || d->l < before.l || d->t < before.t || d->r > before.r || d->b > before.b;
+      }
+    }
+  }
+  return nullptr;
 }
 
 void DamageTracker::Finish(FrameDamage* out, const std::vector<int>& unknown) {
@@ -161,6 +197,7 @@ void DamageTracker::Finish(FrameDamage* out, const std::vector<int>& unknown) {
       if (rec.isVolatile) addTag(&rec, find(cur_, tag));
     }
   }
+  if (!full) full = JoinReadbacks(&d);  // FP-41: blurs over the damage
 
   out->baseSeq = seq_;
   out->seq = ++seq_;
