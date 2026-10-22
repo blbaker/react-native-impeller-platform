@@ -1,6 +1,6 @@
 {
   "name": "@blbaker/react-native-impeller-platform-engine-linux-x64",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Prebuilt Impeller engine host for linux-x64 (installed automatically by react-native-impeller-platform)",
   "license": "MIT",
   "repository": {
