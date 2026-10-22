@@ -191,10 +191,19 @@ jobs:
           # re-asking through consecutive losses, with a looser bound.
           echo "=== light, lose=3, capture at 800 ms ==="
           ICP_LOSE_FRAMES=3 ICP_CAPTURE_DELAY_MS=800 bash tools/ci-idle-commit-paint.sh || rc=1
-          echo "=== heavy, lose=1 ==="
-          ICP_MODE=heavy ICP_LOSE_FRAMES=1 bash tools/ci-idle-commit-paint.sh || rc=1
+          # Heavy + one loss: the 100 ms simulated drawable hold, one ~100 ms
+          # loop cycle on this VM and a heavy raster. Measured on 12 runs
+          # (PRs #35-#41): 100-290 ms from commit to screen, and one run
+          # (#41, attempt 1) past 300 ms, so this arm captures at 500 ms.
+          # The defect it guards never presents until the next input (>= 1.3 s
+          # later) and M6 re-asks only after the 1000 ms idle budget, so 500
+          # still fails all three mutants (the heavy@500 run below).
+          echo "=== heavy, lose=1, capture at 500 ms ==="
+          ICP_MODE=heavy ICP_LOSE_FRAMES=1 ICP_CAPTURE_DELAY_MS=500 bash tools/ci-idle-commit-paint.sh || rc=1
           echo "=== mutation verify ==="
           bash tools/mutation-verify-idle-commit-paint.sh || rc=1
+          echo "=== mutation verify, heavy @ 500 ms ==="
+          ICP_MODE=heavy ICP_CAPTURE_DELAY_MS=500 bash tools/mutation-verify-idle-commit-paint.sh || rc=1
           # The re-ask schedule on a simulated clock, with Apple clang: the
           # orderings the windowed arms only see when runner timing allows
           # (the PR #35 run lost the race this replays).
