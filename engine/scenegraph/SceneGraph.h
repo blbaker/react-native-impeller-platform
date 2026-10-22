@@ -252,6 +252,12 @@ struct SceneNode {
   // prop rides on the same descriptor). A press-drag over a selectable
   // paragraph selects a byte range of `text`; see SceneGraph::textSel*_.
   bool selectable{false};
+  // ENG-43: the node lays its children out in a row (flexDirection row or
+  // row-reverse). Selectable Text siblings in such a row are one visual line
+  // (a styled line drawn as one Text per word), so a copy joins them with
+  // nothing between, not a newline. Fabric flattens a layout-only row, so
+  // this only sees rows the mount kept; sameLineLocked covers the rest.
+  bool flexRow{false};
 
   // <TextInput>. ENG-01b. A TextInput is NOT a Paragraph: it paints a single
   // editable line from a native-held buffer, a placeholder when that buffer is
@@ -876,10 +882,28 @@ class SceneGraph {
   // maps a point to the glyph actually painted there).
   size_t textOffsetAt(facebook::react::Tag tag, float x, float y);
   void setTextSelection(facebook::react::Tag tag, size_t anchor, size_t caret);
+  // ENG-43: a selection that starts in one selectable paragraph (anchorTag at
+  // byte `anchor`) and ends in another (focusTag at byte `focus`). Every
+  // selectable paragraph between them in document order is selected whole.
+  // See SceneGraphTextSelection.cpp.
+  void setTextSelectionRange(facebook::react::Tag anchorTag, size_t anchor,
+                             facebook::react::Tag focusTag, size_t focus);
+  // ENG-43: where a held drag at (x,y) lands, as a selectable paragraph + byte
+  // offset, searched within the anchor's surface (its root, or its modal).
+  // Points between or outside paragraphs resolve to the nearest text, macOS
+  // style: below a paragraph's last line = its end, above its first = its
+  // start. False when the scope holds no selectable text.
+  bool textPositionAt(facebook::react::Tag anchorTag, float x, float y,
+                      facebook::react::Tag* tag, size_t* offset);
   void clearTextSelection();
+  // The anchor paragraph's tag while the selection is non-empty, else 0.
   facebook::react::Tag textSelectionTag();
-  // The selected bytes of the selected paragraph ("" when collapsed/none).
+  // The selected text ("" when collapsed/none). ENG-43: one part per selected
+  // paragraph in document order, joined by "\n", or by nothing between
+  // siblings of a flexDirection-row parent.
   std::string selectedText();
+  // ENG-43: `text_selection_parts=N tags=a,b,..` for the logs and gates.
+  std::string textSelectionReport();
   // The string a selectable paragraph PAINTS (its runs joined, each with its
   // own textTransform). Selection offsets index into this, not node.text.
   std::string selectableTextFor(facebook::react::Tag tag);
@@ -1170,9 +1194,34 @@ class SceneGraph {
   // P1 item 15: the selectable-Text selection (see selectableTextAt). Kept
   // separate from tiSel*: a paragraph is never focused or edited, and a click
   // into a TextInput must not inherit a paragraph's byte offsets.
+  // ENG-43: textSelTag_/textSelAnchor_ are the ANCHOR (where the press
+  // landed); textSelFocusTag_/textSelCaret_ are the FOCUS (where the drag
+  // is). Equal tags = a selection inside one paragraph.
   facebook::react::Tag textSelTag_{0};
   size_t textSelAnchor_{0};
+  facebook::react::Tag textSelFocusTag_{0};
   size_t textSelCaret_{0};
+  // ENG-43: one selected paragraph and its [lo, hi) byte range.
+  struct TextSelPart {
+    facebook::react::Tag tag;
+    size_t lo, hi;
+  };
+  // The non-empty parts in document order, cached for paint and rebuilt when
+  // version_ moves (a commit can insert, remove or reorder paragraphs).
+  const std::vector<TextSelPart>& textSelPartsLocked();
+  std::vector<TextSelPart> textSelParts_;
+  uint64_t textSelPartsVersion_{~0ull};
+  // The [lo, hi) of `tag` within the current selection; false = not selected.
+  bool textSelRangeLocked(facebook::react::Tag tag, size_t* lo, size_t* hi);
+  // The selection's surface: the nearest modal ancestor of `tag`, or its root.
+  facebook::react::Tag textSelScopeLocked(facebook::react::Tag tag);
+  // ENG-43 (b): copy joins `b` onto the part before it (`a`, whose painted
+  // text is aText) with nothing between: they read as one line of text.
+  bool sameLineLocked(const SceneNode& a, const std::string& aText, const SceneNode& b);
+  // textOffsetAt's body. clampBlock: a point above the paragraph's first line
+  // maps to 0, below its last line to the end (macOS), instead of to the x on
+  // the nearest line. Caller holds mutex_.
+  size_t textOffsetAtLocked(const SceneNode& node, float x, float y, bool clampBlock);
   // Builds `node`'s paragraph exactly as paintNode draws it (one style per
   // run) at layout width `w`. Caller owns the result. Caller holds mutex_.
   // shadow >= 0 builds the silhouette for that run's shadow group (SC-15): runs of

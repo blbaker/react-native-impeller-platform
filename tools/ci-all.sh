@@ -281,6 +281,13 @@ bash tools/ci-textinput-valign.sh | grep -E "TEXTINPUT_VALIGN_GATE_PASS|OK [A-E]
 echo "### gate 24e: style audit grid (shadows + keep-green regression)"
 bash tools/ci-style-audit.sh | grep -E "STYLE_AUDIT_GATE_PASS|item [0-9]+:"
 
+# Headless, prebuilt bundle (the Mac's TEXT-SELECT-1 fixture). One drag
+# selects across several <Text selectable>: copy text per drag shape, and a
+# highlight in every selected paragraph. Mutants:
+# mutation-verify-text-select.sh.
+echo "### gate 24e2: text selection across paragraphs (ENG-43)"
+bash tools/ci-text-select.sh | grep -E "TEXT_SELECT_GATE_PASS|^   [a-z0-9]+: '"
+
 # Windowed (xvfb on linux), prebuilt bundle. --type types into a WINDOWED run
 # through the real char/key entry points and --screenshot shows the result.
 # Mutants: mutation-verify-window-type.sh.

@@ -175,7 +175,8 @@ class FabricHost {
   // item 4b: extend the selection while the button is held after a press in a
   // TextInput. Returns true when the move was handled as a selection drag.
   // P1 item 15: also extends a selectable-<Text> drag begun by
-  // beginTextSelection.
+  // beginTextSelection. ENG-43: into any other selectable <Text> on the same
+  // surface, selecting every one between them.
   bool dragTextSelection(float x, float y);
   // P1 item 15: a press on a <Text selectable> starts a selection there
   // (clickCount 2 = word, 3+ = whole text); a press anywhere else clears it.
@@ -398,6 +399,9 @@ class FabricHost {
   // and the byte offset the press landed at.
   int textDragTag_{0};
   size_t textDragAnchor_{0};
+  // ENG-43: the held press moved at least once (endTextSelectionDrag logs
+  // the selected parts only for a real drag).
+  bool textDragMoved_{false};
   // ENG-25: Up/Down column memory. Valid only while the field and caret are
   // exactly where the last vertical move left them; any other move or edit
   // changes the caret, which discards it.

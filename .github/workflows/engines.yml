@@ -203,6 +203,17 @@ jobs:
           bash tools/mutation-verify-unpresented-damage.sh || rc=1
           exit $rc
 
+      # ENG-43: one mouse drag selects across several <Text selectable>, on
+      # the darwin binary the npm package ships (the Mac's TEXT-SELECT-1
+      # drags plus six more; node-free, committed bundle). darwin glyph
+      # widths differ from linux, so this is the run that proves the
+      # copy strings on the platform that reported the bug.
+      - name: Text selection across paragraphs (macOS)
+        if: runner.os == 'macOS'
+        env:
+          RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+        run: bash tools/ci-text-select.sh
+
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
       # symlinks, so uploading the folder directly would hand the release job
       # an rn-impeller with no exec bit (EACCES at spawn). A tarball keeps the
