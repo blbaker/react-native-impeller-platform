@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.3](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.2...v0.8.3) (2026-10-22)
+
+
+### Bug Fixes
+
+* **engine:** blur stays correct when content under it changes ([3c0c61a](https://github.com/blbaker/react-native-impeller-platform/commit/3c0c61aa68f5a0e1fa46482b8b342b937b22445e))
+* **engine:** redraw everything a blur samples when content under it changes ([4626c5e](https://github.com/blbaker/react-native-impeller-platform/commit/4626c5ed8d88acf0424bcc564d59f21fb939ef1b))
+* **text:** one drag selects across paragraphs (ENG-43) ([90a6ba1](https://github.com/blbaker/react-native-impeller-platform/commit/90a6ba1cb3faaa6144148b1b014ed572027f437c))
+* **text:** one drag selects across paragraphs (ENG-43) ([962cd09](https://github.com/blbaker/react-native-impeller-platform/commit/962cd095d8d68804ea1e4d4843eeca1538daf413))
+
 ## [0.8.2](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.1...v0.8.2) (2026-10-21)
 
 
