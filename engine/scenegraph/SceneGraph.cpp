@@ -638,6 +638,12 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       case react::PointerEventsMode::BoxOnly: node.pointerEvents = 3; break;
       default: node.pointerEvents = 0; break;
     }
+    // ENG-43: a row parent's selectable Text children copy as one line.
+    {
+      const auto fd = props->yogaStyle.flexDirection();
+      node.flexRow = fd == facebook::yoga::FlexDirection::Row ||
+                     fd == facebook::yoga::FlexDirection::RowReverse;
+    }
     node.hasFilterMatrix = rni::BuildFilterMatrix(props->filter, node.filterMatrix);
     node.mixBlend = props->mixBlendMode;
     node.isolate = props->isolation == react::Isolation::Isolate;
@@ -2621,12 +2627,14 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       // P1 item 15: a selectable paragraph's selection highlight, UNDER the
       // glyphs (drawn first), one rect per selected grapheme cluster as laid
       // out in THIS paragraph, so a wrapped selection follows its lines.
-      if (node.selectable && textSelTag_ == node.tag &&
-          textSelAnchor_ != textSelCaret_) {
+      // ENG-43: the range is this paragraph's part of a selection that may
+      // span several paragraphs (textSelRangeLocked, SceneGraphTextSelection.cpp).
+      size_t selLo = 0, selHi = 0;
+      if (node.selectable && textSelTag_ != 0 &&
+          textSelRangeLocked(node.tag, &selLo, &selHi)) {
         const std::string shown = JoinRuns(node);
-        const size_t lo8 = std::min(textSelAnchor_, textSelCaret_);
-        const size_t hi8 = std::min(std::max(textSelAnchor_, textSelCaret_),
-                                    shown.size());
+        const size_t lo8 = std::min(selLo, shown.size());
+        const size_t hi8 = std::min(selHi, shown.size());
         const size_t lo16 = Utf8ToUtf16Index(shown, lo8);
         const size_t hi16 = Utf8ToUtf16Index(shown, hi8);
         ImpellerPaint selPaint = ImpellerPaintNew();
@@ -4523,7 +4531,12 @@ size_t SceneGraph::textOffsetAt(facebook::react::Tag tag, float x, float y) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = nodes_.find(tag);
   if (it == nodes_.end() || !it->second.isParagraph) return 0;
-  const SceneNode& node = it->second;
+  return textOffsetAtLocked(it->second, x, y, false);
+}
+
+size_t SceneGraph::textOffsetAtLocked(const SceneNode& node, float x, float y,
+                                      bool clampBlock) {
+  const facebook::react::Tag tag = node.tag;
   float ox = 0.0f, oy = 0.0f;
   if (!absoluteOriginLocked(tag, &ox, &oy)) return 0;
   const std::string shown = JoinRuns(node);
@@ -4537,6 +4550,17 @@ size_t SceneGraph::textOffsetAt(facebook::react::Tag tag, float x, float y) {
   size_t off = 0;
   oy += ParagraphVOffset(node, par, (float)node.layoutMetrics.frame.size.height -
                                         (float)(cin.top + cin.bottom));
+  // ENG-43 (c): a held drag above the first line selects to the start, below
+  // the last line to the end, as NSTextView does. Without it a drag that
+  // leaves the paragraph downward keeps the x on the last line ('Bravo fo').
+  if (clampBlock && (y - oy) < 0.0f) {
+    ImpellerParagraphRelease(par);
+    return 0;
+  }
+  if (clampBlock && (y - oy) >= ImpellerParagraphGetHeight(par)) {
+    ImpellerParagraphRelease(par);
+    return shown.size();
+  }
   ImpellerGlyphInfo gi = ImpellerParagraphCreateGlyphInfoAtParagraphCoordinatesNew(
       par, (double)(x - ox), (double)(y - oy));
   if (gi != nullptr) {
@@ -4555,45 +4579,14 @@ size_t SceneGraph::textOffsetAt(facebook::react::Tag tag, float x, float y) {
   return off;
 }
 
-void SceneGraph::setTextSelection(facebook::react::Tag tag, size_t anchor,
-                                  size_t caret) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (tag == textSelTag_ && anchor == textSelAnchor_ && caret == textSelCaret_) return;
-  textSelTag_ = tag;
-  textSelAnchor_ = anchor;
-  textSelCaret_ = caret;
-  // P12-01: the highlight moved -- scene damage, or an idle window never
-  // repaints it (the same rule setTextInputSelection follows).
-  bumpVersion();
-}
-
-void SceneGraph::clearTextSelection() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (textSelTag_ == 0 && textSelAnchor_ == textSelCaret_) return;
-  textSelTag_ = 0;
-  textSelAnchor_ = textSelCaret_ = 0;
-  bumpVersion();  // P12-01: the highlight disappears
-}
-
-facebook::react::Tag SceneGraph::textSelectionTag() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return textSelAnchor_ != textSelCaret_ ? textSelTag_ : 0;
-}
+// P1 item 15 / ENG-43: setTextSelection, setTextSelectionRange,
+// clearTextSelection, textSelectionTag, selectedText and textPositionAt live
+// in SceneGraphTextSelection.cpp.
 
 std::string SceneGraph::selectableTextFor(facebook::react::Tag tag) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = nodes_.find(tag);
   return it == nodes_.end() ? std::string() : JoinRuns(it->second);
-}
-
-std::string SceneGraph::selectedText() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = nodes_.find(textSelTag_);
-  if (it == nodes_.end() || textSelAnchor_ == textSelCaret_) return {};
-  const std::string shown = JoinRuns(it->second);
-  const size_t lo = std::min(std::min(textSelAnchor_, textSelCaret_), shown.size());
-  const size_t hi = std::min(std::max(textSelAnchor_, textSelCaret_), shown.size());
-  return shown.substr(lo, hi - lo);
 }
 
 std::string SceneGraph::describe() {

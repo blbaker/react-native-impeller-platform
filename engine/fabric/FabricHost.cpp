@@ -1286,17 +1286,26 @@ int FabricHost::focusTextInputAt(float x, float y, int clickCount,
 // unit the press chose (1 char, 2 word, 3 line). Returns true when it handled
 // the move (the caller skips hover dispatch).
 bool FabricHost::dragTextSelection(float x, float y) {
-  // P1 item 15: a held press that began on a selectable <Text> extends that
-  // paragraph's selection from the press point. The point is mapped through
-  // the paragraph's OWN layout even when the cursor leaves its box (a drag
-  // past the end selects to the end), so no re-hit-test happens here.
+  // P1 item 15: a held press that began on a selectable <Text> extends the
+  // selection from the press point.
+  // ENG-43: every move re-resolves the cursor against ALL selectable text on
+  // the pressed paragraph's surface (SceneGraph::textPositionAt), so a drag
+  // into the next paragraph selects into it and every paragraph between.
+  // Before, the point was mapped through the pressed paragraph's own layout
+  // only, so the highlight stopped at the first paragraph.
   if (sceneGraph_ && textDragTag_ != 0) {
     const react::Tag tag = (react::Tag)textDragTag_;
-    const size_t caret = sceneGraph_->textOffsetAt(tag, x, y);
-    sceneGraph_->setTextSelection(tag, textDragAnchor_, caret);
-    printf("rn-impeller: text_selection tag=%d anchor=%zu caret=%zu drag=1\n",
-           (int)tag, textDragAnchor_, caret);
+    react::Tag focusTag = 0;
+    size_t caret = 0;
+    if (!sceneGraph_->textPositionAt(tag, x, y, &focusTag, &caret)) {
+      focusTag = tag;
+      caret = sceneGraph_->textOffsetAt(tag, x, y);
+    }
+    sceneGraph_->setTextSelectionRange(tag, textDragAnchor_, focusTag, caret);
+    printf("rn-impeller: text_selection tag=%d anchor=%zu caret=%zu drag=1 focus_tag=%d\n",
+           (int)tag, textDragAnchor_, caret, (int)focusTag);
     fflush(stdout);
+    textDragMoved_ = true;
     return true;
   }
   if (!sceneGraph_ || !runtimeScheduler_ || dragTag_ == 0) return false;
@@ -1356,6 +1365,12 @@ bool FabricHost::dragTextSelection(float x, float y) {
 
 void FabricHost::endTextSelectionDrag() {
   dragTag_ = 0;
+  // ENG-43: one summary line per text drag: which paragraphs it selected.
+  if (sceneGraph_ && textDragTag_ != 0 && textDragMoved_) {
+    printf("rn-impeller: %s\n", sceneGraph_->textSelectionReport().c_str());
+    fflush(stdout);
+  }
+  textDragMoved_ = false;
   textDragTag_ = 0;  // P1 item 15: the selection itself stays until a press
 }
 

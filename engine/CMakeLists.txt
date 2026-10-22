@@ -353,6 +353,7 @@ add_executable(rn-impeller
   scenegraph/SceneGraph.cpp
   scenegraph/SceneGraphContextLoss.cpp
   scenegraph/SceneGraphTextInputHost.cpp
+  scenegraph/SceneGraphTextSelection.cpp  # ENG-43
   # FP-42: external textures (Flutter TextureRegistry + TextureLayer).
   scenegraph/TextureRegistry.cpp
   scenegraph/ExternalTexturePaint.cpp

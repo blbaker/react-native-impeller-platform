@@ -16,6 +16,7 @@ if(NOT WIN32 AND NOT ANDROID)
     fabric/platform/impeller/PlatformColorTable.cpp
     scenegraph/SceneGraph.cpp
     scenegraph/SceneGraphContextLoss.cpp
+    scenegraph/SceneGraphTextSelection.cpp  # ENG-43, called from paintNode
     scenegraph/Shadows.cpp
     scenegraph/BackgroundLayers.cpp
     scenegraph/BackgroundTiles.cpp
