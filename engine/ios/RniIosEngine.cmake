@@ -63,7 +63,7 @@ add_library(rni_ios_engine STATIC
   ${_E}/fabric/FabricHost.cpp ${_E}/fabric/FabricHostTextEdit.cpp ${_E}/fabric/ComponentRegistry.cpp ${_E}/fabric/LayoutAnimations.cpp
   ${_E}/fabric/ExpoBlurShadowNode.cpp ${_E}/fabric/platform/impeller/PlatformColorTable.cpp
   ${_E}/scenegraph/SceneGraph.cpp ${_E}/scenegraph/SceneGraphContextLoss.cpp
-  ${_E}/scenegraph/SceneGraphTextInputHost.cpp
+  ${_E}/scenegraph/SceneGraphTextInputHost.cpp ${_E}/scenegraph/SceneGraphTextSelection.cpp
   ${_E}/scenegraph/TextureRegistry.cpp ${_E}/scenegraph/ExternalTexturePaint.cpp
   ${_E}/scenegraph/PlatformViewRecord.cpp ${_E}/scenegraph/SnapshotController.cpp
   ${_E}/scenegraph/SnapshotRecord.cpp ${_E}/scenegraph/ImageEncode.cpp
