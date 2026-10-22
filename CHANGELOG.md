@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.4](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.3...v0.8.4) (2026-10-22)
+
+
+### Bug Fixes
+
+* **ios:** compile text selection into the iOS engine ([c456406](https://github.com/blbaker/react-native-impeller-platform/commit/c456406ebad02b44730af876cb0930aa7d92be96))
+* **ios:** compile text selection into the iOS engine ([a511a57](https://github.com/blbaker/react-native-impeller-platform/commit/a511a57837580e4ab1abfd1c880861f72b7a0600))
+
 ## [0.8.3](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.2...v0.8.3) (2026-10-22)
 
 
