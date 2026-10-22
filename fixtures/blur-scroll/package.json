@@ -1,0 +1,18 @@
+{
+  "name": "blur-scroll",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "expo": "57.0.27",
+    "expo-blur": "~57.0.0",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-impeller-platform": "0.0.1"
+  },
+  "devDependencies": {
+    "@react-native-community/cli": "^20.2.0",
+    "@react-native/metro-config": "0.86.3",
+    "@babel/core": "^7.25.2"
+  }
+}

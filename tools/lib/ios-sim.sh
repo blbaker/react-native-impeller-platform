@@ -112,7 +112,7 @@ ios_sdk_resolve() {
 #   the fixture bundles in IOS_BUNDLES copied in as <name>.jsbundle.
 IOS_BUNDLES=(fixtures/ios-smoke/prebuilt/ios-smoke.bundle fixtures/ios-input/prebuilt/ios-input.bundle
   fixtures/ios-text-input/prebuilt/ios-text-input.bundle fixtures/ios-keyboard/prebuilt/ios-keyboard.bundle
-  fixtures/native-anim-dots/prebuilt/native-anim-dots.bundle)
+  fixtures/native-anim-dots/prebuilt/native-anim-dots.bundle fixtures/blur-scroll/prebuilt/blur-scroll.bundle)
 ios_build_testhost() {
   ios_sdk_resolve || return 1
   IOS_APP="$IOS_WORK/RniTestHost.app"
