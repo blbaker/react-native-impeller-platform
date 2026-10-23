@@ -223,6 +223,16 @@ jobs:
           RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
         run: bash tools/ci-text-select.sh
 
+      # ENG-46: a key with nothing focused reaches the app's root
+      # <View onKeyDown> (Jim's Cmd+Shift+B), on the darwin binary the npm
+      # package ships. Windowed (the key hooks live in the window loop);
+      # node-free, committed bundle.
+      - name: Keys with nothing focused reach the app root (macOS)
+        if: runner.os == 'macOS'
+        env:
+          RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+        run: bash tools/ci-key-root.sh
+
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
       # symlinks, so uploading the folder directly would hand the release job
       # an rn-impeller with no exec bit (EACCES at spawn). A tarball keeps the
