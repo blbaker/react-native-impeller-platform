@@ -233,6 +233,25 @@ jobs:
           RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
         run: bash tools/ci-key-root.sh
 
+      # ENG-47: RNViewShot on native Metal. The darwin window renders on
+      # Metal, so arms A-D read every capture back through
+      # SnapshotReadbackMetal.mm (readback=metal asserted per arm), H stays on
+      # GL (ANGLE headless), M is headless --backend metal. Then the darwin
+      # mutants (arm M): no Metal readback, BGRA unswapped, rows flipped.
+      - name: View snapshots on Metal (macOS windowed + headless metal)
+        if: runner.os == 'macOS'
+        env:
+          RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+        run: bash tools/ci-snapshot.sh
+
+      - name: Prove the Metal snapshot gate can fail (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          bash tools/mutation-verify-snapshot-metal.sh
+          # The mutants rebuilt the staged engine; the restore step rebuilt it
+          # clean, and this run proves the artifact below is the clean one.
+          RNI_BIN=packages-engine/engine-darwin-arm64/bin/rn-impeller SNAPSHOT_ARMS=M bash tools/ci-snapshot.sh
+
       # ⛔ TAR IT FIRST. upload-artifact drops file modes and does not keep
       # symlinks, so uploading the folder directly would hand the release job
       # an rn-impeller with no exec bit (EACCES at spawn). A tarball keeps the

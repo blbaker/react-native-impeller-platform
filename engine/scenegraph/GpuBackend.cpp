@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "base/Trace.h"
+#include "scenegraph/SnapshotReadbackMetal.h"  // ENG-47
 
 namespace rni {
 
@@ -82,6 +83,10 @@ RenderBackend MakeRenderBackend(GpuBackend context, GpuBackend policy, ImpellerC
   b.supersample = useGl ? std::move(gl.supersample) : nullptr;
   b.afterRaster = std::move(gl.afterRaster);
   b.snapshot = std::move(gl.snapshot);  // GL context only (FP-43)
+#if RNI_SNAPSHOT_METAL
+  // ENG-47: Metal renders the snapshot into an offscreen MTLTexture instead.
+  if (context == GpuBackend::kMetal) b.snapshot = MakeMetalSnapshotReadback(ctx);
+#endif
   return b;
 }
 
