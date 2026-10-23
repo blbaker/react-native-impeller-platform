@@ -235,13 +235,19 @@ jobs:
 
       # ENG-47: RNViewShot on native Metal. The darwin window renders on
       # Metal, so arms A-D read every capture back through
-      # SnapshotReadbackMetal.mm (readback=metal asserted per arm), H stays on
-      # GL (ANGLE headless), M is headless --backend metal. Then the darwin
-      # mutants (arm M): no Metal readback, BGRA unswapped, rows flipped.
+      # SnapshotReadbackMetal.mm (readback=metal asserted per arm), M is
+      # headless --backend metal. Then the darwin mutants (arm M): no Metal
+      # readback, BGRA unswapped, rows flipped.
+      # Arm H (darwin default headless = ANGLE GL, SnapshotReadbackGl.cpp) is
+      # left out here: ENG-47 does not touch the GL readback, H had never run
+      # on darwin, and its first run there failed "non-opaque pixels over an
+      # opaque view". That is a separate darwin-GL gap (issue #47);
+      # linux still runs H on every push.
       - name: View snapshots on Metal (macOS windowed + headless metal)
         if: runner.os == 'macOS'
         env:
           RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+          SNAPSHOT_ARMS: A B C D M
         run: bash tools/ci-snapshot.sh
 
       - name: Prove the Metal snapshot gate can fail (macOS)
