@@ -14,7 +14,10 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-unset RNI_BIN
+# Pin the gate to the binary engine-build.sh darwin arm64 stages. ci-snapshot.sh
+# defaults to the linux-x64 path, so an unset RNI_BIN made the clean control
+# fail with "no engine binary" before any mutant ran.
+export RNI_BIN="$ROOT/packages-engine/engine-darwin-arm64/bin/rn-impeller"
 [ "$(uname -s)" = Darwin ] || { echo "MUTATE_FAIL: darwin only (the Metal readback is compiled on darwin)" >&2; exit 1; }
 
 FILES=(engine/scenegraph/SnapshotReadbackMetal.mm engine/scenegraph/GpuBackend.cpp)
