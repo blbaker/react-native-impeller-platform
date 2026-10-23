@@ -300,6 +300,13 @@ bash tools/ci-ios-sources.sh | grep -E "IOS_SOURCES_PASS"
 echo "### gate 24f: windowed --type (ENG-18)"
 bash tools/ci-window-type.sh | grep -E "WINDOW_TYPE_PASS|NL field"
 
+# Windowed (xvfb on linux), prebuilt bundle. A key with NOTHING focused reaches
+# a root-level <View onKeyDown>/<View onKeyUp> (app hotkeys), an unfocused
+# TextInput's onKeyPress stays silent, and the focused-field path is unchanged.
+# Mutants: mutation-verify-key-root.sh.
+echo "### gate 24f2: keys with nothing focused reach the app root (ENG-46)"
+bash tools/ci-key-root.sh | grep -E "KEY_ROOT_GATE_PASS|js: "
+
 # Desktop notifications on a private session bus (dbus-daemon, no display).
 # Mutants: mutation-verify-notifications.sh.
 echo "### gate 24g: Notifications module (freedesktop D-Bus)"

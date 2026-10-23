@@ -324,6 +324,8 @@ add_executable(rn-impeller
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/DisplayLinkDarwin.cpp>
   # FP-23: headless darwin on Metal (offscreen MTLTexture, SDK patch 0005).
   $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm>
+  # ENG-47: view snapshots on Metal (offscreen MTLTexture + patch 0005 readback).
+  $<$<AND:$<BOOL:${RNI_WITH_WINDOW}>,$<BOOL:${APPLE}>>:${CMAKE_SOURCE_DIR}/scenegraph/SnapshotReadbackMetal.mm>
   runtime/AnimationFrameScheduler.cpp
   runtime/JsThread.cpp
   runtime/ReactHost.cpp
@@ -541,6 +543,7 @@ elseif(RNI_WITH_WINDOW)
     # MetalSurface.mm holds strong ObjC members in a C++ struct: ARC only.
     set_source_files_properties("${CMAKE_SOURCE_DIR}/host/MetalSurface.mm"
       "${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceMetal.mm"
+      "${CMAKE_SOURCE_DIR}/scenegraph/SnapshotReadbackMetal.mm"
       "${CMAKE_SOURCE_DIR}/modules/NotificationsDarwin.mm"
       PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   else()

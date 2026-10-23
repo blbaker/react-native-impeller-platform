@@ -706,6 +706,11 @@ class SceneGraph {
   // shape dispatchKey's TextInput path already draws, just for the case
   // where there is no focus target at all.
   facebook::react::Tag rootTag();
+  // ENG-46. The keyDown/keyUp target when nothing is focused: the surface
+  // root's first mounted child (the root React component's top host view),
+  // or the surface root itself when nothing is mounted under it. The surface
+  // root has no React instance, so an event sent to it reaches no handler.
+  facebook::react::Tag keyRootTag();
 
   // item 11. Tab order: every keyboard-focusable node in depth-first tree
   // order (children in paint order), skipping zero-size / display:none

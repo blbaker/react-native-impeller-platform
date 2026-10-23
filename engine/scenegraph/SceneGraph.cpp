@@ -3931,6 +3931,23 @@ facebook::react::Tag SceneGraph::rootTag() {
   return roots_.empty() ? 0 : roots_.front();
 }
 
+// ENG-46. The surface root is Fabric's RootShadowNode: it has an emitter but
+// no React instance, so an event dispatched to it reaches no JS handler. Its
+// first mounted child that has an emitter is the root React component's top
+// host view; an event dispatched there bubbles up the app's own fiber tree.
+facebook::react::Tag SceneGraph::keyRootTag() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (roots_.empty()) return 0;
+  const facebook::react::Tag root = roots_.front();
+  auto it = nodes_.find(root);
+  if (it == nodes_.end()) return root;
+  for (auto c : it->second.children) {
+    auto ci = nodes_.find(c);
+    if (ci != nodes_.end() && ci->second.eventEmitter) return c;
+  }
+  return root;  // nothing mounted under the root yet
+}
+
 // item 11. Tab order.
 void SceneGraph::tabOrderWalk(const SceneNode& node,
                               std::vector<facebook::react::Tag>* out) {

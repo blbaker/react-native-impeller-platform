@@ -67,6 +67,9 @@ add_library(rni_ios_engine STATIC
   ${_E}/scenegraph/TextureRegistry.cpp ${_E}/scenegraph/ExternalTexturePaint.cpp
   ${_E}/scenegraph/PlatformViewRecord.cpp ${_E}/scenegraph/SnapshotController.cpp
   ${_E}/scenegraph/SnapshotRecord.cpp ${_E}/scenegraph/ImageEncode.cpp
+  # ENG-47: compiles to nothing here (RNI_SNAPSHOT_METAL needs RNI_WITH_WINDOW,
+  # the darwin desktop Metal window); listed so the shared lists stay in step.
+  ${_E}/scenegraph/SnapshotReadbackMetal.mm
   ${_E}/scenegraph/Shadows.cpp ${_E}/scenegraph/BackgroundLayers.cpp
   ${_E}/scenegraph/BackgroundTiles.cpp ${_E}/scenegraph/BorderRounded.cpp
   ${_E}/scenegraph/Outline.cpp ${_E}/scenegraph/ScrollIndicators.cpp

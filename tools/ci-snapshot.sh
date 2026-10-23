@@ -22,7 +22,12 @@
 #   * `snapshots requested=8 rendered=7 encoded=7 failed=1 ... released=1`
 # ARMS: A scale 1, B scale 2, C scale 2 --raster-thread off, D scale 2 with the
 #       root supersample (--supersample-rnsvg 4: the capture renders at 4x and
-#       box-filters like the screen), H headless scale 2.
+#       box-filters like the screen), H headless scale 2, M (darwin only)
+#       headless scale 2 on --backend metal.
+# ENG-47: every snapshot_record line names its readback. Darwin windows and
+# arm M render on Metal (readback=metal, SnapshotReadbackMetal.mm); linux and
+# darwin's default headless are GL (readback=gl). Before ENG-47 a Metal run
+# rejected every capture: "snapshots need a GL render backend on this host".
 # Node-free: committed bundle + staged binary (RNI_BIN overrides). Never rebuilds.
 # Mutants: tools/mutation-verify-snapshot.sh.
 set -euo pipefail
@@ -37,7 +42,8 @@ fail() { echo "SNAPSHOT_FAIL: $*" >&2; exit 1; }
 BIN="${RNI_BIN:-$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller}"
 [ -x "$BIN" ] || fail "no engine binary at $BIN (run tools/engine-build.sh or set RNI_BIN)"
 echo "engine: $BIN ($(shasum -a 256 "$BIN" | cut -c1-12)) host=$(rni_host)"
-ARMS="${SNAPSHOT_ARMS:-A B C D H}"
+if [ "$(rni_host)" = darwin ]; then ARMS="${SNAPSHOT_ARMS:-A B C D H M}"
+else ARMS="${SNAPSHOT_ARMS:-A B C D H}"; fi
 
 WORK="$(mktemp -d)"
 cleanup() { rni_kill_own; [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"; }
@@ -75,6 +81,14 @@ run_arm() {  # tag scale ss render_thread mode(window|headless) [extra args...]
   grep -q '^\[js\] FP43 image loaded' "$dir/run.log" || fail "$tag: the fixture's image never loaded"
   [ -s "$dir/screen.ppm" ] || fail "$tag: no screenshot"
   python3 tools/snapshot_check.py "$dir/run.log" "$dir/screen.ppm" "$s" "$tag" "$thread" || exit 1
+  # ENG-47: the readback this backend must use (see the header).
+  local want=gl
+  if [ "$mode" = window ] && [ "$(rni_host)" = darwin ]; then want=metal; fi
+  case " $* " in *" --backend metal "*) want=metal ;; esac
+  local got
+  got="$(sed -n 's/^rn-impeller: snapshot_record .* readback=\([a-z]*\) .*/\1/p' "$dir/run.log" | sort -u | tr '\n' ' ')"
+  [ "$got" = "$want " ] || fail "$tag: snapshot readback '${got% }', want '$want'"
+  echo "   readback=$want"
 }
 
 for arm in $ARMS; do
@@ -84,6 +98,8 @@ for arm in $ARMS; do
     C) run_arm C 2 0 main window --raster-thread off ;;
     D) run_arm D 2 4 raster window ;;
     H) run_arm H 2 0 main headless ;;
+    M) [ "$(rni_host)" = darwin ] || fail "arm M (headless --backend metal) is darwin-only"
+       run_arm M 2 0 main headless --backend metal ;;
     *) fail "unknown arm $arm" ;;
   esac
 done

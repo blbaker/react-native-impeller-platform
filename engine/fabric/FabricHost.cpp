@@ -1770,13 +1770,16 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
       return modal;
     }
   }
-  // Focused field first; fall back to the surface root so a key event
-  // always has SOMEWHERE to land rather than being silently swallowed the
-  // instant nothing has focus -- the ask explicitly requires this fallback.
-  react::Tag target = sceneGraph_->focusedTextInput();
+  // Focused field first, then a focused View. With NOTHING focused, ENG-46:
+  // the root React component's top host view (keyRootTag), so the event
+  // bubbles through the app's own tree to a root-level <View onKeyDown>
+  // (app hotkeys: Cmd+K, Cmd+Shift+B). The surface root itself (rootTag) has
+  // no React instance, and an event sent there reached no handler at all.
+  const react::Tag focusedField = sceneGraph_->focusedTextInput();
+  react::Tag target = focusedField;
   // item 11: a focused (non-TextInput) View receives key events.
   if (target == 0) target = sceneGraph_->focusedView();
-  if (target == 0) target = sceneGraph_->rootTag();
+  if (target == 0) target = sceneGraph_->keyRootTag();
   if (target == 0) return 0;
 
   auto emitter = sceneGraph_->eventEmitterFor(target);
@@ -1889,17 +1892,16 @@ int FabricHost::dispatchKeyEvent(const std::string& key,
 
   // (a) TextInput onKeyPress. Down/Repeat only -- onKeyPress has no release
   // concept in RN core (see RN's KeyPressMetrics: text + eventCount, no
-  // phase). Only fires when the target IS a focused TextInput; the root
-  // fallback above is a base EventEmitter and this cast simply fails for it,
-  // exactly the "there but cannot receive this event" discrimination every
-  // other dispatch path in this file already makes.
+  // phase). Only fires when the target IS the focused TextInput. ENG-46: the
+  // no-focus target is now the app's top host view, which CAN be a TextInput
+  // that does not have focus, so the check is on focus, not on the cast.
   //
   // `text` mirrors RN's OWN keyPressMetricsPayload derivation exactly
   // (TextInputEventEmitter.cpp: empty->"Backspace", "\n"->"Enter",
   // "\t"->"Tab", "\x1B"->"Escape", else passed through) so the emitter's
   // built-in logic reproduces our W3C `key` string byte for byte instead of
   // this file guessing at RN's internal convention a second time.
-  if (phase != KeyEventPhase::Up) {
+  if (phase != KeyEventPhase::Up && focusedField != 0 && target == focusedField) {
     if (auto te = std::dynamic_pointer_cast<const react::TextInputEventEmitter>(
             emitter)) {
       std::string text;

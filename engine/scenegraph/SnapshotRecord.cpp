@@ -142,7 +142,7 @@ void SceneGraph::recordSnapshots(RasterJobs* jobs) {
   jobs_ = jobs;
   for (auto& r : reqs) {
     if (jobs == nullptr || !gpu_.snapshot) {
-      snapshots_->Fail(std::move(r), "snapshots need a GL render backend on this host");
+      snapshots_->Fail(std::move(r), "snapshots need a GL or Metal render backend on this host");
       continue;
     }
     const SceneNode* node = nullptr;
@@ -188,8 +188,9 @@ void SceneGraph::recordSnapshots(RasterJobs* jobs) {
       continue;
     }
     std::printf("rn-impeller: snapshot_record id=%llu tag=%d pt=%.1fx%.1f px=%dx%d ss=%d "
-                "thread=%s\n",
+                "readback=%s thread=%s\n",
                 (unsigned long long)r.id, r.tag, wPt, hPt, pxW, pxH, job->factor,
+                gpu_.context == GpuBackend::kMetal ? "metal" : "gl",  // ENG-47
                 SnapshotThreadLabel().c_str());
     std::fflush(stdout);
     job->req = std::move(r);
