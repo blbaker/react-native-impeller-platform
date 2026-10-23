@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.5](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.4...v0.8.5) (2026-10-23)
+
+
+### Bug Fixes
+
+* **engine:** keys with nothing focused reach the app root (ENG-46); Metal view snapshots (ENG-47) ([45440ed](https://github.com/blbaker/react-native-impeller-platform/commit/45440edf0de8befe5f23d66ea3abb389cb61c2ea))
+* **engine:** keys with nothing focused reach the app root view (ENG-46) ([077a43e](https://github.com/blbaker/react-native-impeller-platform/commit/077a43e86d523f9c6499814be9ba484f87cc8e31))
+* **engine:** RNViewShot captures on native Metal (ENG-47) ([891b95b](https://github.com/blbaker/react-native-impeller-platform/commit/891b95bb94d548be4f1ddef9ecf81c26ac684861))
+
 ## [0.8.4](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.3...v0.8.4) (2026-10-22)
 
 
