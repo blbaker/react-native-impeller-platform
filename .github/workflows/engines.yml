@@ -39,6 +39,10 @@ on:
       - 'tools/ci-unpresented-damage.sh'
       - 'tools/mutation-verify-unpresented-damage.sh'
       - 'tools/unpresented-damage-test.cpp'
+      - 'tools/ci-gradient-cache.sh'
+      - 'tools/mutation-verify-gradient-cache.sh'
+      - 'tools/gradient-cache-measure.py'
+      - 'fixtures/eng48-gradient-cache/**'
 
 permissions:
   contents: read
@@ -232,6 +236,16 @@ jobs:
         env:
           RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
         run: bash tools/ci-key-root.sh
+
+      # ENG-48: two same-size gradient <Svg>s on the per-<Svg> supersample
+      # path each paint their OWN gradient, on the darwin binary the npm
+      # package ships (supersample defaults to 4 there, the platform that
+      # reported it). Headless, node-free, committed bundle.
+      - name: Gradient Svgs keep their own picture (macOS)
+        if: runner.os == 'macOS'
+        env:
+          RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+        run: bash tools/ci-gradient-cache.sh
 
       # ENG-47: RNViewShot on native Metal. The darwin window renders on
       # Metal, so arms A-D read every capture back through

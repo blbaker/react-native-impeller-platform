@@ -439,6 +439,9 @@ struct SceneNode {
   // Linear: x1,y1,x2,y2. Radial: fx,fy,rx,ry (cx/cy carried in [4],[5]).
   float svgGradientCoords[6]{0, 0, 1, 0, 0, 0};
   int svgGradientUnits{0};  // 0 = objectBoundingBox, 1 = userSpaceOnUse
+  // ENG-48: rnsvg's gradientTransform matrix as sent. makeGradientSource does
+  // NOT apply it yet; it is recorded so the per-<Svg> cache key holds it.
+  std::vector<float> svgGradientTransform;
   // ⛔ THE ROOT <Svg>'s OWN viewBox. ENG-05a.
   //
   // NOT the same storage as svgSymbolViewBox, and deliberately so. A <Symbol>'s
@@ -1001,6 +1004,9 @@ class SceneGraph {
   // Content key for the per-icon texture cache: every input that changes the
   // rasterised pixels. Two icons with the same key reuse one ImpellerTexture.
   std::string svgSubtreeCacheKey(const SceneNode& node, int pxW, int pxH) const;
+  // ENG-48: a fill/stroke url(#id) brush's resolved gradient, for that key.
+  void appendPaintServerKey(std::string& key, const char* tag, bool isRef,
+                            const std::string& ref) const;
   // Split out of paintNode because per-edge borders are a whole geometry
   // problem: a stroked rect cannot express four colours and straddles the path,
   // so each edge is drawn as its own mitred quad.

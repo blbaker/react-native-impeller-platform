@@ -233,6 +233,13 @@ bash tools/ci-shapes.sh | grep -E "SHAPES_GATE_PASS|ink\("
 echo "### gate 22: gradient fills via url(#id)"
 bash tools/ci-gradient.sh | grep -E "GRADIENT_GATE_PASS|linear|radial|dangling"
 
+# Headless, prebuilt bundle (the Mac's ENG-GRADIENT-ASK-1 fixture). Two
+# same-size gradient <Svg>s on the per-<Svg> supersample path (240x2100 at
+# N=4) must each paint their OWN gradient: the texture cache key holds the
+# resolved paint server. Mutants: mutation-verify-gradient-cache.sh.
+echo "### gate 22b: per-<Svg> cache key holds the gradient (ENG-48)"
+bash tools/ci-gradient-cache.sh | grep -E "GRADIENT_CACHE_GATE_PASS|^   (pair|swap|restop) "
+
 # <Symbol> + <Use>: ONE asset, N mounting sites.
 #
 # ⚠️ The bug here was NOT "paints nothing". Unregistered, <Symbol> mounted and
