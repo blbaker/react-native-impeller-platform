@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.7](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.6...v0.8.7) (2026-10-24)
+
+
+### Bug Fixes
+
+* **engine:** a windowed run inside an .app keeps the caller's cwd (ENG-49) ([adef43b](https://github.com/blbaker/react-native-impeller-platform/commit/adef43ba7c3470bae73e4fca7410472fc62510de))
+* **engine:** a windowed run inside an .app keeps the caller's cwd (ENG-49) ([4407a89](https://github.com/blbaker/react-native-impeller-platform/commit/4407a892524fbd401200dec66b8b3fe6ac1a876b))
+
 ## [0.8.6](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.5...v0.8.6) (2026-10-24)
 
 
