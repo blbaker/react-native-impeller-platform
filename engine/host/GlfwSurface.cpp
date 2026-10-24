@@ -462,6 +462,16 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   // ANGLE's D3D11 backend, the same one WinGLSurface picks for headless.
   glfwInitHint(GLFW_ANGLE_PLATFORM_TYPE, GLFW_ANGLE_PLATFORM_TYPE_D3D11);
 #endif
+  // ENG-49: keep the caller's working directory. GLFW's macOS default
+  // (GLFW_COCOA_CHDIR_RESOURCES) makes glfwInit chdir to the app's
+  // Contents/Resources whenever the binary sits inside an .app, so a relative
+  // --screenshot (or any relative write after this point) landed inside the
+  // bundle instead of the cwd, and broke its seal. Headless never calls
+  // glfwInit, which is why only windowed runs moved. GLFW accepts this init
+  // hint on every platform and acts on it only on macOS; set it on every
+  // windowed run so the two modes resolve relative paths the same way.
+  // Gate: tools/ci-app-chdir.sh (macOS).
+  glfwInitHint(GLFW_COCOA_CHDIR_RESOURCES, GLFW_FALSE);
   if (!glfwInit()) return fail("glfwInit failed");
 
 #if defined(__APPLE__)
