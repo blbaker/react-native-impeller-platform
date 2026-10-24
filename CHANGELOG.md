@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.6](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.5...v0.8.6) (2026-10-24)
+
+
+### Bug Fixes
+
+* **engine:** per-&lt;Svg&gt; cache key holds the resolved gradient (ENG-48) ([ad1f062](https://github.com/blbaker/react-native-impeller-platform/commit/ad1f0621ec50fe69820d42c4bb1fbbcbd047e321))
+* **engine:** per-&lt;Svg&gt; cache key holds the resolved gradient (ENG-48) ([30dbc4e](https://github.com/blbaker/react-native-impeller-platform/commit/30dbc4e0cad1ed23dd365e03ec655ef29557798f))
+
 ## [0.8.5](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.4...v0.8.5) (2026-10-23)
 
 
