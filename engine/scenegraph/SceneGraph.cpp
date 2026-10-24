@@ -1208,6 +1208,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.svgGradientCoords[2] = svgLength(lg->x2, 1.0f);
       node.svgGradientCoords[3] = svgLength(lg->y2);
       node.svgGradientUnits = lg->gradientUnits;
+      node.svgGradientTransform.assign(lg->gradientTransform.begin(),
+                                       lg->gradientTransform.end());
     } else if (const auto* rg =
                    dynamic_cast<const react::RNSVGRadialGradientProps*>(
                        view.props.get())) {
@@ -1220,6 +1222,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
       node.svgGradientCoords[4] = svgLength(rg->cx, 0.5f);
       node.svgGradientCoords[5] = svgLength(rg->cy, 0.5f);
       node.svgGradientUnits = rg->gradientUnits;
+      node.svgGradientTransform.assign(rg->gradientTransform.begin(),
+                                       rg->gradientTransform.end());
     }
   } else if (node.componentName == "world") {
     // <world> ENG-09. Borrows RNSVGImageProps (see fabric/WorldShadowNode.h
@@ -3113,6 +3117,54 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
   }
 }
 
+// ENG-48 — one paint server's share of the per-<Svg> cache key. Appends
+// "<tag>=0;" for a non-reference brush, "<tag>=miss;" for a url(#id) that
+// resolves to nothing (paint draws nothing then, which is its own picture),
+// and otherwise every field makeGradientSource reads: kind, units, all six
+// coords, the gradientTransform, and each stop's offset and decoded ARGB.
+// %.9g round-trips a float exactly, so no two distinct values print alike.
+void SceneGraph::appendPaintServerKey(std::string& key, const char* tag,
+                                      bool isRef,
+                                      const std::string& ref) const {
+  char buf[96];
+  if (!isRef) {
+    std::snprintf(buf, sizeof(buf), "%s=0;", tag);
+    key += buf;
+    return;
+  }
+  auto git = gradients_.find(ref);
+  if (git == gradients_.end() || git->second == nullptr) {
+    std::snprintf(buf, sizeof(buf), "%s=miss;", tag);
+    key += buf;
+    return;
+  }
+  const SceneNode& g = *git->second;
+  std::snprintf(buf, sizeof(buf), "%s=%c%d:", tag,
+                g.svgGradientRadial ? 'r' : 'l', g.svgGradientUnits);
+  key += buf;
+  for (float v : g.svgGradientCoords) {
+    std::snprintf(buf, sizeof(buf), "%.9g,", v);
+    key += buf;
+  }
+  key += "t=";
+  for (float v : g.svgGradientTransform) {
+    std::snprintf(buf, sizeof(buf), "%.9g,", v);
+    key += buf;
+  }
+  key += "st=";
+  const auto& st = g.svgGradientStops;
+  for (size_t i = 0; i + 1 < st.size(); i += 2) {
+    // Same decode as makeGradientSource: the packed ARGB arrives as a float.
+    const auto argb = static_cast<uint32_t>(static_cast<int64_t>(st[i + 1]));
+    std::snprintf(buf, sizeof(buf), "%.9g@%08x,", st[i], (unsigned)argb);
+    key += buf;
+  }
+  // An odd trailing value makes makeGradientSource refuse (paints nothing);
+  // keep the raw count so that shape cannot alias a valid list.
+  std::snprintf(buf, sizeof(buf), "#%zu;", st.size());
+  key += buf;
+}
+
 // ENG item 2 — content key for the per-icon offscreen texture cache.
 //
 // Every input that changes the rasterised pixels must be in the key: the
@@ -3156,6 +3208,14 @@ std::string SceneGraph::svgSubtreeCacheKey(const SceneNode& node, int pxW,
       std::snprintf(buf, sizeof(buf), "@%.3f,c%d;", n.svgStrokeDashOffset,
                     n.svgStrokeLinecap);
       key += buf;
+      // ENG-48: a url(#id) brush paints the RESOLVED gradient, so its content
+      // is part of the key. Without this, two same-size <Svg>s whose rects
+      // differ only in their gradient shared one texture: the second painted
+      // the first one's picture (B red-rising beside A). Keyed by content, not
+      // by id, so the same gradient under two ids still rasterises once, and
+      // new stops under the SAME id get a new key.
+      appendPaintServerKey(key, "fg", n.svgFillIsRef, n.svgFillRef);
+      appendPaintServerKey(key, "sg", n.svgStrokeIsRef, n.svgStrokeRef);
     }
     for (auto childTag : n.children) {
       auto it = nodes_.find(childTag);
