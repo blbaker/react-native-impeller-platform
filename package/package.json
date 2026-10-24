@@ -1,6 +1,6 @@
 {
   "name": "react-native-impeller-platform",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Out-of-tree React Native platform rendered with Flutter's Impeller engine",
   "license": "MIT",
   "repository": {
@@ -41,9 +41,9 @@
     "react-native": ">=0.86.0"
   },
   "optionalDependencies": {
-    "@blbaker/react-native-impeller-platform-engine-darwin-arm64": "0.8.5",
-    "@blbaker/react-native-impeller-platform-engine-linux-x64": "0.8.5",
-    "@blbaker/react-native-impeller-platform-engine-win32-x64": "0.8.5"
+    "@blbaker/react-native-impeller-platform-engine-darwin-arm64": "0.8.6",
+    "@blbaker/react-native-impeller-platform-engine-linux-x64": "0.8.6",
+    "@blbaker/react-native-impeller-platform-engine-win32-x64": "0.8.6"
   },
   "publishConfig": {
     "access": "public"
