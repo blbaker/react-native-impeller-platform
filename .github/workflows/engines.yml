@@ -43,6 +43,8 @@ on:
       - 'tools/mutation-verify-gradient-cache.sh'
       - 'tools/gradient-cache-measure.py'
       - 'fixtures/eng48-gradient-cache/**'
+      - 'tools/ci-app-chdir.sh'
+      - 'fixtures/eng49-app-chdir/**'
 
 permissions:
   contents: read
@@ -246,6 +248,29 @@ jobs:
         env:
           RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
         run: bash tools/ci-gradient-cache.sh
+
+      # ENG-49: a windowed engine inside an .app keeps the caller's working
+      # directory (GLFW_COCOA_CHDIR_RESOURCES off), so a relative --screenshot
+      # lands in the cwd, not in Contents/Resources. Windowed; node-free,
+      # committed bundle. npm 0.8.5 (no fix) is the control: arm C must see it
+      # chdir, and the whole gate run on it must FAIL at arm B.
+      - name: Windowed engine inside an .app keeps the cwd (macOS)
+        if: runner.os == 'macOS'
+        env:
+          RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+        run: |
+          ctl="$RUNNER_TEMP/eng49-control"
+          mkdir -p "$ctl"
+          ( cd "$ctl" && npm pack --silent @blbaker/react-native-impeller-platform-engine-darwin-arm64@0.8.5 >/dev/null && tar xzf ./*.tgz )
+          export RNI_CONTROL_BIN="$ctl/package/bin/rn-impeller"
+          bash tools/ci-app-chdir.sh
+          echo "=== the same gate on 0.8.5 must fail at arm B ==="
+          if out="$(RNI_BIN="$RNI_CONTROL_BIN" bash tools/ci-app-chdir.sh 2>&1)"; then
+            echo "$out"; echo "::error::ci-app-chdir.sh passed on npm 0.8.5, which chdirs"; exit 1
+          fi
+          echo "$out" | tail -4
+          grep -q 'APP_CHDIR_GATE_FAIL: B: the windowed engine chdir' <<< "$out" \
+            || { echo "::error::ci-app-chdir.sh failed on 0.8.5, but not at arm B"; exit 1; }
 
       # ENG-47: RNViewShot on native Metal. The darwin window renders on
       # Metal, so arms A-D read every capture back through
