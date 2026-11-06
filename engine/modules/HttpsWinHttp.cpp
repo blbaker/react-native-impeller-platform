@@ -20,6 +20,14 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+// folly/portability/Windows.h (reached through NetworkingModule.h) #undefs the
+// IN/OUT parameter markers that winhttp.h still uses in its declarations.
+#ifndef IN
+#define IN
+#endif
+#ifndef OUT
+#define OUT
+#endif
 #include <winhttp.h>
 
 #include <algorithm>
