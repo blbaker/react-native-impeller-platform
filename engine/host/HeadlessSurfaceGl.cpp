@@ -3,6 +3,7 @@
 #include "host/IoContextEgl.h"
 #include "base/GlValidation.h"
 #include "fabric/ImageStore.h"
+#include "host/HeadlessEglRungs.h"
 #include "host/HeadlessSurface.h"
 #include "host/RecordNoGl.h"
 #include "text/TypographyContexts.h"
@@ -19,11 +20,13 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace rni {
 
 namespace {
 void* ProcAddr(const char* name, void*) { return (void*)eglGetProcAddress(name); }
+
 }  // namespace
 
 HeadlessSurface::~HeadlessSurface() {
@@ -113,11 +116,17 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   if (!eglInitialize(dpy, &major, &minor)) return fail("eglInitialize failed");
   display_ = dpy;
 #else
-  dpy = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA,
-                           nativeDefaultDisplay(), nullptr);
-  if (dpy == EGL_NO_DISPLAY) return fail("surfaceless eglGetPlatformDisplay failed");
-  EGLint major = 0, minor = 0;
-  if (!eglInitialize(dpy, &major, &minor)) return fail("eglInitialize failed");
+  // Linux: surfaceless (Mesa) -> GBM render node (libmali, any KMS driver) ->
+  // EGL_DEFAULT_DISPLAY, in host/HeadlessEglRungs.cpp. RNI_EGL_PLATFORM=
+  // surfaceless|gbm|default pins one rung (for gates and for proving which one
+  // a board actually took). The chosen rung is PRINTED: a silent fallback
+  // renders identically. `rn-impeller --doctor` prints why each rung failed.
+  dpy = static_cast<EGLDisplay>(rni::headlessegl::OpenDisplay());
+  const auto& rep = rni::headlessegl::Last();
+  if (dpy == EGL_NO_DISPLAY) return fail("no headless EGL display (tried surfaceless, gbm, default)");
+  std::fprintf(stderr, "rn-impeller: headless egl_platform=%s egl=%d.%d vendor=%s\n", rep.took.c_str(),
+               rep.major, rep.minor,
+               eglQueryString(dpy, EGL_VENDOR) ? eglQueryString(dpy, EGL_VENDOR) : "?");
   display_ = dpy;
 #endif
 
@@ -128,7 +137,17 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
   EGLConfig cfg;
   EGLint n = 0;
   if (!eglChooseConfig(dpy, cfgAttrs, &cfg, 1, &n) || n != 1) {
+#if defined(__linux__) && !defined(__ANDROID__)
+    // A GBM display can expose NO pbuffer configs (Mesa's GBM has none). The
+    // context is made current surfaceless and renders into our own FBO, so
+    // any ES3 RGBA8 config will do.
+    const EGLint anyAttrs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_RED_SIZE, 8,
+                               EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
+    n = 0;
+    if (!eglChooseConfig(dpy, anyAttrs, &cfg, 1, &n) || n != 1) return fail("eglChooseConfig failed");
+#else
     return fail("eglChooseConfig failed");
+#endif
   }
   if (!eglBindAPI(EGL_OPENGL_ES_API)) return fail("eglBindAPI failed");
   // FP-05: a debug context so Mesa/ANGLE report API errors through KHR_debug.
@@ -137,8 +156,16 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
                              EGL_NONE};
   EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctxAttrs);
   if (ctx == EGL_NO_CONTEXT) return fail("eglCreateContext failed");
-  if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
-#if defined(__ANDROID__)
+#if defined(__linux__) && !defined(__ANDROID__)
+  // RNI_EGL_FORCE_PBUFFER=1 skips the surfaceless bind so llvmpipe exercises
+  // the pbuffer path drivers without EGL_KHR_surfaceless_context need.
+  const bool tryNoSurface = !rni::headlessegl::ForcePbuffer();
+  rni::headlessegl::Last().current = "surfaceless";
+#else
+  const bool tryNoSurface = true;
+#endif
+  if (!tryNoSurface || !eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
+#if defined(__ANDROID__) || defined(__linux__)
     // Drivers without EGL_KHR_surfaceless_context: bind a 1x1 pbuffer instead
     // (we render into our own FBO either way).
     const EGLint pbAttrs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
@@ -146,6 +173,9 @@ bool HeadlessSurface::init(int width, int height, std::string* error) {
     if (pb == EGL_NO_SURFACE || !eglMakeCurrent(dpy, pb, pb, ctx)) {
       return fail("eglMakeCurrent (pbuffer) failed");
     }
+#if !defined(__ANDROID__)
+    rni::headlessegl::Last().current = "pbuffer";
+#endif
 #else
     return fail("eglMakeCurrent (surfaceless) failed");
 #endif

@@ -22,6 +22,8 @@
 #include "modules/AppStorageModule.h"
 #include "modules/WorldRasterModule.h"
 #include "modules/TextureRegistryModule.h"
+#include "modules/VideoModule.h"  // row 3
+#include "modules/WebViewModule.h"  // web view (WPE helper)
 #include "modules/ViewShotModule.h"
 #include "modules/WorldRasterStore.h"
 #include "scenegraph/TextureRegistry.h"

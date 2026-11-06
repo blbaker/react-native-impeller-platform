@@ -24,6 +24,7 @@ engine/third_party/glfw/
 engine/third_party/x11-sysroot/
 engine/third_party/impeller-sdk-android/
 engine/build-android-*/
+engine/build-linux-*/
 probe/build-out/
 probe/android/src/main/jniLibs/
 engine/third_party/impeller-sdk-custom/
@@ -39,3 +40,18 @@ engine/build-android-*.log
 # fetched by tools/sdk-fetch-win.sh, never committed
 engine/third_party/impeller-sdk-win/
 engine/build-ios-*
+# ffmpeg HEADERS for the linux video backend, from tools/ffmpeg-dev-fetch.sh.
+# No trailing slash, so a worktree's symlink to the main checkout's copy is ignored too.
+engine/third_party/ffmpeg-dev-linux-x64
+# web view: rni-webhelper build output (tools/webhelper-build.sh)
+engine/build-webhelper/
+engine/build-webhelper-arm64/
+engine/build-webhelper-debian/
+
+# tools/package-engine-linux.sh output
+dist/
+# linux-arm64 cross build inputs (tools/arm64-sysroot.sh, sdk-fetch-custom.sh, ffmpeg8-fetch.sh)
+engine/third_party/sysroot-linux-arm64
+engine/third_party/impeller-sdk-custom-linux-arm64
+engine/third_party/ffmpeg8-linux-*
+engine/build-linux-*/

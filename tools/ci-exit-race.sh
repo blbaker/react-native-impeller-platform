@@ -15,6 +15,7 @@
 #   b  plain run x5 of an always-rendering app with a click: exit 0
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/qemu-timing.sh"
 CI_TOOLS="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -73,10 +74,19 @@ npx --no-install react-native bundle --platform impeller --dev false \
 E="$RESOLVED"
 cd "$ROOT"
 
+# Per-run ceiling. 30 s is ~100x a native run; under qemu-aarch64 the engine
+# needs ~37 s just to reach its first present, and timeout 30 killed it before
+# FabricHost installed the probe (M3 triage: "probe not installed").
+RUN_TMO=30
+if rni_is_qemu; then
+  RUN_TMO="${RNI_QEMU_RUN_TMO:-240}"
+  rni_qemu_relax "exit-race per-run timeout ${RUN_TMO} s instead of 30 s (qemu startup ~37 s); every assertion unchanged"
+fi
+
 run() {  # $1 = log, rest = extra env
   local log="$1"; shift
   set +e
-  env "$@" timeout 30 "$E" --window --probe-banner off --bundle "$B" --app-name ExitRace \
+  env "$@" timeout "$RUN_TMO" "$E" --window --probe-banner off --bundle "$B" --app-name ExitRace \
       --width 400 --height 300 --idle-skip --idle-run-sec 1.5 \
       --mouse-after-frames "3:down@20,20;up@20,20" > "$log" 2>&1
   local rc=$?

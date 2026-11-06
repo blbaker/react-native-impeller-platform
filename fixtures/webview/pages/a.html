@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WV-A</title>
+<link rel="stylesheet" href="a.css"></head>
+<body>
+<div id="hdr">A</div>
+<button id="btn">Tap</button>
+<input id="inp" autocomplete="off">
+<div id="hov"></div>
+<div id="tz"></div>
+<a id="lnk" target="_blank" href="b.html">B</a>
+<div id="tall"></div>
+<script>
+// Gate page for tools/ci-webview.sh. Every observation is one console line
+// starting WVPAGE; the WebProcess prints console messages to stdout, which the
+// gate reads from the engine's log. Interactive boxes are position:fixed so a
+// wheel scroll moves the page without moving the targets.
+const L = (...a) => console.log('WVPAGE ' + a.join(' '));
+L('early', String(window.__early));  // set by injectedJavaScriptBeforeContentLoaded
+document.cookie = 'sess=abc123; max-age=3600; path=/';
+btn.addEventListener('click', (e) => L('click', e.clientX | 0, e.clientY | 0));
+hov.addEventListener('mouseenter', () => L('hover-enter'));
+hov.addEventListener('mouseleave', () => L('hover-leave'));
+inp.addEventListener('input', () => L('value', JSON.stringify(inp.value)));
+inp.addEventListener('keydown', (e) => L('keydown', e.key));
+let moves = 0, x0 = 0;
+tz.addEventListener('touchstart', (e) => {
+  moves = 0; x0 = e.touches[0].clientX;
+  L('touchstart', e.touches[0].clientX | 0, e.touches[0].clientY | 0);
+  e.preventDefault();
+}, {passive: false});
+tz.addEventListener('touchmove', (e) => { moves++; e.preventDefault(); }, {passive: false});
+tz.addEventListener('touchend', (e) =>
+  L('touchend', 'moves=' + moves, 'dx=' + ((e.changedTouches[0].clientX - x0) | 0)));
+let st = 0;
+window.addEventListener('scroll', () => {
+  clearTimeout(st);
+  st = setTimeout(() => L('scrolly', scrollY | 0), 200);
+});
+</script>
+</body></html>

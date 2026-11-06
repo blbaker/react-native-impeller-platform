@@ -9,7 +9,9 @@
 // The producer stops after `frames` frames (still registered); after
 // `unregisterMs` the texture is unregistered and the view stays mounted, so the
 // only thing that can repaint it then is the unregister itself.
-// Initial URL: fp42://run?fps=30&frames=75&unregisterMs=3017
+// `unmountMs` instead UNMOUNTS the view at that time and leaves
+// the producer registered: the scene must drop the node's GPU upload itself.
+// Initial URL: fp42://run?fps=30&frames=75&unregisterMs=3017 | fp42://run?fps=30&unmountMs=1500
 import React, {useEffect, useState} from 'react';
 import {AppRegistry, Linking, TurboModuleRegistry, View} from 'react-native';
 import * as NativeComponentRegistry from 'react-native/Libraries/NativeComponent/NativeComponentRegistry';
@@ -46,6 +48,13 @@ function ExternalTexture() {
       const tid = Registry.registerTestProducer(Number(q.fps || 30), 64, 64, Number(q.frames || 0));
       console.log(`FP42 registered id=${tid}`);
       setId(tid);
+      if (q.unmountMs) {
+        timer = setTimeout(() => {
+          setId(0);
+          console.log(`FP42 unmounted id=${tid}`);
+        }, Number(q.unmountMs));
+        return;
+      }
       timer = setTimeout(() => {
         const ok = Registry.unregister(tid);
         console.log(`FP42 unregistered id=${tid} ok=${ok}`);

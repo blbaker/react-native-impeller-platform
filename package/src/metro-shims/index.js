@@ -165,7 +165,74 @@ const IOS_BRANCHED_IMPORTERS = {
 //     a separate future ticket, not a regression introduced here.
 const IOS_BRANCHED_ORIGIN_DIRS = {
   'react-native/Libraries/Components/TextInput': 'Platform.impeller-as-ios.js',
+  // Touch drag-to-scroll: pagingEnabled and decelerationRate reach native
+  // only through Platform.select({ios, android}). OS is NOT forged here; see
+  // shims/Platform.impeller-select-ios.js.
+  'react-native/Libraries/Components/ScrollView': 'Platform.impeller-select-ios.js',
 };
+
+// ENG-01d. The two tables above decide WHO gets the as-ios Platform. They only
+// work if those files still READ Platform.OS when they run. Expo's production
+// preset and Metro's ESM inliner rewrite `Platform.OS` to the build platform
+// string first, and the iOS arm is constant-folded out of the bundle. The
+// babel-transformer.js wrapper keeps the read at runtime for exactly the files
+// this predicate names, so the resolver and the transform share one scope.
+function keepsRuntimePlatform(filename, platform) {
+  if (platform !== 'impeller' || !filename) return false;
+  const posix = toPosix(filename);
+  if (Object.keys(IOS_BRANCHED_IMPORTERS).some((suffix) => posix.endsWith(suffix))) {
+    return true;
+  }
+  const dir = path.posix.dirname(posix);
+  return Object.keys(IOS_BRANCHED_ORIGIN_DIRS).some((suffix) => dir.endsWith(suffix));
+}
+
+const RUNTIME_PLATFORM_TRANSFORMER = path.join(__dirname, 'babel-transformer.js');
+const {UPSTREAM_ENV: UPSTREAM_BABEL_TRANSFORMER_ENV} = require('./babel-transformer.js');
+
+// Wrap the config's babel transformer with babel-transformer.js. The wrapper
+// delegates everything to the original and only prepends one plugin for the
+// keepsRuntimePlatform() files. A config with no babelTransformerPath is left
+// as it is (both RN's and Expo's getDefaultConfig set one).
+function withRuntimePlatformTransformer(config, projectRoot) {
+  const transformer = config.transformer || {};
+  const current = transformer.babelTransformerPath;
+  if (!current) return config;
+  let resolved;
+  try {
+    resolved = require.resolve(current, {paths: [projectRoot]});
+  } catch (error) {
+    resolved = current;
+  }
+  if (toPosix(resolved) === toPosix(RUNTIME_PLATFORM_TRANSFORMER)) return config;
+  process.env[UPSTREAM_BABEL_TRANSFORMER_ENV] = resolved;
+  return {
+    ...config,
+    // The transform cache must see the wrapper. Metro keys transforms on the
+    // WORKER's getCacheKey, and the babelTransformerPath only reaches the key
+    // through it. react-native-css's worker (NativeWind 5) has no getCacheKey
+    // and Expo's supervising worker bypasses it, so with either one a cache
+    // warmed before this wrapper existed served the old TextInput.js, with
+    // its iOS arm already folded away (measured: build-textinput-inline-os-
+    // bundles.sh warm-cache arm). Metro's top-level cacheVersion is in every
+    // key, so the wrapper's fingerprint goes there, appended to the app's.
+    cacheVersion: [config.cacheVersion, 'react-native-impeller:' + runtimePlatformFingerprint()]
+      .filter(Boolean)
+      .join(':'),
+    transformer: {...transformer, babelTransformerPath: RUNTIME_PLATFORM_TRANSFORMER},
+  };
+}
+
+// Hash of what decides the wrapper's output: the plugin itself and the scope
+// tables in this file.
+function runtimePlatformFingerprint() {
+  return require('crypto')
+    .createHash('sha1')
+    .update(fs.readFileSync(RUNTIME_PLATFORM_TRANSFORMER))
+    .update(fs.readFileSync(__filename))
+    .digest('hex')
+    .slice(0, 16);
+}
 
 // The module specifier TextInput.js actually writes is RELATIVE
 // (`import Platform from '../../Utilities/Platform'`), so this is checked
@@ -233,6 +300,13 @@ const FEATURE_FLAGS_SHIM = 'ReactNativeFeatureFlags.impeller.js';
 const REANIMATED = 'react-native-reanimated';
 const REANIMATED_SHIM = 'reanimated.impeller.js';
 
+// web view. `react-native-webview` ALWAYS resolves to the engine's WebView
+// on impeller, installed or not: the real package's RNCWebView native component
+// is not registered here, and an unregistered Fabric component mounts, paints
+// nothing and logs nothing (indistinguishable from a blank page).
+const WEBVIEW = 'react-native-webview';
+const WEBVIEW_SHIM = path.join(__dirname, '..', 'webview', 'index.js');
+
 // EXPO. `expo start` (@expo/cli withMetroMultiPlatform) asks
 // expo-modules-autolinking which package hosts react-native for the requested
 // platform, on EVERY resolve, and that is a closed switch (ios/android ->
@@ -294,6 +368,9 @@ function withImpeller(config = {}) {
   }
 
   function resolveRequest(context, moduleName, platform) {
+    if (platform === 'impeller' && (moduleName === WEBVIEW || moduleName.startsWith(WEBVIEW + '/'))) {
+      return {type: 'sourceFile', filePath: WEBVIEW_SHIM};
+    }
     // ENG-19. react-native-reanimated: the engine vends no Reanimated/Worklets
     // native module, and an app that does not install the package cannot even
     // bundle (react-native-css requires it from native/reanimated.js). When
@@ -363,10 +440,13 @@ function withImpeller(config = {}) {
     return shim ? {type: 'sourceFile', filePath: shim} : resolution;
   }
 
-  return {
-    ...config,
-    resolver: {...resolver, platforms, resolveRequest},
-  };
+  return withRuntimePlatformTransformer(
+    {
+      ...config,
+      resolver: {...resolver, platforms, resolveRequest},
+    },
+    config.projectRoot || process.cwd(),
+  );
 }
 
 module.exports = {
@@ -374,9 +454,13 @@ module.exports = {
   teachExpoImpellerPlatform,
   shimForResolvedPath,
   shimForOrigin,
+  keepsRuntimePlatform,
+  withRuntimePlatformTransformer,
   SHIM_TARGETS,
   PLATFORM_FORKED,
   IOS_BRANCHED_IMPORTERS,
   IOS_BRANCHED_ORIGIN_DIRS,
+  RUNTIME_PLATFORM_TRANSFORMER,
+  UPSTREAM_BABEL_TRANSFORMER_ENV,
   SHIM_DIR,
 };

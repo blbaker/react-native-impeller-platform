@@ -191,8 +191,11 @@ class ImpellerSchedulerDelegate : public react::SchedulerDelegate {
   }
   void schedulerDidSendAccessibilityEvent(const react::ShadowView&,
                                           const std::string&) override {}
-  void schedulerDidSetIsJSResponder(const react::ShadowView&, bool,
-                                    bool) override {}
+  void schedulerDidSetIsJSResponder(const react::ShadowView& view, bool isResponder,
+                                    bool blockNative) override {
+    if (responderHandler_) responderHandler_((int)view.tag, isResponder, blockNative);
+  }
+  std::function<void(int, bool, bool)> responderHandler_;
   // ⛔ ENG-06: THIS IS THE ANIMATION PROP PATH. IT WAS AN EMPTY STUB.
   //
   // RN's C++ NativeAnimated engine does NOT drive per-frame props through a
@@ -603,6 +606,9 @@ FabricHost::FabricHost(react::ReactInstance& instance, SceneGraph* sceneGraph,
     auto d = std::make_unique<ImpellerSchedulerDelegate>(
         sceneGraph, logMutations, &layoutAnimations_->MountMutex());
     d->commandHandler_ = [this](ViewCommand cmd) { postCommand(std::move(cmd)); };
+    d->responderHandler_ = [this](int tag, bool isResponder, bool blockNative) {
+      setJsResponder(tag, isResponder, blockNative);
+    };
     delegate_ = std::move(d);
   }
   scheduler_ = std::make_unique<react::Scheduler>(
@@ -2031,6 +2037,7 @@ void FabricHost::runCommand(const ViewCommand& cmd) {
     const bool toEnd = cmd.name == "scrollToEnd";
     const float x = cmd.nums.size() > 0 ? (float)cmd.nums[0] : 0.0f;
     const float y = cmd.nums.size() > 1 ? (float)cmd.nums[1] : 0.0f;
+    stopTouchScrollFor(cmd.tag);  // setContentOffset stops a fling on iOS too
     const auto r = sceneGraph_->scrollTo(tag, x, y, toEnd);
     if (r.tag == 0) return;
     printf("rn-impeller: scroll_command tag=%d x=%.1f y=%.1f\n", cmd.tag,

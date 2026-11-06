@@ -59,9 +59,10 @@ const path = require('path');
 //
 // So a triple joins this list when its engine package is BUILT, not when it is
 // planned. `tools/ci-release-meta.sh` fails the build if the two ever disagree.
-// darwin-arm64/darwin-x64/linux-arm64 belong here the moment P6 ships them.
+// darwin-x64 belongs here the moment its engine package is built.
 const SUPPORTED = new Set([
   'linux-x64',
+  'linux-arm64',
   'win32-x64',
   'darwin-arm64',
 ]);

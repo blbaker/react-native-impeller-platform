@@ -23,6 +23,8 @@
 #include <GLFW/glfw3native.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include "host/X11Dl.h"  // RNI_X11_DLOPEN: Xlib via dlopen (linux-arm64)
+#include "host/OptionalLibs.h"  // libXext soname list
 
 #include <algorithm>
 #include <cmath>
@@ -132,7 +134,7 @@ class X11Embedder final : public PlatformViewEmbedder {
     }
     visual_ = wa.visual;
     depth_ = wa.depth;
-    if (void* xext = dlopen("libXext.so.6", RTLD_LAZY | RTLD_LOCAL)) {
+    if (void* xext = rni::optlib::Open("libXext").handle) {
       shapeRects_ = (ShapeRectsFn)dlsym(xext, "XShapeCombineRectangles");
     }
     // The overlays use the window's EGL config, hence its visual.

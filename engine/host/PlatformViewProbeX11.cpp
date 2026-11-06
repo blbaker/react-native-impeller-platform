@@ -4,6 +4,7 @@
 #if defined(__linux__) && !defined(__ANDROID__) && RNI_WITH_WINDOW
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include "host/X11Dl.h"  // RNI_X11_DLOPEN: Xlib via dlopen (linux-arm64)
 
 #include <algorithm>
 #include <cstdio>

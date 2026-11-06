@@ -33,6 +33,21 @@ case "${RNI_SDK_TARGET:-host}" in
     GN_EXTRA=(--android --android-cpu x64); OUT=rni_android_debug_x64
     ANDROID_DEPS=True; SYNC_KEY="$SHA android"
     ;;
+  linux-arm64)
+    # Cross build for embedded aarch64 Linux (RK3588-class boards). gclient
+    # sync on a linux host already installs build/linux/debian_bullseye_arm64-sysroot,
+    # which flutter's gn uses for --linux-cpu arm64; no extra deps to sync.
+    [ "$(uname -s)" = Linux ] || { echo "linux-arm64 SDK builds on a linux host only" >&2; exit 1; }
+    # --target-os linux is REQUIRED: without it gn treats this as a host build
+    # and get_target_cpu() ignores --linux-cpu, so the "arm64" SDK silently
+    # comes out x86-64 (measured: args.gn target_cpu = "x64").
+    GN_EXTRA=(--target-os linux --linux-cpu arm64); OUT=rni_linux_debug_arm64
+    # An android sync is a superset of the linux one (linux deps + NDK). Keep it
+    # rather than letting `gclient sync -D` delete the android deps.
+    case "$(cat "${RNI_SDK_WORK:-$HOME/projects/_ref/sc32}/.synced" 2>/dev/null)" in
+      "$SHA android") SYNC_KEY="$SHA android" ;;
+    esac
+    ;;
 esac
 case "$(uname -s)" in
   # Apple silicon: flutter's gn defaults --mac-cpu to x64.
@@ -105,6 +120,11 @@ ZIP="$(ls "$SRC/out/$OUT"/zip_archives/*/impeller_sdk.zip 2>/dev/null | head -1)
 TMP="$(mktemp -d "$(dirname "$DEST_ABS")/.sdk-custom.XXXXXX")"
 (cd "$TMP" && python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall('.')" "$ZIP")
 chmod +x "$TMP"/bin/* 2>/dev/null || true
+if [ "${RNI_SDK_TARGET:-host}" = linux-arm64 ]; then
+  # Assert the architecture: a mis-targeted gn run still "succeeds".
+  file "$TMP/lib/libimpeller.so" | grep -q 'ARM aarch64' \
+    || { echo "linux-arm64 SDK is not aarch64: $(file -b "$TMP/lib/libimpeller.so")" >&2; rm -rf "$TMP"; exit 1; }
+fi
 printf 'sha=%s\npatch_sha256=%s\nbuild_seconds=%s\n' "$SHA" "$PATCH_SUM" "$secs" > "$TMP/.stamp"
 chmod 755 "$TMP"; rm -rf "$DEST_ABS"; mv "$TMP" "$DEST_ABS"
 say "built in ${secs}s -> $DEST"

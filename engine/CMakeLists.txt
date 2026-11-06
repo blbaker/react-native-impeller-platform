@@ -44,6 +44,11 @@ endif()
 # via GLFW's EGL context path.
 # ---------------------------------------------------------------------------
 option(RNI_WITH_WINDOW "Build GlfwSurface / --window support" ON)
+# linux-arm64 (RK3588, tools/engine-build-linux-arm64.sh): resolve the
+# platform-view Xlib calls at run time instead of linking libX11, and listen
+# for wl_touch on GLFW's Wayland display. Both OFF keeps every other build as is.
+option(RNI_X11_DLOPEN "dlopen libX11 for platform views instead of linking it" OFF)
+option(RNI_WITH_WAYLAND "Wayland touch input (needs a GLFW built with GLFW_BUILD_WAYLAND)" OFF)
 
 # ---------------------------------------------------------------------------
 # MSVC-wide definitions (P5). These are DIRECTORY-scoped on purpose: they must
@@ -286,6 +291,13 @@ add_executable(rn-impeller
   # files look right until a non-windowed build (RNI_WITH_WINDOW=OFF, the
   # android engine) tried to link and failed with an undefined symbol.
   host/ResizeProbe.cpp
+  # `--doctor`, the optional-library table every dlopen goes
+  # through, and the linux headless EGL ladder with its per-rung reasons.
+  host/Doctor.cpp
+  $<$<PLATFORM_ID:Linux>:${CMAKE_SOURCE_DIR}/host/DoctorImage.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/DoctorWindow.cpp>
+  $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/OptionalLibs.cpp>
+  $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessEglRungs.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/WindowRasterizer.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/ResizeSync.cpp>
   # FP-32: GPU context loss -> teardown + rebuild (windowed EGL).
@@ -298,6 +310,7 @@ add_executable(rn-impeller
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PlatformViewProbeX11.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/PartialRepaintGl.cpp>
   base/Trace.cpp
+  base/MemTrim.cpp  # memory: glibc malloc policy + trims after big frees
   base/DevToolsFrames.cpp
   base/SanitizerHooks.cpp
   base/GlValidation.cpp
@@ -313,6 +326,7 @@ add_executable(rn-impeller
   $<$<NOT:$<BOOL:${WIN32}>>:${CMAKE_SOURCE_DIR}/host/HeadlessSurfaceGl.cpp>
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/host/WinGLSurface.cpp>
   $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurface.cpp>
+  $<$<BOOL:${RNI_WITH_WINDOW}>:${CMAKE_SOURCE_DIR}/host/GlfwSurfaceHidden.cpp>
   # The one Objective-C TU: NSWindow -> layer-backed NSView, which is what
   # ANGLE/Metal accepts as a native window. APPLE-only by generator expression
   # so no other platform ever tries to compile Cocoa.
@@ -349,16 +363,20 @@ add_executable(rn-impeller
   ${RNI_NOTIFICATIONS_BACKEND}
   fabric/FabricHost.cpp
   fabric/FabricHostTextEdit.cpp
+  fabric/FabricHostTouchScroll.cpp
+  fabric/TouchScroll.cpp
   fabric/ComponentRegistry.cpp
   fabric/LayoutAnimations.cpp
   fabric/ExpoBlurShadowNode.cpp
   scenegraph/SceneGraph.cpp
+  scenegraph/SceneGraphTouchScroll.cpp
   scenegraph/SceneGraphContextLoss.cpp
   scenegraph/SceneGraphTextInputHost.cpp
   scenegraph/SceneGraphTextSelection.cpp  # ENG-43
   # FP-42: external textures (Flutter TextureRegistry + TextureLayer).
   scenegraph/TextureRegistry.cpp
   scenegraph/ExternalTexturePaint.cpp
+  scenegraph/ImageTexturePrune.cpp  # unmounted images give their textures back
   scenegraph/PlatformViewRecord.cpp  # FP-44
   # FP-43: view snapshots (RNViewShot, SnapshotControllerImpeller).
   scenegraph/SnapshotController.cpp
@@ -424,6 +442,81 @@ foreach(_f IN LISTS RNI_DRAWOP_HOOKED_PATHS)
     set_property(SOURCE "${_f}" APPEND PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_SOURCE_DIR}/scenegraph/DrawOpHook.h")
   endif()
 endforeach()
+
+# Row 3: video backend. linux = ffmpeg, headers only at build time; the
+# shared libs are dlopen'd at first use, so the binary still starts without them.
+# The decoder code reads AVFrame/AVCodecContext fields, so it is compiled ONCE
+# PER ffmpeg release: video/FfmpegCopy.cpp becomes one object
+# library per entry of RNI_FFMPEG_COPIES, each with that release's include dir
+# and RNI_FF_RELEASE=<n>. At run time video/FfmpegSelect.cpp tries the copies
+# newest first and refuses a copy whose loaded majors are not its compiled ones.
+#   8: the board image's ffmpeg 8.0.1 (tools/ffmpeg8-fetch.sh --arch <arch>).
+#      REQUIRED on linux: no headers = configure FAILS, naming the dir.
+#   6: ffmpeg 6.1 dev hosts (tools/ffmpeg-dev-fetch.sh). Optional: no headers =
+#      that copy is not built (the old silent fallback, kept for 6 only).
+set(RNI_FFMPEG_COPIES 8 6)
+set(RNI_FFMPEG_REQUIRED 8)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(_rni_ff_arch arm64)
+else()
+  set(_rni_ff_arch x64)
+endif()
+if(NOT DEFINED RNI_FFMPEG8_DIR)
+  set(RNI_FFMPEG8_DIR "${CMAKE_SOURCE_DIR}/third_party/ffmpeg8-linux-${_rni_ff_arch}")
+endif()
+if(NOT DEFINED RNI_FFMPEG6_DIR)
+  # ffmpeg headers are arch-neutral apart from avconfig.h (identical on x86_64
+  # and aarch64), so the x64 -dev headers serve the arm64 build's 6 copy too.
+  set(RNI_FFMPEG6_DIR "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-dev-linux-x64")
+endif()
+set(RNI_FFMPEG_BUILT "")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  foreach(_ff IN LISTS RNI_FFMPEG_COPIES)
+    set(_ffdir "${RNI_FFMPEG${_ff}_DIR}")
+    if(NOT EXISTS "${_ffdir}/include/libavcodec/avcodec.h")
+      if(_ff IN_LIST RNI_FFMPEG_REQUIRED)
+        message(FATAL_ERROR "rn-impeller: ffmpeg ${_ff} headers missing: ${_ffdir}/include "
+                            "(bash tools/ffmpeg8-fetch.sh --arch ${_rni_ff_arch})")
+      endif()
+      message(STATUS "rn-impeller: no ffmpeg ${_ff} headers at ${_ffdir}/include: copy ${_ff} not built")
+      continue()
+    endif()
+    add_library(rni-video-ffmpeg${_ff} OBJECT ${CMAKE_SOURCE_DIR}/video/FfmpegCopy.cpp
+                                              ${CMAKE_SOURCE_DIR}/video/FfmpegCopyInput.cpp
+                                              ${CMAKE_SOURCE_DIR}/video/FfmpegCopyHw.cpp
+                                              ${CMAKE_SOURCE_DIR}/video/FfmpegCopyAudio.cpp)
+    target_include_directories(rni-video-ffmpeg${_ff} PRIVATE ${CMAKE_SOURCE_DIR} "${_ffdir}/include")
+    target_compile_definitions(rni-video-ffmpeg${_ff} PRIVATE RNI_FF_RELEASE=${_ff})
+    target_sources(rn-impeller PRIVATE $<TARGET_OBJECTS:rni-video-ffmpeg${_ff}>)
+    target_compile_definitions(rn-impeller PRIVATE RNI_FFMPEG_COPY_${_ff}=1)
+    list(APPEND RNI_FFMPEG_BUILT ${_ff})
+  endforeach()
+endif()
+if(RNI_FFMPEG_BUILT)
+  target_sources(rn-impeller PRIVATE ${CMAKE_SOURCE_DIR}/video/FfmpegSelect.cpp
+                                     ${CMAKE_SOURCE_DIR}/video/VideoPlayerFfmpeg.cpp
+                                     ${CMAKE_SOURCE_DIR}/video/VideoPlayerAudio.cpp
+                                     ${CMAKE_SOURCE_DIR}/video/AudioSinkAlsa.cpp)
+  target_link_libraries(rn-impeller PRIVATE ${CMAKE_DL_LIBS})
+  message(STATUS "rn-impeller: video backend ffmpeg (dlopen), copies: ${RNI_FFMPEG_BUILT}")
+else()
+  target_sources(rn-impeller PRIVATE ${CMAKE_SOURCE_DIR}/video/VideoPlayerNone.cpp)
+  message(STATUS "rn-impeller: video backend none")
+endif()
+
+# web view. The engine side is POSIX only (socket + memfd frames + spawn);
+# WebKit itself lives in rni-webhelper (engine/webview/helper, built against
+# WPE by tools/webhelper-build.sh), so this adds no link dependency at all.
+target_sources(rn-impeller PRIVATE ${CMAKE_SOURCE_DIR}/scenegraph/TextureViewHit.cpp
+                                   ${CMAKE_SOURCE_DIR}/webview/WebViewInput.cpp)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_sources(rn-impeller PRIVATE ${CMAKE_SOURCE_DIR}/webview/WebViewHostLinux.cpp
+                                     ${CMAKE_SOURCE_DIR}/webview/WebHelperLink.cpp)
+  message(STATUS "rn-impeller: web view backend wpe-helper")
+else()
+  target_sources(rn-impeller PRIVATE ${CMAKE_SOURCE_DIR}/webview/WebViewNone.cpp)
+  message(STATUS "rn-impeller: web view backend none")
+endif()
 
 target_include_directories(rn-impeller PRIVATE
   ${CMAKE_SOURCE_DIR}
@@ -516,7 +609,8 @@ if(RNI_WITH_WINDOW AND WIN32)
   target_compile_definitions(rn-impeller PRIVATE RNI_WITH_WINDOW=1)
   target_link_libraries(rn-impeller PRIVATE glfw)
 elseif(RNI_WITH_WINDOW)
-  set(GLFW_DIR "${CMAKE_SOURCE_DIR}/third_party/glfw/install")
+  set(GLFW_DIR "${CMAKE_SOURCE_DIR}/third_party/glfw/install"
+      CACHE PATH "GLFW install prefix (tools/glfw-fetch.sh; the linux-arm64 cross build passes its own)")
   if(NOT EXISTS "${GLFW_DIR}/lib/libglfw3.a")
     message(FATAL_ERROR "GLFW not found at ${GLFW_DIR}. Run: bash tools/glfw-fetch.sh")
   endif()
@@ -547,11 +641,31 @@ elseif(RNI_WITH_WINDOW)
       "${CMAKE_SOURCE_DIR}/modules/NotificationsDarwin.mm"
       PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   else()
-    set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
-    target_link_libraries(rn-impeller PRIVATE
-      "${GLFW_DIR}/lib/libglfw3.a"
-      "-L${X11_SYSROOT}/usr/lib/x86_64-linux-gnu"
-      X11 Xrandr Xcursor Xi Xinerama m pthread dl)
+    if(RNI_X11_DLOPEN)
+      # linux-arm64 (the board): the image is Wayland-only and has no libX11.
+      # GLFW 3.4 dlopens its X11/Wayland libraries itself; the platform-view
+      # Xlib calls go through host/X11Dl.h, so nothing links X11 by name.
+      target_compile_definitions(rn-impeller PRIVATE RNI_X11_DLOPEN=1)
+      target_link_libraries(rn-impeller PRIVATE
+        "${GLFW_DIR}/lib/libglfw3.a" m pthread dl)
+    else()
+      set(X11_SYSROOT "${CMAKE_SOURCE_DIR}/third_party/x11-sysroot")
+      target_link_libraries(rn-impeller PRIVATE
+        "${GLFW_DIR}/lib/libglfw3.a"
+        "-L${X11_SYSROOT}/usr/lib/x86_64-linux-gnu"
+        X11 Xrandr Xcursor Xi Xinerama m pthread dl)
+    endif()
+    if(RNI_WITH_WAYLAND)
+      # wl_touch: GLFW 3.4's Wayland backend binds no touch device, so a
+      # touchscreen under Weston never reaches a GLFW callback. The engine
+      # listens on GLFW's own wl_display (host/WaylandTouch.cpp).
+      find_library(RNI_WAYLAND_CLIENT_LIB NAMES wayland-client REQUIRED)
+      find_path(RNI_WAYLAND_CLIENT_INC wayland-client.h REQUIRED)
+      target_sources(rn-impeller PRIVATE ${CMAKE_SOURCE_DIR}/host/WaylandTouch.cpp)
+      target_compile_definitions(rn-impeller PRIVATE RNI_WITH_WAYLAND=1)
+      target_include_directories(rn-impeller SYSTEM PRIVATE "${RNI_WAYLAND_CLIENT_INC}")
+      target_link_libraries(rn-impeller PRIVATE "${RNI_WAYLAND_CLIENT_LIB}")
+    endif()
   endif()
 endif()
 

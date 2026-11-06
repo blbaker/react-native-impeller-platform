@@ -45,7 +45,7 @@ run_gate "$BAK/control.log" || { tail -8 "$BAK/control.log" >&2; fail "control F
 echo "   OK: control passes"
 
 echo "== M1: windowed boot waits for JS idle again =="
-mutate "$MAIN" "host.waitForJsQueueDrained(10000)" "host.waitForJsIdle(10000)"
+mutate "$MAIN" "host.waitForJsQueueDrained(rni::testsync::ScaledMs(10000))" "host.waitForJsIdle(rni::testsync::ScaledMs(10000))"
 check M1 "first frame is HOME"
 
 echo "== M2: boot barrier at ImmediatePriority (scheduleWork) =="

@@ -238,6 +238,10 @@ const OWN_SPEC_FOR = {
   RNViewShot: 'src/viewshot/index.js',
   // Desktop notifications. Our own module: its JS half is package/src/notifications.
   Notifications: 'src/notifications/index.js',
+  // Our own module: its JS half is package/src/video (expo-video shape).
+  ImpellerVideo: 'src/video/index.js',
+  // Our own module: its JS half is package/src/webview (react-native-webview shape).
+  ImpellerWebView: 'src/webview/index.js',
 };
 // Where OWN_SPEC_FOR paths resolve: our installed package, not react-native.
 const OWN_PKG = 'node_modules/react-native-impeller-platform';

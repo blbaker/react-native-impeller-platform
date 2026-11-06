@@ -33,6 +33,26 @@ void SceneGraph::releaseExternalTextures() {
   extTextureCache_.clear();
 }
 
+// A removed <ImpellerTextureView> (an unmounted video or web view) is never
+// painted again, so paintExternalTexture's no-frame branch never releases its
+// upload: one full-size RGBA texture per unmount stayed on the GPU for good
+//. The upload job holds its own texture reference
+// (UploadPayload), so dropping the cache's here cannot free one in flight.
+void SceneGraph::pruneExternalTexturesLocked() {
+  for (auto it = extTextureCache_.begin(); it != extTextureCache_.end();) {
+    auto n = nodes_.find(it->first);
+    if (n != nodes_.end() && n->second.isExternalTexture) {
+      ++it;
+      continue;
+    }
+    if (it->second.slot.texture) ImpellerTextureRelease(it->second.slot.texture);
+    std::printf("rn-impeller: ext_texture_prune tag=%d %dx%d left=%zu\n", (int)it->first,
+                it->second.slot.w, it->second.slot.h, extTextureCache_.size() - 1);
+    std::fflush(stdout);
+    it = extTextureCache_.erase(it);
+  }
+}
+
 void SceneGraph::paintExternalTexture(ImpellerDisplayListBuilder builder, const SceneNode& node,
                                       float x, float y, float w, float h, float alpha) {
   if (textureRegistry_ == nullptr || w <= 0.0f || h <= 0.0f) return;

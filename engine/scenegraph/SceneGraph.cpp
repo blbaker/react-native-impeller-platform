@@ -607,6 +607,9 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
         node.showsVerticalScrollIndicator = sp->showsVerticalScrollIndicator;
         node.showsHorizontalScrollIndicator = sp->showsHorizontalScrollIndicator;
         node.scrollIndicatorStyle = static_cast<int>(sp->indicatorStyle);
+        node.scrollEnabled = sp->scrollEnabled;
+        node.pagingEnabled = sp->pagingEnabled;
+        node.decelerationRate = (float)sp->decelerationRate;
         // contentOffset is applied on mount and whenever the prop value changes;
         // an unrelated re-render must not snap a scrolled list back.
         const float cox = (float)sp->contentOffset.x, coy = (float)sp->contentOffset.y;
@@ -863,6 +866,8 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
   // <Image>. A19: RN's ImageProps (sources, resizeMode, tintColor).
   if (node.componentName == "Image") {
     node.isImage = true;
+    const std::vector<SceneNode::ImageSrc> prevSources = std::move(node.imgSources);
+    const std::string prevDefault = node.imgDefaultUri;
     node.imgSources.clear();
     node.imgHasTint = false;
     node.imgDefaultUri.clear();
@@ -878,6 +883,12 @@ void SceneGraph::updateFromShadowView(SceneNode& node,
         colorToFloats(ip->tintColor, node.imgTint);
       }
     }
+    // a source change can leave the old source's texture unreferenced (a new node cannot).
+    bool sameSources = prevDefault == node.imgDefaultUri && prevSources.size() == node.imgSources.size();
+    for (size_t i = 0; sameSources && i < prevSources.size(); ++i) {
+      sameSources = prevSources[i].uri == node.imgSources[i].uri;
+    }
+    if (!sameSources && (!prevSources.empty() || !prevDefault.empty())) ++imageRefsGen_;
     {
       std::lock_guard<std::mutex> lock(imageDamage_->mutex);
       if (!imageDamage_->wake) {
@@ -1261,6 +1272,9 @@ void SceneGraph::applyMutations(
       }
       case react::ShadowViewMutation::Delete: {
         damage_.MarkTag(m.oldChildShadowView.tag);  // FP-18: its old bounds
+        if (auto d = nodes_.find(m.oldChildShadowView.tag); d != nodes_.end() && d->second.isImage) {
+          ++imageRefsGen_;  // its texture may now be unreferenced
+        }
         nodes_.erase(m.oldChildShadowView.tag);
         paraCache_->Erase(m.oldChildShadowView.tag);
         if (log) {
@@ -3925,6 +3939,8 @@ int SceneGraph::paintLocked(ImpellerDisplayListBuilder builder,
   pvBeginWalkLocked();  // FP-44
   damageSpread_ = 0;
   imageTextures_.BeginFrame();  // FP-56: once per frame walk (slice/snapshot walks only sweep)
+  if (!cullActive_) pruneExternalTexturesLocked();
+  if (!cullActive_) pruneImageTexturesLocked();
   rebuildPaintRegistriesLocked();
   svgUseDepth_ = 0;
   spinnerAnimating_.store(false, std::memory_order_relaxed);

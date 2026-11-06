@@ -200,6 +200,10 @@ struct SceneNode {
   bool showsVerticalScrollIndicator{true};
   bool showsHorizontalScrollIndicator{true};
   int scrollIndicatorStyle{0};
+  // Touch drag-to-scroll (fabric/TouchScroll.h): BaseScrollViewProps values.
+  bool scrollEnabled{true};
+  bool pagingEnabled{false};
+  float decelerationRate{0.998f};
   bool contentOffsetSeen{false};
   float contentOffsetPropX{0.0f}, contentOffsetPropY{0.0f};
 
@@ -606,6 +610,20 @@ class SceneGraph {
   // ScrollView.
   ScrollResult scrollTo(facebook::react::Tag tag, float x, float y,
                         bool toEnd);
+
+  // Touch drag-to-scroll (SceneGraphTouchScroll.cpp). The ScrollView a touch
+  // drag at (x, y) moves on that axis: the nearest one above the hit that is
+  // scrollEnabled and overflows that way, or state.tag 0. Moves nothing.
+  struct TouchScrollTarget {
+    ScrollResult state;
+    bool paging{false};
+    float decelerationRate{0.998f};
+  };
+  TouchScrollTarget touchScrollTargetAt(float x, float y, bool horizontal);
+  // Offset and extent of ScrollView `tag` (tag 0 if it is not one).
+  ScrollResult scrollStateOf(facebook::react::Tag tag);
+  // True if the node hit at (x, y) is `tag` or inside it.
+  bool hitIsInside(facebook::react::Tag tag, float x, float y);
   // item 7. Sets an UNFOCUSED field's displayed value (setTextAndSelection
   // on a field that is not being edited).
   void setTextInputValue(facebook::react::Tag tag, const std::string& value);
@@ -758,6 +776,16 @@ class SceneGraph {
   // per-node state and cannot drift out of sync with what is on screen --
   // any future change to paint order is a change to hit order for free.
   facebook::react::Tag hitTest(float x, float y);
+
+  // Web view input (engine/webview/WebViewInput.cpp). The topmost hit node at
+  // (x, y) when it is an <ImpellerTextureView>: its textureId and its absolute
+  // rect in layout points, so a web view's texture can take the event. False
+  // when anything else (an overlay, empty space) is topmost there.
+  struct TextureViewHit {
+    int64_t textureId{0};
+    float x{0}, y{0}, w{0}, h{0};
+  };
+  bool textureViewAt(float x, float y, TextureViewHit* out);
 
   // The retained event emitter for `tag`, or nullptr.
   //
@@ -992,6 +1020,8 @@ class SceneGraph {
   void paintExternalTexture(ImpellerDisplayListBuilder builder, const SceneNode& node,
                             float x, float y, float w, float h, float alpha);
   void releaseExternalTextures();  // caller holds mutex_
+  void pruneExternalTexturesLocked();  // drops uploads of removed texture nodes; per frame walk
+  void pruneImageTexturesLocked();  // textures no mounted <Image> names; per frame walk
   // <world> ENG-10. Paints the store's drawSprites list for node.worldRasterName
   // OVER the world buffer, back-to-front, one DrawTextureRect per sprite from
   // the textureId-keyed atlas cache. Returns false when there is no list.
@@ -1168,6 +1198,9 @@ class SceneGraph {
   std::chrono::steady_clock::time_point spinnerEpoch_{std::chrono::steady_clock::now()};
   // A19: <Image> textures, one per decoded source.
   rni::ImageTextures imageTextures_;
+  // bumped when an <Image> node is deleted or changes source; the prune runs when it moved.
+  uint64_t imageRefsGen_{0};
+  uint64_t imageRefsPruned_{0};
   // SC-31: a finished image load repaints through this (cleared on teardown).
   std::shared_ptr<rni::ImageDamageSink> imageDamage_ = std::make_shared<rni::ImageDamageSink>();
   // P12-01: the wake fired by bumpVersion(). Guarded by its OWN mutex (never

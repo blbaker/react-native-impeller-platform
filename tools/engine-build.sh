@@ -72,7 +72,10 @@ fi
 VERSION="$(node -p "require('./package/package.json').version")"
 
 case "${PLATFORM}" in
-  linux)  ;;
+  # linux matrix M1: both linux arches (x64 native, arm64 cross) build through
+  # ONE script with the same window stack (GLFW Wayland+X11, WaylandTouch,
+  # X11 dlopen) and the same NEEDED contract. Everything below is darwin's.
+  linux)  exec bash tools/engine-build-linux.sh --arch "${ARCH}" ;;
   darwin) ;;
   win32)
     case "$(uname -s)" in
@@ -101,7 +104,7 @@ case "$(uname -s)" in
     STRIP_CMD="strip --strip-unneeded"
     ;;
 esac
-JOBS="$(${NPROC_CMD})"
+JOBS="${JOBS:-$(${NPROC_CMD})}"
 
 SDK="${IMPELLER_SDK:-}"
 if [ -z "${SDK}" ]; then
@@ -179,6 +182,18 @@ esac
 [ -f "${HERMES_VM}" ] \
   && [ -f "engine/third_party/hermes/API/hermes/hermes.h" ] \
   || bash tools/hermes-build.sh
+
+# GLFW, every linux build and not only the first: glfw-fetch.sh clones 3.4 if
+# absent and applies tools/glfw-patches (the no-wl_seat segfault; it fails if
+# the patch is not in), then an incremental build + install so a patched
+# source reaches the archive. This x64 GLFW is X11-only (wl_init.c is not
+# compiled); the arm64 build (engine-build-linux-arm64.sh) is the Wayland one.
+if [ "${PLATFORM}" = "linux" ]; then
+  CMAKE_BUILD_PARALLEL_LEVEL="${JOBS}" bash tools/glfw-fetch.sh \
+    || { echo "engine-build: FAIL — tools/glfw-fetch.sh" >&2; exit 1; }
+  { cmake --build engine/third_party/glfw/build -j"${JOBS}" && cmake --install engine/third_party/glfw/build; } > /dev/null \
+    || { echo "engine-build: FAIL — glfw incremental build (engine/third_party/glfw/build)" >&2; exit 1; }
+fi
 
 echo "engine-build: configuring + compiling ${TRIPLE} host (cmake)"
 # ⛔ CMAKE 4 REMOVED COMPATIBILITY WITH cmake_minimum_required(<3.5), AND OUR
