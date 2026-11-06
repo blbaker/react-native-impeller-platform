@@ -1,0 +1,48 @@
+GLFW 3.4 Wayland: glfwInit segfaults on a compositor with no wl_seat.
+
+Upstream fix: glfw/glfw 3573c5a890 "Wayland: Fix segfault when there is no seat"
+(2024-03-25, fixes glfw#2517, after the 3.4 tag). This is that commit's
+src/wl_init.c hunk, unchanged, cut against the 3.4 tag.
+
+_glfwInitWayland called wl_seat_get_version(_glfw.wl.seat) unconditionally.
+_glfw.wl.seat is NULL when the compositor advertises no wl_seat (headless
+Weston with no input module; a kiosk Weston with require-input=false and no
+touch panel or keyboard attached), so the call dereferences NULL and the
+engine exits 139 right after window_title=. The fix creates the key-repeat
+timerfd when a seat is bound instead, so a seat that appears after init (a
+keyboard or touch panel plugged in later) still gets key repeat.
+
+Applied by tools/glfw-fetch.sh on Linux. The fetch fails if this patch no
+longer applies (a GLFW bump): drop it once the pinned GLFW contains 3573c5a.
+
+diff --git a/src/wl_init.c b/src/wl_init.c
+index 3aff476..e5f5f3a 100644
+--- a/src/wl_init.c
++++ b/src/wl_init.c
+@@ -137,6 +137,13 @@ static void registryHandleGlobal(void* userData,
+                 wl_registry_bind(registry, name, &wl_seat_interface,
+                                  _glfw_min(4, version));
+             _glfwAddSeatListenerWayland(_glfw.wl.seat);
++
++            if (wl_seat_get_version(_glfw.wl.seat) >=
++                WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION)
++            {
++                _glfw.wl.keyRepeatTimerfd =
++                    timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
++            }
+         }
+     }
+     else if (strcmp(interface, "wl_data_device_manager") == 0)
+@@ -853,12 +860,6 @@ int _glfwInitWayland(void)
+         }
+     }
+ 
+-    if (wl_seat_get_version(_glfw.wl.seat) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION)
+-    {
+-        _glfw.wl.keyRepeatTimerfd =
+-            timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+-    }
+-
+     if (!_glfw.wl.wmBase)
+     {
+         _glfwInputError(GLFW_PLATFORM_ERROR,

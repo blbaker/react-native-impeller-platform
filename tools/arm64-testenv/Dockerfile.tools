@@ -1,0 +1,10 @@
+FROM rni-arm64-testenv:bookworm
+# Test tools for the arm64 container: the Weston touch-injection module
+# (rni-touch-inject.so) built natively against Debian's libweston-10.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      gcc libc6-dev libweston-10-dev libwayland-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+COPY rni-touch-inject.c /opt/rni-tools/
+RUN gcc -shared -fPIC -O2 -Wall -o /opt/rni-tools/rni-touch-inject.so /opt/rni-tools/rni-touch-inject.c \
+      $(pkg-config --cflags --libs libweston-10 wayland-server) \
+    && ls -la /opt/rni-tools/

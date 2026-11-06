@@ -1,0 +1,12 @@
+FROM rni-arm64-testenv:bookworm
+# Build sysroot for the linux-arm64 cross build: the runtime test env plus the
+# -dev packages the engine, GLFW (X11 + Wayland) and OpenSSL link against.
+# tools/arm64-sysroot.sh exports this image's filesystem and relativises its
+# absolute symlinks so clang --sysroot can use it from the x86_64 host.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      libc6-dev libstdc++-12-dev libgcc-12-dev linux-libc-dev \
+      libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxext-dev libxfixes-dev libxrender-dev \
+      libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
+      libegl-dev libgles-dev libdrm-dev \
+      libssl-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*

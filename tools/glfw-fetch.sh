@@ -16,11 +16,21 @@
 # compositor with one less build dependency. If a later host has neither, the
 # failure is a clean CMake configure error naming the missing package rather
 # than a link error deep in the engine build.
+#
+#   bash tools/glfw-fetch.sh                clone + patch + X11-only build
+#   bash tools/glfw-fetch.sh --source-only  clone + patch + Xinerama staging, no
+#                                           build (engine-build-linux.sh builds
+#                                           GLFW itself, Wayland + X11)
+# Env: GLFW_SRC (default engine/third_party/glfw), GLFW_GIT_URL, GLFW_VERSION,
+#      RNI_GLFW_SKIP_SEAT_GUARD=1 (mutation check only: leave the no-seat crash in).
 set -euo pipefail
 
 GLFW_VERSION="${GLFW_VERSION:-3.4}"
+GLFW_GIT_URL="${GLFW_GIT_URL:-https://github.com/glfw/glfw.git}"
+SOURCE_ONLY=0
+[ "${1:-}" = "--source-only" ] && SOURCE_ONLY=1
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$ROOT/engine/third_party/glfw"
+SRC="${GLFW_SRC:-$ROOT/engine/third_party/glfw}"
 BUILD="$SRC/build"
 PREFIX="$SRC/install"
 SYSROOT="$ROOT/engine/third_party/x11-sysroot"
@@ -65,7 +75,44 @@ ensure_xinerama() {
   echo "xinerama: staged at $SYSROOT"
 }
 
-if [ -f "$PREFIX/lib/libglfw3.a" ]; then
+# ⛔ GLFW 3.4's _glfwInitWayland calls wl_seat_get_version(_glfw.wl.seat) with
+# seat == NULL when the compositor advertises no wl_seat (Weston with no input
+# module or device: exit 139 right after window_title=). The patch is upstream
+# 3573c5a's hunk (tools/glfw-patches/). Linux only: darwin never compiles
+# wl_init.c. Idempotent. It FAILS when the patch neither applies nor is already
+# in, so a GLFW bump cannot silently drop the fix.
+# GNU patch, not `git apply`: git apply run inside a non-git tree that sits in
+# another repo's work tree prints "Skipped patch" and exits 0 having changed
+# nothing (measured on this repo).
+SEAT_PATCH="$ROOT/tools/glfw-patches/0001-wayland-no-seat-segfault.patch"
+UNGUARDED='    if (wl_seat_get_version(_glfw.wl.seat) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION)'
+MOVED='            if (wl_seat_get_version(_glfw.wl.seat) >='
+apply_seat_guard() {
+  local f="$SRC/src/wl_init.c" p=(patch -p1 -f -s --fuzz=0 --no-backup-if-mismatch -d "$SRC" -i "$SEAT_PATCH")
+  [ -f "$f" ] || { echo "GLFW_SEAT_GUARD_FAIL: no $f"; exit 1; }
+  if [ "${RNI_GLFW_SKIP_SEAT_GUARD:-0}" = 1 ]; then
+    echo "GLFW_SEAT_GUARD SKIPPED (RNI_GLFW_SKIP_SEAT_GUARD=1, mutation check only: this GLFW segfaults with no wl_seat)"
+    return 0
+  fi
+  if "${p[@]}" -R --dry-run > /dev/null 2>&1; then
+    echo "GLFW_SEAT_GUARD already applied ($f)"
+  elif "${p[@]}" --dry-run > /dev/null 2>&1; then
+    "${p[@]}" || { echo "GLFW_SEAT_GUARD_FAIL: patch failed after a clean dry run"; exit 1; }
+    echo "GLFW_SEAT_GUARD applied ($f: upstream glfw 3573c5a)"
+  else
+    echo "GLFW_SEAT_GUARD_FAIL: $SEAT_PATCH neither applies to nor is already in $f."
+    echo "  The patch expects GLFW 3.4's unguarded line:$UNGUARDED"
+    echo "  A GLFW bump? If the new GLFW contains upstream 3573c5a, drop the patch; otherwise re-cut it."
+    exit 1
+  fi
+  # Check the file, not patch's exit code.
+  if grep -qF "$UNGUARDED" "$f" || [ "$(grep -cF "$MOVED" "$f")" -ne 1 ]; then
+    echo "GLFW_SEAT_GUARD_FAIL: $f still calls wl_seat_get_version at init, or the seat-bind block is missing"
+    exit 1
+  fi
+}
+
+if [ "$(uname -s)" = "Darwin" ] && [ -f "$PREFIX/lib/libglfw3.a" ]; then
   echo "GLFW_ALREADY_BUILT $PREFIX/lib/libglfw3.a"
   exit 0
 fi
@@ -91,7 +138,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   if [ ! -f "$SRC/src/cocoa_init.m" ]; then
     echo "=== [1/3] fetching glfw $GLFW_VERSION (cocoa) ==="
     rm -rf "$SRC"
-    git clone --depth 1 --branch "$GLFW_VERSION" https://github.com/glfw/glfw.git "$SRC"
+    git clone --depth 1 --branch "$GLFW_VERSION" "$GLFW_GIT_URL" "$SRC"
   fi
 
   for f in src/cocoa_init.m src/cocoa_window.m src/cocoa_monitor.m \
@@ -140,7 +187,16 @@ mkdir -p "$(dirname "$SRC")"
 if [ ! -d "$SRC/.git" ] && [ ! -f "$SRC/CMakeLists.txt" ]; then
   echo "=== [1/3] fetching glfw $GLFW_VERSION ==="
   rm -rf "$SRC"
-  git clone --depth 1 --branch "$GLFW_VERSION" https://github.com/glfw/glfw.git "$SRC"
+  git clone --depth 1 --branch "$GLFW_VERSION" "$GLFW_GIT_URL" "$SRC"
+fi
+apply_seat_guard
+if [ "$SOURCE_ONLY" = 1 ]; then
+  echo "GLFW_SOURCE_READY $SRC"
+  exit 0
+fi
+if [ -f "$PREFIX/lib/libglfw3.a" ]; then
+  echo "GLFW_ALREADY_BUILT $PREFIX/lib/libglfw3.a"
+  exit 0
 fi
 
 echo "=== [2/3] configuring (X11 on, Wayland off) ==="

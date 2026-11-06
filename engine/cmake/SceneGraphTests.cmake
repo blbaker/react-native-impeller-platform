@@ -47,6 +47,7 @@ if(NOT WIN32 AND NOT ANDROID)
     scenegraph/DrawOpHooksObjects.cpp
     scenegraph/TextureRegistry.cpp  # FP-42/43/44 (lane A), linked by SceneGraph.cpp
     scenegraph/ExternalTexturePaint.cpp
+    scenegraph/ImageTexturePrune.cpp
     scenegraph/PlatformViewRecord.cpp
     scenegraph/SnapshotController.cpp
     scenegraph/SnapshotRecord.cpp
@@ -57,7 +58,9 @@ if(NOT WIN32 AND NOT ANDROID)
     text/TypographyContexts.cpp
     text/FontFamily.cpp
     text/FontFallback.cpp
+    host/OptionalLibs.cpp  # fontconfig soname list (FontFamily / FontFallback)
     base/Trace.cpp
+    base/MemTrim.cpp  # fabric's ImageIoPool requests trims
     base/ProgramCount.cpp
     base/GlLimits.cpp
     base/GpuAvailability.cpp

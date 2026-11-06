@@ -42,6 +42,7 @@
   },
   "optionalDependencies": {
     "@blbaker/react-native-impeller-platform-engine-darwin-arm64": "0.8.7",
+    "@blbaker/react-native-impeller-platform-engine-linux-arm64": "0.8.7",
     "@blbaker/react-native-impeller-platform-engine-linux-x64": "0.8.7",
     "@blbaker/react-native-impeller-platform-engine-win32-x64": "0.8.7"
   },

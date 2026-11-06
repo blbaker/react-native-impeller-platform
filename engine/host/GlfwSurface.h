@@ -84,6 +84,19 @@ class GlfwSurface {
   }
   const std::string& title() const { return title_; }
 
+  // --window-hidden (GlfwSurfaceHidden.cpp). Call BEFORE initWindow: the
+  // window is created invisible and unfocused, darwin never activates the
+  // app, and the surface is a fixed 1x canvas of the window's size in screen
+  // coordinates (width() == pointWidth() on every display).
+  void setHidden(bool on) { hidden_ = on; }
+  bool hidden() const { return hidden_; }
+  // Main thread, once per frame: reads back visibility/focus/activation.
+  void sampleHidden();
+  void printHiddenReport(const char* when) const;
+  bool hiddenViolated() const {
+    return hiddenVisibleFrames_ > 0 || hiddenFocusedFrames_ > 0 || hiddenActiveFrames_ > 0;
+  }
+
   ImpellerContext context() const { return context_; }
   // FP-44 (PlatformViewsX11Gl.cpp): the X11 window id (0 off X11) and the
   // window's EGL objects (raster thread; replaced by a context-loss rebuild).
@@ -408,6 +421,15 @@ class GlfwSurface {
   // (dispatchHoverPoint, so a move while pressed is a drag).
   void synthesiseMouse(int op, double screenX, double screenY, bool shift);
 
+  // One finger of a touchscreen (wl_touch, and the gate's t* hook ops): op 0
+  // down, 1 up, 2 move, 3 cancel. It drives the mouse entry points above, so
+  // a tap is a click, with inputIsTouch() true for the duration. That flag is
+  // what lets the host run touch-only gestures (ScrollView drag-to-scroll)
+  // without changing what a mouse drag does on the desktop.
+  void synthesiseTouch(int op, double screenX, double screenY);
+  bool inputIsTouch() const { return touchInput_; }
+  bool touchCancelling() const { return touchCancel_; }
+
   // desktop-input-gap item 6. Synthesises ANY button (left included) with
   // FULL modifiers, through dispatchCursorPoint (button 0) or
   // dispatchExtraButton (1/2/3/4) — the SAME entry points the real GLFW
@@ -531,6 +553,17 @@ class GlfwSurface {
 
  private:
   std::string title_ = "React Native (Impeller)";
+  // --window-hidden state (GlfwSurfaceHidden.cpp).
+  bool hidden_ = false;
+  const char* hiddenPolicy_ = "n/a";  // darwin activation policy read back
+  int hiddenSamples_ = 0;
+  int hiddenVisibleFrames_ = 0;
+  int hiddenFocusedFrames_ = 0;
+  int hiddenActiveFrames_ = 0;
+  int hiddenScaleResets_ = 0;
+  // glfwGetFramebufferSize, except a hidden surface reports its window size
+  // (1x). Every framebuffer-size read in GlfwSurface goes through this.
+  void framebufferSize(int* w, int* h) const;
   void installRecordHooks(bool rasterThread);  // FP-14
   void captureEglWindow();  // FP-32 (GlfwSurfaceRebuild.cpp)
   int gpuWidth_{0};   // FP-15: the size the fbo-0 wrap was built for (GL thread)
@@ -666,6 +699,9 @@ class GlfwSurface {
   // so `buttons` on a pointer event reflects what is ACTUALLY down, not just
   // the button the current event is about -- the item 6(h) bitmask arm.
   int heldButtons_{0};
+  // Set only inside synthesiseTouch (see there).
+  bool touchInput_{false};
+  bool touchCancel_{false};
   // item 6 (__APPLE__): the current left press was a Ctrl+left secondary
   // click, so its release also goes to the right-button path.
   bool ctrlLeftIsRight_{false};

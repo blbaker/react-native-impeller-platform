@@ -36,6 +36,7 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 . "$CI_TOOLS/ci-triple.sh"
 . "$CI_TOOLS/lib/wait-for.sh"
+. "$CI_TOOLS/lib/qemu-timing.sh"
 BASE_APP="${BASE_APP:-$HOME/.cache/rni/base}"
 FIXTURE="$ROOT/fixtures/p9-scroll"
 
@@ -51,6 +52,14 @@ WIN_W=400
 WIN_H=300
 ROW_H=100
 NOTCH_PT=40
+# Waits for the REAL-wheel arm. Native: first present in 30 s, the hit in 20 s,
+# exit in 60 s. qemu-aarch64 needs ~37 s to reach the first present at all (M3
+# triage: the 30 s wait expired with a correct engine still starting).
+FP_WAIT=30; HIT_WAIT=20; EXIT_WAIT=60
+if rni_is_qemu; then
+  FP_WAIT=240; HIT_WAIT=120; EXIT_WAIT=180
+  rni_qemu_relax "scroll real-wheel waits first_present ${FP_WAIT} s / hit ${HIT_WAIT} s / exit ${EXIT_WAIT} s instead of 30/20/60; every assertion unchanged"
+fi
 
 [ -d "$BASE_APP/node_modules/react-native" ] || bash tools/base-app.sh
 [ -d "$BASE_APP/node_modules/react-native" ] || fail "no base RN app at $BASE_APP"
@@ -181,14 +190,14 @@ else
               --width "$WIN_W" --height "$WIN_H" --quit-on-term > "$REAL_LOG" 2>&1 &
   APP_PID=$!
   rni_track "$APP_PID"
-  rni_wait_line "$REAL_LOG" '^rn-impeller: first_present_ms=' 30 "$APP_PID"
+  rni_wait_line "$REAL_LOG" '^rn-impeller: first_present_ms=' "$FP_WAIT" "$APP_PID"
   WRC=$?
   [ "$WRC" -eq 0 ] || { tail -20 "$REAL_LOG" | sed 's/^/   /' >&2; fail "the window never reported its first present (wait rc=$WRC)"; }
   "$XPY" "$XSCROLL" "React Native (Impeller)" 200 150 -2 > "$WORK/xscroll.log" 2>&1
   XRC=$?
-  rni_wait_line "$REAL_LOG" '^rn-impeller: scroll hit=' 20 "$APP_PID"
+  rni_wait_line "$REAL_LOG" '^rn-impeller: scroll hit=' "$HIT_WAIT" "$APP_PID"
   kill -TERM "$APP_PID" 2> /dev/null
-  rni_wait_exit "$APP_PID" 60
+  rni_wait_exit "$APP_PID" "$EXIT_WAIT"
   APPRC=$?
   set -e
   [ "$XRC" -eq 0 ] || { sed 's/^/   /' "$WORK/xscroll.log" >&2; fail "XTest wheel driver failed (rc=$XRC)"; }

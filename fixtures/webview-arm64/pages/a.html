@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WV-A</title>
+<style>
+/* tools/ci-webview-arm64.sh page. Flat colour blocks (exact-colour pixel arm)
+   and document-level input logging (touch arm). Served as /a.html so the
+   committed webview bundle (mode=main) loads it unchanged. */
+body { margin: 0; background: #263238; }
+#hdr { height: 60px; background: #1e88e5; }
+#btn { position: fixed; left: 20px; top: 80px; width: 160px; height: 50px; background: #43a047; }
+#hov { position: fixed; left: 420px; top: 80px; width: 100px; height: 50px; background: #8e24aa; }
+#tz { position: fixed; left: 20px; top: 160px; width: 300px; height: 100px; background: #fb8c00; }
+#lnk { position: fixed; left: 360px; top: 180px; width: 200px; height: 50px; background: #fdd835; }
+</style></head>
+<body>
+<div id="hdr"></div><div id="btn"></div><div id="hov"></div><div id="tz"></div><div id="lnk"></div>
+<script>
+// One console line per observation, prefixed WVPAGE: the WebProcess prints
+// console messages to stdout, which the gate reads from the engine's log.
+const L = (...a) => console.log('WVPAGE ' + a.join(' '));
+const at = (t) => (t && t.id) || 'body';
+document.addEventListener('touchstart', (e) =>
+  L('touchstart', e.touches[0].clientX | 0, e.touches[0].clientY | 0, at(e.target)), {passive: true});
+document.addEventListener('touchend', (e) =>
+  L('touchend', e.changedTouches[0].clientX | 0, e.changedTouches[0].clientY | 0, at(e.target)), {passive: true});
+document.addEventListener('click', (e) => L('click', e.clientX | 0, e.clientY | 0, at(e.target)));
+L('ready', innerWidth + 'x' + innerHeight);
+</script>
+</body></html>

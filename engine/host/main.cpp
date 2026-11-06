@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <thread>
 #include <utility>
@@ -104,9 +105,11 @@
 #include "base/TestSync.h"
 #include "base/ContextFlags.h"
 #include "fabric/ImageStore.h"
+#include "base/MemTrim.h"
 #include "host/Prewarm.h"
 #include "base/ProgramCount.h"
 #include "host/MemoryPressure.h"
+#include "host/Doctor.h"  // linux matrix M2: --doctor
 #include "host/OsAppearance.h"
 #include "host/UnpresentedDamage.h"
 #include "modules/NetworkingModule.h"
@@ -114,6 +117,8 @@
 #include "scenegraph/SceneGraph.h"
 #include "text/FontRegistry.h"
 #include "text/TypographyContexts.h"
+#include "webview/WebViewHost.h"
+#include "webview/WebViewInput.h"
 
 // ENG-22: --font-dir values, registered with each surface's typography context
 // right after init and BEFORE anything measures (see text/FontRegistry.h).
@@ -122,6 +127,10 @@ static std::vector<std::string> gFontDirs;
 // --title: windowed-mode window title (title bar + macOS Window menu). Empty =
 // GlfwSurface's default, "React Native (Impeller)".
 static std::string gWindowTitle;
+// --window-hidden: the --window path on a window that is never shown, never
+// focused and never activates the app, at a fixed 1x --width x --height
+// surface (GlfwSurfaceHidden.cpp).
+static bool gWindowHidden = false;
 
 // Process-start clock for the first_present_ms line. Static init runs before
 // main(), so this is as close to "launch" as the process can see.
@@ -195,7 +204,14 @@ void Usage() {
           "                     patch 0003). Default off (FP-22)\n"
           "                   [--initial-url URL]\n"
           "                   [--window] [--frames N] [--screenshot-after MS]\n"
-          "                   [--screenshot-after-frames N] [--quit-on-term]\n"
+          "                   [--window-hidden]  --window on a window that is never\n"
+          "                     shown or focused and never activates the app, at a\n"
+          "                     fixed 1x --width x --height surface (captures are\n"
+          "                     exactly that size; synthetic input maps 1:1).\n"
+          "                     Real OS input cannot reach it.\n"
+          "                   [--screenshot-after-frames N] [--screenshot-when-file PATH] [--quit-on-term]\n"
+          "                   [--screenshot-series N]  with --screenshot-when-file: N captures\n"
+          "                     (shot-0.ppm ...); the engine removes PATH after each\n"
           "                     (windowed; FP-06 frame-anchored capture, clean\n"
           "                     exit on SIGTERM/SIGINT)\n"
           "                   [--dump-draw-ops <file>]  text log of every Impeller builder call\n"
@@ -211,6 +227,8 @@ void Usage() {
           "                     \"React Native (Impeller)\".\n"
           "                   [--screenshot-first <file.ppm>]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
+          "       rn-impeller --doctor         (key=value: window system, headless EGL\n"
+          "                                     rung, optional libraries, and why)\n"
           "       rn-impeller --test-openurl   (URL predicate self-test)\n"
           "       rn-impeller --test-urlparse  (Networking URL parse self-test)\n"
           "       rn-impeller --test-http      (Networking loopback GET/POST self-test)\n");
@@ -428,6 +446,9 @@ struct MouseSpec {
   // `button` is set (>= 0), the event goes through synthesiseMouseButton.
   int button = -1;
   bool ctrl = false, alt = false, meta = false;
+  // t-prefixed ops (tdown/tup/tmove/tcancel): one touchscreen finger through
+  // GlfwSurface::synthesiseTouch, the entry wl_touch uses. op 3 = cancel.
+  bool touch = false;
 };
 
 // ENG-18. One --type token. The headless probe and the windowed hook both
@@ -496,6 +517,24 @@ static std::string gWindowedTypeSpec;
 // anchored to the frame-anchored hooks, not to a wall clock a loaded box outruns) and
 // --quit-on-term (SIGTERM/SIGINT end the loop like a window close). -1 / false = off.
 static int gScreenshotAfterFrames = -1;
+// linux matrix M5: --screenshot-when-file PATH (windowed) captures --screenshot on the first
+// frame after PATH exists. A gate creates PATH when the CONTENT is ready (a web page has
+// painted), which no wall clock can promise under qemu. It also requests that frame, so a
+// static page under --idle-skip still gets one. Empty = off.
+static std::string gScreenshotWhenFile;
+// linux matrix M6: --screenshot-series N turns that one capture into N. Capture k goes to
+// <screenshot> with "-k" before the extension (shot.ppm -> shot-0.ppm ...), and after each
+// the engine REMOVES the when-file: the gate creates it again when it wants the next one
+// (e.g. once the web view has delivered newer video frames). 0 = one capture, as before.
+static int gScreenshotSeries = 0;
+static int gSeriesTaken = 0;
+static std::string SeriesShotPath(const std::string& path, int k) {
+  const size_t slash = path.find_last_of('/');
+  const size_t dot = path.find_last_of('.');
+  const bool hasExt = dot != std::string::npos && (slash == std::string::npos || dot > slash);
+  const std::string tag = "-" + std::to_string(k);
+  return hasExt ? path.substr(0, dot) + tag + path.substr(dot) : path + tag;
+}
 static bool gQuitOnTerm = false;
 // FP-11: --vsync auto|swap|software|off and --vsync-log (windowed only).
 static rni::FrameScheduler::Source gVsyncSource = rni::FrameScheduler::Source::kAuto;
@@ -638,6 +677,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   rni::GlfwSurface surface;
   std::string error;
   surface.setTitle(gWindowTitle);  // before init: glfwCreateWindow takes it
+  surface.setHidden(gWindowHidden);  // before init: --window-hidden
   surface.setMetal(gGpuBackend == rni::GpuBackend::kMetal);  // FP-21
   std::printf("rn-impeller: window_title=%s\n", surface.title().c_str());
   std::fflush(stdout);
@@ -690,6 +730,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
          (float)pxHeight / pointScale, pointScale,
          pointScaleGiven ? " (--scale override)" : " (from framebuffer)");
   fflush(stdout);
+  surface.printHiddenReport("init");  // --window-hidden only
 
   // The cursor conversion divides by this. Set from the SAME derived value the
   // layout uses, and re-set on every resize below, so a click can never be
@@ -1169,7 +1210,28 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // mutated, which is how a real UI toolkit behaves.
   int touchHits = 0;
   int touchDowns = 0;
+  // web view: a web view under the cursor takes the event first
+  // (engine/webview/WebViewInput.h has the routing model).
+  rni::WebViewInput webInput(&sceneGraph);
   surface.setMouseButtonHandler([&](float x, float y, bool down) {
+    {
+      const auto wm = surface.lastMods();
+      if (webInput.MouseButton(x, y, down, 0,
+                               rni::WebViewInput::Mods(wm.shift, wm.ctrl, wm.alt, wm.meta),
+                               surface.lastClickCount())) {
+        if (down) (void)fabric.focusTextInputAt(x, y, 1, false);  // blur any RN field
+        return;
+      }
+    }
+    // Touch drag-to-scroll: a finger's press arms it (and stops a fling under
+    // it) before the press reaches JS; its lift ends a drag a ScrollView took.
+    if (surface.inputIsTouch()) {
+      if (down) {
+        fabric.touchScrollDown(x, y);
+      } else {
+        (void)fabric.touchScrollUp(x, y, surface.touchCancelling());
+      }
+    }
     // ENG-DRAG (P0). A press begins a capture and a release ends it, so every
     // cursor-move in between (delivered by the hover handler below) routes to
     // the pressed control, not to whatever is under the cursor now. Without
@@ -1218,6 +1280,10 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // right click must not move the caret or steal focus).
   surface.setExtraButtonHandler(
       [&](const rni::GlfwSurface::ExtraButtonEvent& ev) {
+        if (webInput.MouseButton(ev.x, ev.y, ev.down, ev.button,
+                                 rni::WebViewInput::Mods(ev.shift, ev.ctrl, ev.alt, ev.meta),
+                                 ev.clickCount))
+          return;
         fabric.dispatchPointerButton(ev.x, ev.y, ev.down, ev.button,
                                      ev.buttons, ev.clickCount, ev.shift,
                                      ev.ctrl, ev.alt, ev.meta);
@@ -1232,6 +1298,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   int scrollHits = 0;
   int scrollEvents = 0;
   surface.setScrollHandler([&](float x, float y, float dx, float dy) {
+    if (webInput.Scroll(x, y, dx, dy, 0)) return;  // the page scrolls, not an RN list behind it
     const int hit = session.DispatchScroll(x, y, dx, dy);
     ++scrollEvents;
     if (hit) ++scrollHits;
@@ -1253,6 +1320,20 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // not change, which is what makes the common case silent.
   int lastLoggedCursor = -1;
   surface.setHoverHandler([&](float x, float y) -> int {
+    {
+      const auto wm = surface.lastMods();
+      (void)webInput.MouseMove(x, y, rni::WebViewInput::Mods(wm.shift, wm.ctrl, wm.alt, wm.meta));
+      if (webInput.capturing()) return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
+    }
+    // Touch drag-to-scroll: once a ScrollView owns the finger, the move is
+    // its scroll and nothing else (no selection drag, no hover). A cancel
+    // ends that drag here, before its far-away move could scroll anything.
+    if (surface.inputIsTouch()) {
+      const bool scrolling = surface.touchCancelling()
+                                 ? fabric.touchScrollUp(x, y, true)
+                                 : fabric.touchScrollMove(x, y);
+      if (scrolling) return lastLoggedCursor < 0 ? 0 : lastLoggedCursor;
+    }
     // ENG-DRAG (P0). A cursor-move while a button is held is a DRAG, not a
     // hover: route it to the captured tag (the pressed control) as a Move, and
     // suppress hover enter/leave entirely -- a control being dragged does not
@@ -1294,6 +1375,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // leaves the window, so a control does not stay hovered after the mouse
   // exits. Logs the leave as a transition, same format as the move path.
   surface.setCursorLeaveHandler([&]() {
+    webInput.CursorLeave();
     const int left = fabric.clearHover();
     if (left) {
       printf("rn-impeller: hover_leave tag=%d\n", left);
@@ -1315,6 +1397,11 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // so a keystroke with nothing focused is silently ignored, exactly as a
   // desktop app does. Both print a machine-readable line for the gate.
   surface.setCharHandler([&](unsigned int codepoint) {
+    if (webInput.Char(codepoint, 0)) {
+      printf("rn-impeller: key_char cp=%u webview=%lld\n", codepoint, (long long)webInput.focused());
+      fflush(stdout);
+      return;
+    }
     if (!fabric.hasTextInputFocus()) return;
     const int tag =
         session.DispatchKey(rni::FabricHost::KeyAction::InsertChar, codepoint);
@@ -1322,6 +1409,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     fflush(stdout);
   });
   surface.setKeyHandler([&](rni::GlfwSurface::EditKey key, bool shift) {
+    if (webInput.focused()) return;  // the full key handler below forwards it to the page
     if (!fabric.hasTextInputFocus()) return;
     rni::FabricHost::KeyAction act;
     if (key == rni::GlfwSurface::EditKey::Backspace) {
@@ -1350,6 +1438,13 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // machine-readable proof a gate needs that a key of ANY kind, not just
   // Backspace/Enter, reached the host at all.
   surface.setFullKeyHandler([&](const rni::GlfwSurface::KeyEvent& ev) {
+    if (webInput.Key(ev.key, ev.phase != rni::GlfwSurface::KeyPhase::Up,
+                     rni::WebViewInput::Mods(ev.shift, ev.ctrl, ev.alt, ev.meta, ev.capsLock))) {
+      printf("rn-impeller: key_event key=%s webview=%lld\n", ev.key.c_str(),
+             (long long)webInput.focused());
+      fflush(stdout);
+      return;
+    }
     rni::FabricHost::KeyModifiers mods;
     mods.shift = ev.shift;
     mods.ctrl = ev.ctrl;
@@ -1521,6 +1616,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       break;
     }
     rni::testsync::DelayFrame();
+    surface.sampleHidden();  // --window-hidden: visibility/focus/activation readback
     auto loopFrame = std::make_unique<rni::FrameTimingsRecorder>();
     // FP-11: the loop's own requests. Without --idle-skip every iteration is a
     // frame (the old paint-every-frame loop, now paced by vsync); with it only
@@ -1640,6 +1736,11 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // every iteration paints exactly as before. With it a clean iteration skips
     // the paint and SLEEPS below (that sleep, not the paint-skip, is what drops
     // CPU). M1 forces a frame every iteration so the CPU gate fails.
+    // std::filesystem, not POSIX access(): MSVC has no access()/F_OK.
+    std::error_code shotFileErr;
+    const bool shotFileReady = !gScreenshotWhenFile.empty() && !capturedTimed &&
+                               std::filesystem::exists(gScreenshotWhenFile, shotFileErr);
+    if (shotFileReady) scheduler.RequestFrame("screenshot-file");
     const bool shouldPaint =
         (idleSkip && idleMutant == 1) ? true : scheduler.FramePending();
     // FP-15: a full pipeline (raster still on the last two frames) holds the
@@ -1656,6 +1757,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       host.beginAnimationFrame();
       // FP-40: RN's animationTick (LayoutAnimation half), platform thread.
       if (fabric.tickLayoutAnimations()) animatedThisFrame = true;
+      if (fabric.tickTouchScroll()) animatedThisFrame = true;  // fling / page settle
       const unsigned long ticksBefore = host.nativeAnimatedTicks();
       session.PumpNativeAnimated();
       if (host.nativeAnimatedTicks() != ticksBefore) animatedThisFrame = true;
@@ -1665,6 +1767,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // Nothing marks those dirty, so without this they freeze mid-cycle.
     if (idleSkip && (animatedThisFrame || host.nativeAnimatedActive() ||
                      fabric.layoutAnimationActive() ||
+                     fabric.touchScrollAnimating() ||
                      sceneGraph.focusedTextInput() != 0 ||
                      sceneGraph.spinnerAnimating())) {
       scheduler.RequestFrame("clock");
@@ -1688,7 +1791,9 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // --screenshot-after too, both must hold.
     const bool framesReady =
         gScreenshotAfterFrames < 0 || frameIndex >= gScreenshotAfterFrames;
-    const bool msReady = screenshotAfterMs >= 0
+    const bool msReady = !gScreenshotWhenFile.empty()
+                             ? shotFileReady && (screenshotAfterMs < 0 || sinceStartMs >= screenshotAfterMs)
+                             : screenshotAfterMs >= 0
                              ? sinceStartMs >= screenshotAfterMs
                              : gScreenshotAfterFrames >= 0;
     const bool wantTimed =
@@ -1945,10 +2050,12 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
       const size_t idx = (size_t)(frameIndex - mouseAfterFrames);
       if (idx < mouseSequence.size()) {
         const auto& ms = mouseSequence[idx];
-        printf("rn-impeller: mouse_requested op=%d at=%.1f,%.1f shift=%d\n",
-               ms.op, ms.x, ms.y, ms.shift ? 1 : 0);
+        printf("rn-impeller: mouse_requested op=%d at=%.1f,%.1f shift=%d touch=%d\n",
+               ms.op, ms.x, ms.y, ms.shift ? 1 : 0, ms.touch ? 1 : 0);
         fflush(stdout);
-        if (ms.button >= 0 && ms.op != 2) {
+        if (ms.touch) {
+          surface.synthesiseTouch(ms.op, ms.x, ms.y);
+        } else if (ms.button >= 0 && ms.op != 2) {
           surface.synthesiseMouseButton(ms.button, ms.op == 0, ms.x, ms.y,
                                         ms.shift, ms.ctrl, ms.alt, ms.meta);
         } else {
@@ -1980,8 +2087,14 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     }
 
     if (wantTimed && !dropped && !capturedTimed) {
-      capture(screenshotPath, "screenshot");
-      capturedTimed = true;
+      if (gScreenshotSeries > 0 && !gScreenshotWhenFile.empty()) {
+        capture(SeriesShotPath(screenshotPath, gSeriesTaken), "screenshot");
+        std::remove(gScreenshotWhenFile.c_str());  // the gate asks for the next one
+        if (++gSeriesTaken >= gScreenshotSeries) capturedTimed = true;
+      } else {
+        capture(screenshotPath, "screenshot");
+        capturedTimed = true;
+      }
     }
 
     // ── P12-01: off-thread repaint witness + idle sleep + run-window exit ─────
@@ -2190,6 +2303,15 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // window gate could see a hit and still not know whether onPress executed.
   printf("rn-impeller: alerts_after_clicks=%zu\n", host.alerts()->count());
 
+  // --window-hidden: the final readback. A window that was ever visible,
+  // focused or active fails the run instead of printing WINDOW_OK.
+  surface.sampleHidden();
+  surface.printHiddenReport("final");
+  if (surface.hidden() && surface.hiddenViolated()) {
+    fprintf(stderr, "rn-impeller: FATAL: --window-hidden window became visible, focused or active\n");
+    return 5;
+  }
+
   printf("RN_IMPELLER_WINDOW_OK app=%s frames=%d\n", appName.c_str(), frameIndex);
   fflush(stdout);
   // ENG-18: an unfinished --type plan is a failed run, not a quiet exit.
@@ -2227,6 +2349,15 @@ int main(int argc, char** argv) {
   rni::installFeatureFlags();
   rni::trace::SetThreadName("main");
   rni::sanitize::RunTestHooks();
+  // linux matrix M2: key=value report of the window system, headless EGL rung and
+  // optional libraries this machine gets. Before anything starts threads.
+  if (rni::doctor::Requested(argc, argv)) return rni::doctor::Main(argc, argv);
+  // memory audit: glibc's malloc policy is pinned before any thread exists (base/MemTrim.h).
+  rni::memtrim::Configure();
+  rni::memtrim::SetStatsExtra([] {
+    return "image_cache_kb=" + std::to_string(rni::image::CacheBytes() / 1024);
+  });
+  rni::memtrim::StartStats();
   // FP-33: env defaults for hosts without argv (Android); --image-cache-mb below overrides.
   if (const char* e = std::getenv("RNI_IMAGE_CACHE_MB")) rni::image::SetCacheBudget((int64_t)(atof(e) * 1048576.0));
   if (const char* e = std::getenv("RNI_IMAGE_CACHE_FLOOR_MB")) rni::image::SetCacheFloor((int64_t)(atof(e) * 1048576.0));
@@ -2328,7 +2459,8 @@ int main(int argc, char** argv) {
   int charAfterFrames = 0;
   std::vector<CharSpec> charSequence;
   // item 4b. "--mouse-after-frames N:OP@X,Y;..." OP = down|up|move|sdown
-  // (sdown = press with Shift). One event per frame from frame N.
+  // (sdown = press with Shift), or tdown|tup|tmove|tcancel for a touchscreen
+  // finger. One event per frame from frame N.
   int mouseAfterFrames = 0;
   std::vector<MouseSpec> mouseSequence;
   int width = 400, height = 300;
@@ -2394,6 +2526,7 @@ int main(int argc, char** argv) {
     else if (a == "--screenshot") screenshot = next("--screenshot");
     else if (a == "--headless") headless = true;
     else if (a == "--window") windowMode = true;
+    else if (a == "--window-hidden") { windowMode = true; gWindowHidden = true; }
     else if (a == "--frames") frames = atoi(next("--frames").c_str());
     else if (a == "--frame-timings-out") gFrameTimingsOut = next("--frame-timings-out");
     else if (a == "--trace-out") {
@@ -2499,6 +2632,10 @@ int main(int argc, char** argv) {
     else if (a == "--screenshot-first") screenshotFirst = next("--screenshot-first");
     // FP-06 (windowed): capture --screenshot on the first painted frame >= N.
     else if (a == "--screenshot-after-frames") gScreenshotAfterFrames = atoi(next("--screenshot-after-frames").c_str());
+    // linux matrix M5 (windowed): capture --screenshot on the first frame after PATH exists.
+    else if (a == "--screenshot-when-file") gScreenshotWhenFile = next("--screenshot-when-file");
+    // linux matrix M6 (windowed, with --screenshot-when-file): N captures, see gScreenshotSeries.
+    else if (a == "--screenshot-series") gScreenshotSeries = std::max(0, atoi(next("--screenshot-series").c_str()));
     // FP-06 (windowed): SIGTERM/SIGINT quit the loop cleanly (exit counters printed).
     else if (a == "--quit-on-term") gQuitOnTerm = true;
     // "--stall-after-frames N:MS" — starve the frame loop for MS milliseconds
@@ -2837,6 +2974,10 @@ int main(int argc, char** argv) {
             op = op.substr(0, plus);
           }
           int button = -1;
+          if (op == "tdown" || op == "tup" || op == "tmove" || op == "tcancel") {
+            ms.touch = true;
+            op = op.substr(1);
+          }
           if (op.rfind("b4", 0) == 0) { button = 3; op = op.substr(2); }
           else if (op.rfind("b5", 0) == 0) { button = 4; op = op.substr(2); }
           else if (op == "rdown" || op == "rup") { button = 2; op = op.substr(1); }
@@ -2857,14 +2998,16 @@ int main(int argc, char** argv) {
           }
           if (at == std::string::npos || comma == std::string::npos ||
               badMod ||
-              (op != "down" && op != "up" && op != "move" && op != "sdown")) {
+              (op != "down" && op != "up" && op != "move" && op != "sdown" &&
+               !(ms.touch && op == "cancel"))) {
             fprintf(stderr,
                     "rn-impeller: --mouse-after-frames bad event '%s' (want "
-                    "[r|m|l|b4|b5]down|up|move|sdown[+mods]@X,Y)\n",
+                    "[r|m|l|b4|b5]down|up|move|sdown[+mods]@X,Y or "
+                    "tdown|tup|tmove|tcancel@X,Y)\n",
                     seg.c_str());
             return 2;
           }
-          ms.op = op == "up" ? 1 : op == "move" ? 2 : 0;
+          ms.op = op == "up" ? 1 : op == "move" ? 2 : op == "cancel" ? 3 : 0;
           if (op == "sdown") ms.shift = true;
           // A modifier on a plain down/up routes through the full-modifier
           // path as an explicit left-button event.
@@ -3156,6 +3299,11 @@ int main(int argc, char** argv) {
     // its pre-FP-11 timing unless --vsync asks otherwise.
     if (!gVsyncSet && frames > 0) gVsyncSource = rni::FrameScheduler::Source::kPlatform;
     gWindowedTypeSpec = typeSpec;  // ENG-18
+    // The web helper is ended and reaped AFTER RunWindowed: its ReactHost is gone
+    // by then, so every view's kDestroy has been sent (webview_helper_exit line).
+    struct WebHelperReap {
+      ~WebHelperReap() { rni::WebViewHost::Instance().Shutdown(); }
+    } webHelperReap;
     return RunWindowed(sourceUrl, appName, std::move(bundle), 0, bundleSize,
                        colorScheme, initialUrl,
                        widthGiven ? width : 0, heightGiven ? height : 0,

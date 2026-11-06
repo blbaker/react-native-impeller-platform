@@ -1,0 +1,26 @@
+FROM --platform=linux/amd64 ubuntu:24.04
+# x86_64 twin of the arm64 test rootfs + tools image (linux matrix M1): the
+# linux-x64 engine package as a Wayland client of headless Weston + kiosk-shell,
+# with touches injected through libweston's own input path (rni-touch-inject).
+#
+# Why Ubuntu 24.04 and not bookworm like the arm64 image: the x64 package is
+# built natively on this Ubuntu 24.04 host (glibc 2.39, GCC 13), and bookworm's
+# glibc 2.36 / libstdc++ cannot load it. The arm64 package is cross-built
+# against a bookworm sysroot, which is why that image is bookworm. Weston here
+# is 13 (bookworm: 10); rni-touch-inject.c builds against both.
+#
+#   docker build -t rni-x64-tools:noble -f tools/arm64-testenv/Dockerfile.x64 tools/arm64-testenv
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      libegl1 libgles2 libgl1-mesa-dri libgbm1 libegl-mesa0 \
+      libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 \
+      weston xvfb xauth libx11-6 libxcursor1 libxi6 libxrandr2 libxinerama1 libx11-xcb1 \
+      fontconfig fonts-dejavu-core libfreetype6 libfontconfig1 \
+      libstdc++6 libatomic1 libicu74 ca-certificates file binutils python3 procps \
+      gcc libc6-dev libweston-13-dev libwayland-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+COPY rni-touch-inject.c /opt/rni-tools/
+RUN W="$(pkg-config --list-all | grep -o '^libweston-[0-9]*' | head -1)" \
+    && echo "building rni-touch-inject against $W" \
+    && gcc -shared -fPIC -O2 -Wall -o /opt/rni-tools/rni-touch-inject.so /opt/rni-tools/rni-touch-inject.c \
+      $(pkg-config --cflags --libs "$W" wayland-server) \
+    && ls -la /opt/rni-tools/

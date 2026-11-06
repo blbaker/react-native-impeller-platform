@@ -33,6 +33,9 @@ function checkRepo(cwd) {
   const violations = [];
   for (const rel of addedFiles(cwd, base)) {
     if (isOwnedPath(rel)) continue;
+    // Third-party code checked in as-is (a minified player under a fixture's
+    // vendor/ dir) is not ours to split.
+    if (rel.split('/').includes('vendor')) continue;
     if (!CODE_EXTENSIONS.has(path.extname(rel))) continue;
     const abs = path.join(cwd, rel);
     let lines;

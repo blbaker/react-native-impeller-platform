@@ -4,6 +4,7 @@
 // on the JS thread and applies them to the retained SceneGraph.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -12,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "fabric/TouchScroll.h"
 #include "impeller.h"
 #include "scenegraph/TextInputKeyboardTraits.h"
 
@@ -132,6 +134,22 @@ class FabricHost {
   // scrollable node was under the point OR the node found could not emit
   // scroll events, which is what an unregistered ScrollView looks like.
   int dispatchScroll(float x, float y, float dx, float dy);
+
+  // Touch drag-to-scroll (FabricHostTouchScroll.cpp; math in TouchScroll.h).
+  // TOUCH input only: a mouse drag still never scrolls, the wheel does. The
+  // host calls Down on a finger's press (before beginTouchCapture), Move on
+  // each held move and Up on the lift. Move/Up return true when a ScrollView
+  // owns the drag: the host then routes nothing else (JS already got
+  // touchcancel). tickTouchScroll runs the fling/page settle once per frame
+  // and returns true when it moved. Event thread only.
+  void touchScrollDown(float x, float y);
+  bool touchScrollMove(float x, float y);
+  bool touchScrollUp(float x, float y, bool cancelled);
+  bool tickTouchScroll();
+  bool touchScrollAnimating() const;
+  // RN's setIsJSResponder (SchedulerDelegate, JS thread). A responder that
+  // blocks native gestures (PanResponder's default) keeps its drag.
+  void setJsResponder(int tag, bool isResponder, bool blockNative);
 
   // ENG-09 hover/cursor. Result of a hover motion at a point.
   struct HoverResult {
@@ -388,6 +406,15 @@ class FabricHost {
   // endTouchCapture to route Move/Up WITHOUT re-hit-testing, cleared on release.
   // Accessed only from the event thread (all callers are), same as hoveredTag_.
   int capturedTag_{0};
+  // Touch drag-to-scroll. touchScroll_ is event-thread only; the responder
+  // pair is written on the JS thread.
+  touchscroll::State touchScroll_;
+  std::atomic<int> jsResponderTag_{0};
+  std::atomic<bool> jsResponderBlocksNative_{false};
+  void cancelTouchCapture(float x, float y);
+  void applyTouchDrag(float x, float y, double nowMs);
+  void stopTouchScrollMomentum(const char* why);
+  void stopTouchScrollFor(int tag);
   // item 4b: mouse text-selection drag state (0 = no drag).
   // item 6: tag each button was pressed on (0 = none), for click pairing.
   int pointerPressTag_[5]{};

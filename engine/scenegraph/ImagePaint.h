@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace rni {
 
@@ -43,6 +44,10 @@ class ImageTextures {
   void Sweep();
   // Once per painted frame, before the walk: ages the keep-alive set, then sweeps.
   void BeginFrame();
+  // releases the textures of sources no mounted <Image> names (an unmounted screen's
+  // images). Their bitmaps stay in the cache, so a remount uploads again without a decode.
+  // Returns how many were released. Paint thread.
+  size_t ReleaseUnreferenced(const std::unordered_set<std::string>& uris);
   // Runs (any thread) when a reload of an evicted source ends, so the scene repaints.
   void SetReloadWake(std::function<void()> wake) { reloadWake_ = std::move(wake); }
 
