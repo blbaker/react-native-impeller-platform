@@ -135,6 +135,14 @@ jobs:
           command -v ninja >/dev/null || brew install ninja
           cmake --version | head -1
           ninja --version
+          # ⛔ PIN OpenSSL 3. The macos-15 image moved Homebrew's default
+          # OpenSSL to openssl@4 (4.1.0 on image 20261104), which makes
+          # ASN1_STRING opaque, and boost 1.83's asio::ssl
+          # (rfc2818_verification.ipp) no longer compiles against it.
+          # FindOpenSSL reads OPENSSL_ROOT_DIR from the environment.
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          "$(brew --prefix openssl@3)/bin/openssl" version
 
       # cl, link and dumpbin on PATH for the steps that follow. Pinned to the
       # v1.13.0 commit: third-party code running in the job that produces a
