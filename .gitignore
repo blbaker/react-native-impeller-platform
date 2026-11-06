@@ -55,3 +55,6 @@ engine/third_party/sysroot-linux-arm64
 engine/third_party/impeller-sdk-custom-linux-arm64
 engine/third_party/ffmpeg8-linux-*
 engine/build-linux-*/
+
+# Python bytecode (tools/*.py helpers)
+__pycache__/
