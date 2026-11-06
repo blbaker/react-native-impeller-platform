@@ -33,6 +33,7 @@ FIX="$ROOT/fixtures/rn-core/prebuilt"
 BUNDLE="$FIX/rn-core.bundle"
 BIN="${RNI_BIN:-$ROOT/packages-engine/engine-linux-x64/bin/rn-impeller}"
 CHK="$ROOT/tools/rn_core_check.py"
+FF8="${RNI_FFMPEG8_LIB:-$ROOT/engine/third_party/ffmpeg8-linux-x64/lib}"  # video row on a dev host; the board has ffmpeg 8 system-wide (as ci-memory-trim.sh)
 . "$ROOT/tools/lib/qemu-timing.sh"
 DEFAULT_ARMS="image ws anim blur"
 [ "$(uname -s)" = Linux ] && DEFAULT_ARMS="$DEFAULT_ARMS video"
@@ -78,7 +79,7 @@ win_run() {
     ( cd "$(dirname "$BIN")" && TMPDIR="$WORK/$tag-tmp" /bin/zsh "$ROOT/tools/darwin-run-interactive.sh" \
         "$WORK/$tag.log" 40 -- "$BIN" --window-hidden "${args[@]}" ) > "$WORK/$tag.outer" 2>&1 || rc=$?
   else
-    ( cd "$(dirname "$BIN")" && TMPDIR="$WORK/$tag-tmp" xvfb-run -a -f "$WORK/$tag.xauth" \
+    ( cd "$(dirname "$BIN")" && TMPDIR="$WORK/$tag-tmp" LD_LIBRARY_PATH="$FF8${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" xvfb-run -a -f "$WORK/$tag.xauth" \
         -s "-screen 0 1280x1024x24" "$BIN" --window "${args[@]}" ) > "$WORK/$tag.log" 2>&1 || rc=$?
   fi
   [ "$rc" -eq 0 ] || { tail -15 "$WORK/$tag.log" "$WORK/$tag.outer" 2>/dev/null >&2; fail "$tag: engine exited $rc"; }
@@ -236,10 +237,10 @@ arm_video() {
   }
   vrun() {  # tag query: one windowed run of rncore://video, then sanity on its log
     win_run "$1" "rncore://video?src=$src&$2"
-    grep -E 'RNCORE_VIDEO|video id=' "$WORK/$1.log" | sed 's/^/  /'
+    grep -E 'RNCORE_VIDEO|video id=' "$WORK/$1.log" | sed 's/^/  /' || true  # none: the ready-line check below says why
     if grep -qE 'RNCORE_VIDEO (.*ERROR|error)' "$WORK/$1.log"; then fail "video $1: player or capture error"; fi
     grep -q 'RNCORE_VIDEO ready backend=ffmpeg w=320 h=180 duration=12.000' "$WORK/$1.log" ||
-      fail "video $1: no ffmpeg ready line (engine built without tools/ffmpeg-dev-fetch.sh headers?)"
+      fail "video $1: no ffmpeg ready line (no ffmpeg 8 at $FF8 and no ffmpeg 6 copy from tools/ffmpeg-dev-fetch.sh?)"
   }
   vcheck() {  # name check-args...: run one pixel check, keep + print its output
     local out="$WORK/$1.check" rc=0; shift
