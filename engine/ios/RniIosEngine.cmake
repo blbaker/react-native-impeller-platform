@@ -53,6 +53,8 @@ add_library(rni_ios_engine STATIC
   ${_E}/host/ExternalTextureProbe.cpp ${_E}/host/ResizeProbe.cpp
   ${_E}/base/Trace.cpp ${_E}/base/DevToolsFrames.cpp ${_E}/base/SanitizerHooks.cpp
   ${_E}/base/TestSync.cpp ${_E}/base/ContextFlags.cpp
+  # malloc_trim/mallopt only under __linux__ && __GLIBC__; a no-op here.
+  ${_E}/base/MemTrim.cpp
   ${_E}/runtime/AnimationFrameScheduler.cpp ${_E}/runtime/JsThread.cpp ${_E}/runtime/ReactHost.cpp ${_E}/runtime/EngineSession.cpp
   ${_E}/runtime/InspectorHost.cpp ${_E}/runtime/DevToolsTracing.cpp
   ${_E}/modules/PlatformModules.cpp ${_E}/modules/NetworkingModule.cpp
@@ -62,8 +64,11 @@ add_library(rni_ios_engine STATIC
   ${_E}/modules/NotificationsNull.cpp
   ${_E}/fabric/FabricHost.cpp ${_E}/fabric/FabricHostTextEdit.cpp ${_E}/fabric/ComponentRegistry.cpp ${_E}/fabric/LayoutAnimations.cpp
   ${_E}/fabric/ExpoBlurShadowNode.cpp ${_E}/fabric/platform/impeller/PlatformColorTable.cpp
+  ${_E}/fabric/FabricHostTouchScroll.cpp ${_E}/fabric/TouchScroll.cpp
   ${_E}/scenegraph/SceneGraph.cpp ${_E}/scenegraph/SceneGraphContextLoss.cpp
   ${_E}/scenegraph/SceneGraphTextInputHost.cpp ${_E}/scenegraph/SceneGraphTextSelection.cpp
+  ${_E}/scenegraph/SceneGraphTouchScroll.cpp ${_E}/scenegraph/TextureViewHit.cpp
+  ${_E}/scenegraph/ImageTexturePrune.cpp
   ${_E}/scenegraph/TextureRegistry.cpp ${_E}/scenegraph/ExternalTexturePaint.cpp
   ${_E}/scenegraph/PlatformViewRecord.cpp ${_E}/scenegraph/SnapshotController.cpp
   ${_E}/scenegraph/SnapshotRecord.cpp ${_E}/scenegraph/ImageEncode.cpp
