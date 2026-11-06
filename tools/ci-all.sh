@@ -314,6 +314,13 @@ bash tools/ci-window-type.sh | grep -E "WINDOW_TYPE_PASS|NL field"
 echo "### gate 24f2: keys with nothing focused reach the app root (ENG-46)"
 bash tools/ci-key-root.sh | grep -E "KEY_ROOT_GATE_PASS|js: "
 
+# Windowed (xvfb on linux), prebuilt bundle. JS Linking.openURL with & and
+# %HH escapes reaches xdg-open as ONE argv entry, and a hostile URL is refused
+# with nothing exec'd. The Windows arm runs on the engines job (ENG-55).
+# Mutants: mutation-verify-openurl.sh.
+echo "### gate 24f3: windowed Linking.openURL with & and %HH (ENG-38, ENG-55)"
+bash tools/ci-openurl-window.sh | grep -E "OPENURL_WINDOW_PASS|exec: "
+
 # Desktop notifications on a private session bus (dbus-daemon, no display).
 # Mutants: mutation-verify-notifications.sh.
 echo "### gate 24g: Notifications module (freedesktop D-Bus)"
