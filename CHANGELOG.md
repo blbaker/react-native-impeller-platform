@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.7...v0.9.0) (2026-11-06)
+
+
+### Features
+
+* embedded linux: linux-arm64 engine, touch, video, web view, memory pressure ([4a7147c](https://github.com/blbaker/react-native-impeller-platform/commit/4a7147c6a58e892a6c2af2d2bebbeb26b00491ce))
+* embedded linux: linux-arm64 engine, touch, video, web view, memory pressure ([8703124](https://github.com/blbaker/react-native-impeller-platform/commit/870312447ebe6b729919bc9ebd288ba5615b04bb))
+
+
+### Bug Fixes
+
+* **build:** BUILD-INFO records the SDK path relative to the repo ([7289719](https://github.com/blbaker/react-native-impeller-platform/commit/7289719def40e064e9bd82660617468d5d6633b9))
+* **ci:** rn-core's video row loads ffmpeg 8 on a dev host ([3dda57b](https://github.com/blbaker/react-native-impeller-platform/commit/3dda57b6153d2e7276be8f112c2c5b67d65f0514))
+* **ci:** the P4 gate reads the openurl verdict line, not the start of stdout ([71e50eb](https://github.com/blbaker/react-native-impeller-platform/commit/71e50eba4fb42ba46c573815365aba2c55739ad9))
+* **tools:** win-sync skips the linux-only third_party trees ([5375cbe](https://github.com/blbaker/react-native-impeller-platform/commit/5375cbe39f02ace18fa17d7f81d70285314dfde4))
+
 ## [0.8.7](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.6...v0.8.7) (2026-10-24)
 
 
