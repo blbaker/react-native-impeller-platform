@@ -715,6 +715,8 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   glfwGetWindowSize(window_, &winWidth, &winHeight);
   pointWidth_ = winWidth;
   pointHeight_ = winHeight;
+  float contentScaleY = 1.0f;
+  glfwGetWindowContentScale(window_, &contentScale_, &contentScaleY);
 
   // ⛔ OBSERVE THE WINDOW, DO NOT JUST MEASURE IT ONCE.
   // Everything above runs exactly once. Without this callback the backing
@@ -747,6 +749,15 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
         if (self && self->metal_) self->metal_->MarkDamage();  // FP-21: see MetalSurface.h
 #endif
       });
+#if defined(_WIN32)
+  // ENG-53: a move to a monitor with another DPI changes the content scale and
+  // NOT the framebuffer size on Windows, so the callback above never fires for
+  // it and the launch scale would stick.
+  glfwSetWindowContentScaleCallback(window_, [](GLFWwindow* w, float, float) {
+    auto* self = static_cast<GlfwSurface*>(glfwGetWindowUserPointer(w));
+    if (self) self->dirty_.store(true, std::memory_order_release);
+  });
+#endif
 
   // ⛔ MARKING DIRTY IS NOT ENOUGH DURING A LIVE DRAG — SEE GlfwSurface.h.
   // The callback above raises a flag whose ONLY consumer is the frame loop,
@@ -1046,14 +1057,17 @@ bool GlfwSurface::consumeDirty() {
   // last good size; the un-minimise fires the callback again.
   if (fbWidth <= 0 || fbHeight <= 0 || winWidth <= 0 || winHeight <= 0)
     return false;
+  float xscale = 1.0f, yscale = 1.0f;
+  glfwGetWindowContentScale(window_, &xscale, &yscale);
   if (fbWidth == width_ && fbHeight == height_ && winWidth == pointWidth_ &&
-      winHeight == pointHeight_)
+      winHeight == pointHeight_ && xscale == contentScale_)
     return false;
 
   width_ = fbWidth;
   height_ = fbHeight;
   pointWidth_ = winWidth;
   pointHeight_ = winHeight;
+  contentScale_ = xscale;
 
   // ANGLE's window surface tracks the CALayer, which AppKit has already
   // resized by the time this callback runs, so there is nothing to rebuild on
