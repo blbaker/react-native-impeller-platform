@@ -385,6 +385,8 @@ add_executable(rn-impeller
   # Windows: the offscreen's gl* pointers, resolved from ANGLE's libGLESv2.dll
   # (no import library). Own TU so <windows.h> stays out of SceneGraph.cpp.
   $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/scenegraph/SceneGraphGlWin.cpp>
+  # ENG-51: https on Windows (WinHTTP + Schannel; no OpenSSL there).
+  $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/modules/HttpsWinHttp.cpp>
   scenegraph/Shadows.cpp
   scenegraph/BackgroundLayers.cpp
   scenegraph/BackgroundTiles.cpp
@@ -756,8 +758,9 @@ if(WIN32)
   # so there is nothing to link; WinGLSurface resolves every EGL and GL entry
   # point with LoadLibrary/GetProcAddress. shlwapi/shell32 are for ShellExecuteW
   # in LinkingManager. runtimeobject is the WinRT activation API the toast
-  # backend (modules/NotificationsWin.cpp) uses.
-  target_link_libraries(rn-impeller PRIVATE shell32 shlwapi runtimeobject)
+  # backend (modules/NotificationsWin.cpp) uses. winhttp carries https
+  # (modules/HttpsWinHttp.cpp).
+  target_link_libraries(rn-impeller PRIVATE shell32 shlwapi runtimeobject winhttp)
 elseif(APPLE)
   # ⛔ SAME REASON AS WINDOWS: DO NOT LINK EGL/GLESv2 BY NAME.
   # ANGLE's macOS redistribution is libEGL.dylib + libGLESv2.dylib with no
