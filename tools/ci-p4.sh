@@ -60,12 +60,9 @@ echo "== 1. the URL predicate self-test (no side effects, no browser) =="
 # shell; Windows ShellExecuteW RESOLVES it the way the shell would, so a
 # one-for-one port would launch a .bat or a UNC path. The predicate is shared
 # code precisely so the Linux gate exercises the Windows guard.
-OPENURL="$("$ENGINE_LOCAL" --test-openurl)" || fail "openurl self-test exited nonzero: $OPENURL"
+. "$CI_TOOLS/lib/openurl-selftest.sh"
+OPENURL="$(rni_openurl_selftest "$ENGINE_LOCAL")" || fail "openurl self-test $OPENURL"
 echo "   $OPENURL"
-case "$OPENURL" in
-  OPENURL_PASS*) ;;
-  *) fail "openurl self-test did not pass: $OPENURL" ;;
-esac
 
 # ---------------------------------------------------------------------------
 echo "== 2. the module manifest, enumerated FROM JAVASCRIPT =="
