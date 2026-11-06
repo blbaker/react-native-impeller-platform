@@ -226,7 +226,9 @@ SDK_USED="$(grep -E '^IMPELLER_SDK:' "$EB/CMakeCache.txt" | cut -d= -f2)"
   echo "triple=$TRIPLE"
   echo "git=$GIT_SHA"
   echo "version=$VERSION"
-  echo "sdk=$SDK_USED $(grep -E '^(sha|patch_sha256)=' "$SDK_USED/.stamp" 2>/dev/null | tr '\n' ' ')"
+  # Repo-relative: this file ships in the npm package, and an absolute path
+  # would publish the build machine's home directory.
+  echo "sdk=${SDK_USED#"$ROOT"/} $(grep -E '^(sha|patch_sha256)=' "$SDK_USED/.stamp" 2>/dev/null | tr '\n' ' ')"
   echo "sysroot=$SYSROOT_STAMP"
   echo "glfw=3.4 static backends=wayland,x11 (dlopened at run time) patches=$(cd tools/glfw-patches && ls *.patch | tr '\n' ' ')"
   echo "flags=RNI_WITH_WINDOW=ON RNI_WITH_WAYLAND=ON RNI_X11_DLOPEN=ON"
