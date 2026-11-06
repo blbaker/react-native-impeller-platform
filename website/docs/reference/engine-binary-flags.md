@@ -40,7 +40,8 @@ display:
 | `--width` / `--height` | integer (N) | engine default | Framebuffer size in pixels. |
 | `--scale` | number (N) | `1` headless; windowed, the display's real framebuffer/window ratio (on Windows, the monitor's content scale, followed when the window moves to another monitor) | Device pixels per point. Windowed, this overrides the display's natural ratio, so a probe that asserts pointer coordinates against layout points should only pass it deliberately. |
 | `--title` | string | `"React Native (Impeller)"` | Window title; also the macOS Window menu entry. |
-| `--color-scheme` | `light` \| `dark` | engine default | Forces the app's color scheme. |
+| `--icon` | path (`.png`, or `.ico` on Windows) | GLFW's default icon | Window and taskbar icon. macOS ignores it (the app bundle's icon applies there). |
+| `--color-scheme` | `light` \| `dark` | engine default | Forces the app's color scheme. On Windows, `dark` also gives the window a dark title bar. |
 | `--initial-url` | URL | unset | URL the app's deep-link handling receives at launch. |
 | `--screenshot` | path (`.ppm`) | unset | Write a screenshot to this path. |
 

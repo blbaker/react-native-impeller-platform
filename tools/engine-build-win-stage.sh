@@ -132,7 +132,7 @@ fi
 
 # Provided by Windows itself (System32). api-ms-win-* are the UCRT/API-set
 # forwarders present since Windows 10.
-SYSTEM_DLLS='^(kernel32|kernelbase|user32|gdi32|shell32|shlwapi|advapi32|ole32|oleaut32|winmm|ws2_32|dbghelp|version|crypt32|bcrypt|ntdll|ucrtbase|icuuc|icuin|d3d11|dxgi|d3dcompiler_47|setupapi|imm32|winhttp|api-ms-win-.*)\.dll$'
+SYSTEM_DLLS='^(kernel32|kernelbase|user32|gdi32|shell32|shlwapi|advapi32|ole32|oleaut32|winmm|ws2_32|dbghelp|version|crypt32|bcrypt|ntdll|ucrtbase|icuuc|icuin|d3d11|dxgi|d3dcompiler_47|setupapi|imm32|winhttp|dwmapi|api-ms-win-.*)\.dll$'
 MISSING=""
 for dll in $IMPORTS; do
   echo "$dll" | grep -qE "$SYSTEM_DLLS" && continue

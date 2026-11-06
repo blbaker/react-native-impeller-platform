@@ -83,6 +83,10 @@ class GlfwSurface {
     if (!title.empty()) title_ = title;
   }
   const std::string& title() const { return title_; }
+  // ENG-54 (GlfwWindowChrome.cpp): the window icon from --icon (.png where
+  // GLFW can set one, .ico on Windows) and, on Windows, a dark title bar for
+  // --color-scheme dark. Call after initWindow(); prints what it applied.
+  void applyChrome(const std::string& iconPath, bool darkTitleBar);
 
   // --window-hidden (GlfwSurfaceHidden.cpp). Call BEFORE initWindow: the
   // window is created invisible and unfocused, darwin never activates the

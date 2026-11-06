@@ -131,6 +131,8 @@ static std::string gWindowTitle;
 // focused and never activates the app, at a fixed 1x --width x --height
 // surface (GlfwSurfaceHidden.cpp).
 static bool gWindowHidden = false;
+// ENG-54 --icon: window icon file (.png, or .ico on Windows). Empty = GLFW's.
+static std::string gWindowIcon;
 
 // Process-start clock for the first_present_ms line. Static init runs before
 // main(), so this is as close to "launch" as the process can see.
@@ -226,6 +228,9 @@ void Usage() {
           "                     and exit\n"          "                   [--title <string>]  (windowed) window title, also\n"
           "                     the macOS Window menu entry. Default\n"
           "                     \"React Native (Impeller)\".\n"
+          "                   [--icon <file.png|file.ico>]  (windowed) window and\n"
+          "                     taskbar icon (.ico on Windows only). With\n"
+          "                     --color-scheme dark the Windows title bar is dark.\n"
           "                   [--screenshot-first <file.ppm>]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
           "       rn-impeller --doctor         (key=value: window system, headless EGL\n"
@@ -704,6 +709,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
   }
+  surface.applyChrome(gWindowIcon, colorScheme == "dark");  // ENG-54
   // FP-01: one recorder per frame, committed at the present (model:
   // flutter/flow/frame_timings.h). Idle-skipped loop frames are discarded.
   rni::FrameTimings frameTimings;
@@ -3093,6 +3099,7 @@ int main(int argc, char** argv) {
     // RNI_FONT_DIRS, colon-separated). Faces register under their own family.
     else if (a == "--font-dir") gFontDirs.push_back(next("--font-dir"));
     else if (a == "--title") gWindowTitle = next("--title");
+    else if (a == "--icon") gWindowIcon = next("--icon");
     else if (a == "--test-urlparse") testUrlParse = true;
     else if (a == "--test-http") testHttp = true;
     else if (a == "--color-scheme") { colorScheme = next("--color-scheme"); colorSchemeGiven = true; }
