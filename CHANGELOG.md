@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.2](https://github.com/blbaker/react-native-impeller-platform/compare/v0.9.1...v0.9.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* **ios:** add the new shared engine sources to the iOS engine list ([921e97c](https://github.com/blbaker/react-native-impeller-platform/commit/921e97c542f9845edc7680d202fa3950f93ead87))
+* **ios:** add the new shared engine sources to the iOS engine list ([172214b](https://github.com/blbaker/react-native-impeller-platform/commit/172214bd7aaf2c6cdc0ea285458981c6af232723))
+
 ## [0.9.1](https://github.com/blbaker/react-native-impeller-platform/compare/v0.9.0...v0.9.1) (2026-11-06)
 
 
