@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/blbaker/react-native-impeller-platform/compare/v0.9.0...v0.9.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **ci:** pin OpenSSL 3 on macOS and install the wayland build deps for the gates ([2d223d6](https://github.com/blbaker/react-native-impeller-platform/commit/2d223d667254b01ca4e862f6b0f4ad1d14b5d2d9))
+* **ci:** pin OpenSSL 3 on macOS and install the wayland build deps for the gates ([7ae6ac6](https://github.com/blbaker/react-native-impeller-platform/commit/7ae6ac653117178e565cbfc5f09e0b2a0a0ac81b))
+
 ## [0.9.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.8.7...v0.9.0) (2026-11-06)
 
 
