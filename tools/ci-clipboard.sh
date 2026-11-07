@@ -19,6 +19,7 @@
 #      into the empty field -> 'a b c'
 #   f  copy with an empty selection does not touch the clipboard; a later
 #      paste still yields the earlier copied content
+#   h  Copy keeps the selection (ENG-57): select all, Copy, Backspace -> ''
 #   g  REAL system clipboard round trip while the window is ALIVE: real
 #      XTest Ctrl+A/Ctrl+C, read CLIPBOARD from OUTSIDE the process; and the
 #      reverse direction, an external owner sets CLIPBOARD and a real
@@ -217,6 +218,14 @@ F_RESULT="$(onchange_last "$WORK/f.log" 2)"
   || { dump "$WORK/f.log"; fail "f: pasting after a no-op Copy should still give the FIRST copy's content 'abcdef'; got '$F_RESULT' -- the clipboard was corrupted or cleared by the empty-selection Copy"; }
 echo "   OK: second Ctrl+C was a no-op, paste still gives 'abcdef'"
 
+echo "== h. Copy keeps the selection: select all, Copy, Backspace -> '' (ENG-57) =="
+run_win "$WORK/h.log" 50 --click-after-frames "5:300,$F1_Y" --key-after-frames "15:$SA;$CP;Backspace:down"
+assert_ops "$WORK/h.log" h "copy=1 cut=0 paste=0"
+H_SEL="$(grep -A2 '^rn-impeller: clipboard op=copy' "$WORK/h.log" | sed -n 's/^rn-impeller: selection tag=[0-9]* //p' | head -1)"
+[ "$H_SEL" = "anchor=0 caret=6" ] || { dump "$WORK/h.log"; fail "h: Copy must leave the {0,6} selection as it was; after Copy it is '$H_SEL'"; }
+grep -q '^\[js\] ONCHANGE1 text=$' "$WORK/h.log" || { dump "$WORK/h.log"; fail "h: Backspace after Copy should delete the whole selection; field1 is '$(onchange_last "$WORK/h.log" 1)'"; }
+echo "   OK: Copy kept $H_SEL, Backspace then emptied field1"
+
 echo "== g. REAL system clipboard round trip (window ALIVE) =="
 XKEY="$CI_TOOLS/xkey.py"
 XCLICK="$CI_TOOLS/xclick.py"
@@ -288,4 +297,4 @@ else
   echo "   OK: real Ctrl+V pasted an externally-set CLIPBOARD value"
 fi
 
-echo "CLIPBOARD_GATE_PASS (JS round trip, copy/cut/paste across fields, selection replace, newline flattening, empty-selection no-op, real X11 round trip both directions)"
+echo "CLIPBOARD_GATE_PASS (JS round trip, copy/cut/paste across fields, selection replace, newline flattening, empty-selection no-op, Copy keeps the selection, real X11 round trip both directions)"
