@@ -20,6 +20,7 @@
 #                          desktop OS backends; iOS has its own (*IOS.mm,
 #                          NotificationsNull.cpp)
 #   modules/AccessibilitySettings.cpp   the iOS reader is AccessibilitySettingsIOS.mm
+#   modules/HttpsWinHttp.cpp   Windows-only https (WinHTTP); elsewhere https is asio::ssl
 #   svg/*                  built by cmake/RnSvg.cmake, shared by both
 # Overrides for tests: RNI_DESKTOP_CMAKE, RNI_IOS_CMAKES (space separated).
 # Pass line: IOS_SOURCES_PASS (<n> shared files). Mutants:
@@ -45,6 +46,7 @@ def excluded(f):
     if re.search(r"Gl(Win)?\.cpp$", base) or f.startswith("base/Gl") or f == "base/ProgramCount.cpp": return "GL"
     if f.startswith("modules/") and re.search(r"(Darwin|Linux|Win)\.(cpp|mm)$", base): return "desktop OS backend"
     if f in ("modules/NotificationsAppName.cpp", "modules/AccessibilitySettings.cpp"): return "iOS has its own"
+    if f == "modules/HttpsWinHttp.cpp": return "Windows-only https backend"
     return None
 d, i = files([desk]), files(ios)
 if len(d) < 50 or len(i) < 40:

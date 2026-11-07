@@ -54,13 +54,6 @@
 // FP-20: no GL here. Textures and the supersample offscreen go through the
 // RenderBackend (scenegraph/GpuBackend.h); the GL pieces live in
 // TextureUploaderGl.cpp / SupersampleBackendGl.cpp.
-// <world> ENG-09/10 GPU textures have never run on Windows; they stay compiled
-// out there until gated on that backend.
-#if !defined(_WIN32)
-#define RNI_WORLD_GPU 1
-#else
-#define RNI_WORLD_GPU 0
-#endif
 
 #include <algorithm>
 #include <cctype>
@@ -2183,7 +2176,6 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       return;
     }
   }
-#if RNI_WORLD_GPU
   // <world> ENG-09. Same shape as the SVG supersample hook just above: a
   // dedicated node kind short-circuits the ordinary paint (background/
   // border/text/children) walk. Gated on the backend's uploader (FP-20), which
@@ -2200,7 +2192,6 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
       return;
     }
   }
-#endif
   // backfaceVisibility 'hidden': a node whose plane faces away paints nothing,
   // children included (they share its transformed plane).
   if (node.backfaceHidden) return;
@@ -2481,14 +2472,12 @@ void SceneGraph::paintNode(ImpellerDisplayListBuilder builder,
                       node.outlineStyle, impellerColor(node.outlineColor, OwnAlpha(node)));
   }
 
-#if RNI_WORLD_GPU
   // ENG-10: a <world> with a sprite list but NO setPixels buffer still
   // composites its sprites, over its own background painted just above. (With
   // a buffer, the early return in the <world> hook already drew them.)
   if (node.isWorldRaster && gpu_.uploader != nullptr) {
     paintWorldSprites(builder, node, x, y, w, h);
   }
-#endif
 
   // item 11: keyboard focus ring on the focused (non-TextInput) View: a 2pt
   // outline just outside the frame, macOS/Windows focus blue.

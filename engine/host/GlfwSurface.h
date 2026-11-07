@@ -83,6 +83,10 @@ class GlfwSurface {
     if (!title.empty()) title_ = title;
   }
   const std::string& title() const { return title_; }
+  // ENG-54 (GlfwWindowChrome.cpp): the window icon from --icon (.png where
+  // GLFW can set one, .ico on Windows) and, on Windows, a dark title bar for
+  // --color-scheme dark. Call after initWindow(); prints what it applied.
+  void applyChrome(const std::string& iconPath, bool darkTitleBar);
 
   // --window-hidden (GlfwSurfaceHidden.cpp). Call BEFORE initWindow: the
   // window is created invisible and unfocused, darwin never activates the
@@ -114,6 +118,9 @@ class GlfwSurface {
   // backing scale instead of assuming 1.0 — see host/PointScale.h.
   int pointWidth() const { return pointWidth_; }
   int pointHeight() const { return pointHeight_; }
+  // ENG-53: the monitor's content scale (glfwGetWindowContentScale x, DPI / 96
+  // on Windows). Refreshed by consumeDirty(), like the sizes above.
+  float contentScale() const { return contentScale_; }
 
   // ⛔ SCALE IS DETECTED ONCE AT init(). THIS IS HOW IT STOPS BEING ONCE.
   // Until now nothing in this class observed the window after creation:
@@ -631,6 +638,7 @@ class GlfwSurface {
   int height_{0};
   int pointWidth_{0};
   int pointHeight_{0};
+  float contentScale_{1.0f};
   // Written by the GLFW callback on the event thread, read and cleared by the
   // frame loop. std::atomic rather than a plain bool because those are two
   // different threads and a torn read here shows up as a resize that is

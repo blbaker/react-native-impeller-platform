@@ -10,6 +10,19 @@
 #ifdef RNI_WITH_TLS
 #include <boost/asio/ssl.hpp>
 #endif
+// https exists where OpenSSL is linked (asio::ssl) and on Windows, where
+// WinHTTP carries it (ENG-51, HttpsWinHttp.cpp). Elsewhere it is refused.
+#if defined(_WIN32) && !defined(RNI_WITH_TLS)
+#define RNI_HTTPS_WINHTTP 1
+#include "modules/HttpsWinHttp.h"
+#else
+#define RNI_HTTPS_WINHTTP 0
+#endif
+#if defined(RNI_WITH_TLS) || RNI_HTTPS_WINHTTP
+#define RNI_HTTPS 1
+#else
+#define RNI_HTTPS 0
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -156,7 +169,7 @@ ParsedUrl parseUrl(const std::string& url) {
     out.error = "Unsupported URL scheme '" + out.scheme + "'";
     return out;
   }
-#ifndef RNI_WITH_TLS
+#if !RNI_HTTPS
   if (out.scheme == "https") {
     out.error =
         "https is not supported by this engine build (no TLS linked). "
@@ -339,6 +352,9 @@ HttpResponse performRequest(const std::string& method,
     res.error = url.error;
     return res;
   }
+#if RNI_HTTPS_WINHTTP
+  if (url.scheme == "https") return performHttpsWinHttp(method, url, headers, body, timeoutMs);
+#endif
 
   try {
     asio::io_context io;
@@ -708,7 +724,7 @@ int runUrlSelfTest() {
       // https now PARSES, and defaults to 443 rather than 80. Before TLS this
       // row asserted `false` -- the assertion inverting is the point: it is
       // what proves the build actually links TLS rather than merely claiming to.
-#ifdef RNI_WITH_TLS
+#if RNI_HTTPS
       {"https://example.com/", true, "example.com", "443", "/"},
       {"https://example.com:8443/p", true, "example.com", "8443", "/p"},
 #else
@@ -858,7 +874,7 @@ int runHttpSelfTest() {
 
   // -- https: refused when TLS is absent, verified when TLS is present --
   {
-#ifdef RNI_WITH_TLS
+#if RNI_HTTPS
     // The NEGATIVE CONTROL. A hostname that resolves but presents a
     // certificate for a different name must be REJECTED. Without this arm a
     // TLS stack with verification disabled passes every other assertion here,
@@ -908,6 +924,27 @@ int runHttpSelfTest() {
     } else {
       check("a cert for the WRONG HOSTNAME is rejected", !wrong.ok);
     }
+
+    // POSITIVE CONTROL. The two arms above also pass on a transport that
+    // refuses EVERY certificate. A publicly trusted chain must be accepted
+    // and its response read (ENG-51: Windows refused all https before WinHTTP).
+    auto goodUrl = parseUrl("https://example.com/");
+    auto good = performRequest("GET", goodUrl, {}, "", 8000);
+    const bool goodUnreachable =
+        !good.ok && good.error.find("certificate") == std::string::npos &&
+        good.error.find("handshake") == std::string::npos &&
+        (good.error.find("resolve") != std::string::npos ||
+         good.error.find("timed out") != std::string::npos ||
+         good.error.find("Connection") != std::string::npos);
+    if (goodUnreachable) {
+      std::printf("  SKIP (no network): valid-cert arm — %s\n", good.error.c_str());
+    } else {
+      check("a publicly trusted cert is ACCEPTED", good.ok);
+      check("its response is read (200, body present)",
+            good.status == 200 && !good.body.empty());
+    }
+    std::printf("  https errors: bad-cert='%s' wrong-host='%s' valid='%s' status=%d\n",
+                bad.error.c_str(), wrong.error.c_str(), good.error.c_str(), good.status);
 #else
     auto url = parseUrl("https://example.com/");
     auto res = performRequest("GET", url, {}, "", 5000);

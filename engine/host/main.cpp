@@ -131,6 +131,8 @@ static std::string gWindowTitle;
 // focused and never activates the app, at a fixed 1x --width x --height
 // surface (GlfwSurfaceHidden.cpp).
 static bool gWindowHidden = false;
+// ENG-54 --icon: window icon file (.png, or .ico on Windows). Empty = GLFW's.
+static std::string gWindowIcon;
 
 // Process-start clock for the first_present_ms line. Static init runs before
 // main(), so this is as close to "launch" as the process can see.
@@ -185,7 +187,8 @@ void Usage() {
           "                     so a probe asserting arrival == the clicked point\n"
           "                     reads the deliberate override as an engine defect.\n"
           "                     The startup line states which is in force:\n"
-          "                     '(--scale override)' vs '(from framebuffer)'.\n"
+          "                     '(--scale override)' vs '(from framebuffer)'\n"
+          "                     ('(from monitor content scale)' on Windows).\n"
           "                   [--click-after-frames N:X,Y]  (windowed; screen coords)\n"
           "                   [--scroll-after-frames N:X,Y,dx,dy]  (windowed;\n"
           "                     screen coords, GLFW notch convention: dy>0 is\n"
@@ -225,6 +228,9 @@ void Usage() {
           "                     and exit\n"          "                   [--title <string>]  (windowed) window title, also\n"
           "                     the macOS Window menu entry. Default\n"
           "                     \"React Native (Impeller)\".\n"
+          "                   [--icon <file.png|file.ico>]  (windowed) window and\n"
+          "                     taskbar icon (.ico on Windows only). With\n"
+          "                     --color-scheme dark the Windows title bar is dark.\n"
           "                   [--screenshot-first <file.ppm>]\n"
           "       rn-impeller --list-modules   (module seam manifest; no bundle)\n"
           "       rn-impeller --doctor         (key=value: window system, headless EGL\n"
@@ -634,6 +640,24 @@ static void FinishFrameTimings(const rni::FrameTimings& timings) {
 
 static bool gFollowOsAppearance = false;  // SC-23 (set in headless builds too)
 #if RNI_WITH_WINDOW
+// ENG-53: the windowed scale when --scale is absent. Windows reports window
+// size in pixels (fb == win), so its scale comes from the monitor content
+// scale; elsewhere from the fb/win ratio. Startup and resize both use this.
+static float WindowPointScale(const rni::GlfwSurface& surface, float cliScale,
+                              bool cliScaleGiven) {
+#if defined(_WIN32)
+  return rni::DeriveContentPointScale(surface.contentScale(), cliScale, cliScaleGiven);
+#else
+  return rni::DeriveWindowPointScale(surface.width(), surface.pointWidth(), cliScale,
+                                     cliScaleGiven);
+#endif
+}
+#if defined(_WIN32)
+static const char* const kDerivedScaleSource = " (from monitor content scale)";
+#else
+static const char* const kDerivedScaleSource = " (from framebuffer)";
+#endif
+
 // The windowed repaint loop.
 //
 // ⛔ WHY THIS REPAINTS UNCONDITIONALLY EVERY FRAME, RATHER THAN ONLY WHEN
@@ -685,6 +709,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     fprintf(stderr, "rn-impeller: FATAL: %s\n", error.c_str());
     return 1;
   }
+  surface.applyChrome(gWindowIcon, colorScheme == "dark");  // ENG-54
   // FP-01: one recorder per frame, committed at the present (model:
   // flutter/flow/frame_timings.h). Idle-skipped loop frames are discarded.
   rni::FrameTimings frameTimings;
@@ -723,12 +748,11 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
   // same relationship the headless path already documents at --width.
   const int pxWidth = surface.width();
   const int pxHeight = surface.height();
-  pointScale = rni::DeriveWindowPointScale(pxWidth, surface.pointWidth(),
-                                           pointScale, pointScaleGiven);
+  pointScale = WindowPointScale(surface, pointScale, pointScaleGiven);
   printf("rn-impeller: window px=%dx%d points=%.1fx%.1f scale=%.2f%s\n",
          pxWidth, pxHeight, (float)pxWidth / pointScale,
          (float)pxHeight / pointScale, pointScale,
-         pointScaleGiven ? " (--scale override)" : " (from framebuffer)");
+         pointScaleGiven ? " (--scale override)" : kDerivedScaleSource);
   fflush(stdout);
   surface.printHiddenReport("init");  // --window-hidden only
 
@@ -1111,8 +1135,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
     // (D-46). Re-deriving through the same DeriveWindowPointScale the
     // startup path uses means a resize can never disagree with launch, and
     // the mutation gate on that function covers both callers.
-    pointScale = rni::DeriveWindowPointScale(newPx, surface.pointWidth(),
-                                             pointScale, pointScaleGiven);
+    pointScale = WindowPointScale(surface, pointScale, pointScaleGiven);
     // ⛔ THE CURSOR CONVERSION MUST FOLLOW THE RESIZE, NOT LAG IT.
     // Dragging a window between a 2x and a 1x monitor changes pointScale
     // here; a stale copy inside the surface would then convert every
@@ -1127,7 +1150,7 @@ int RunWindowed(const std::string& sourceUrl, const std::string& appName,
 
     printf("rn-impeller: resize px=%dx%d points=%.1fx%.1f scale=%.2f%s\n",
            newPx, newPy, newPointW, newPointH, pointScale,
-           pointScaleGiven ? " (--scale override)" : " (from framebuffer)");
+           pointScaleGiven ? " (--scale override)" : kDerivedScaleSource);
     fflush(stdout);
     return true;
   };
@@ -3076,6 +3099,7 @@ int main(int argc, char** argv) {
     // RNI_FONT_DIRS, colon-separated). Faces register under their own family.
     else if (a == "--font-dir") gFontDirs.push_back(next("--font-dir"));
     else if (a == "--title") gWindowTitle = next("--title");
+    else if (a == "--icon") gWindowIcon = next("--icon");
     else if (a == "--test-urlparse") testUrlParse = true;
     else if (a == "--test-http") testHttp = true;
     else if (a == "--color-scheme") { colorScheme = next("--color-scheme"); colorSchemeGiven = true; }

@@ -88,6 +88,9 @@ npm install --no-audit --no-fund --silent react-native-svg@15.15.5 \
 npx --no-install react-native init-impeller >/dev/null 2>&1 || fail "init-impeller failed"
 ENGINE="$(node node_modules/react-native-impeller-platform/src/bin/engine-path.js)" \
   || fail "engine resolver failed"
+# RNI_BIN overrides the installed engine, as in ci-world-sprites.sh (ENG-52:
+# RNI_BIN=tools/win-run-engine.sh runs this gate on the Windows engine).
+[ -z "${RNI_BIN:-}" ] || ENGINE="$RNI_BIN"
 
 run_headless() {
   local entry="$1" appname="$2" bundle_out="$3" shot="$4" log="$5"

@@ -59,6 +59,17 @@ inline float DeriveWindowPointScale(int fbSize, int winSize, float cliScale,
   return ratio;
 }
 
+// ENG-53. WINDOWS HAS NO fb/win RATIO TO READ. GLFW's window size there is in
+// PIXELS, the framebuffer's own unit, so fb/win is 1.0 at every DPI and a 150
+// percent display laid out at 1x (every label two thirds of its size). The
+// scale is the monitor's content scale instead (glfwGetWindowContentScale,
+// DPI / 96). --scale still wins, and a degenerate report falls back to 1.0.
+inline float DeriveContentPointScale(float contentScale, float cliScale, bool cliScaleGiven) {
+  if (cliScaleGiven && cliScale > 0.0f) return cliScale;
+  if (!std::isfinite(contentScale) || contentScale <= 0.0f) return 1.0f;
+  return contentScale;
+}
+
 // ⛔ A CURSOR POSITION IS NOT A LAYOUT COORDINATE. THIS IS THE CONVERSION.
 //
 // glfwGetCursorPos and the cursor-position callback both report SCREEN
@@ -145,6 +156,32 @@ inline int runPointScaleSelfTest() {
            c.expect, ok ? "ok" : "MISMATCH");
   }
 
+  // ENG-53: Windows numbers. fb == win at every DPI there, so only the
+  // content scale can carry the 150 percent the display really has.
+  struct ContentCase {
+    const char* name;
+    float content;
+    float cli;
+    bool given;
+    float expect;
+  };
+  const ContentCase contentCases[] = {
+      {"win32 150% monitor (144 dpi)", 1.5f, 1.0f, false, 1.5f},
+      {"win32 100% monitor", 1.0f, 1.0f, false, 1.0f},
+      {"win32 125% monitor", 1.25f, 1.0f, false, 1.25f},
+      {"win32 explicit --scale 1 on 150%", 1.5f, 1.0f, true, 1.0f},
+      {"win32 explicit --scale 2 on 100%", 1.0f, 2.0f, true, 2.0f},
+      {"win32 zero content scale", 0.0f, 1.0f, false, 1.0f},
+      {"win32 NaN content scale", std::nanf(""), 1.0f, false, 1.0f},
+  };
+  for (const ContentCase& c : contentCases) {
+    const float got = DeriveContentPointScale(c.content, c.cli, c.given);
+    const bool ok = std::fabs(got - c.expect) < 1e-6f;
+    if (!ok) ++failures;
+    printf("  %-42s content=%.2f cli=%.2f%s -> %.4f (want %.4f) %s\n", c.name, c.content,
+           c.cli, c.given ? " [given]" : "        ", got, c.expect, ok ? "ok" : "MISMATCH");
+  }
+
   // ⛔ THE CURSOR CONVERSION IS GATED HERE, ON A 1x HOST WITH NO MOUSE.
   // A factor-of-two error in CursorPointsFromScreen does not crash and does
   // not log — it silently hits the WRONG ELEMENT, or nothing, on a Retina
@@ -219,6 +256,8 @@ inline int runPointScaleSelfTest() {
   printf("CURSORPOINTS_SELFTEST_OK cases=%d\n",
          (int)(sizeof(cursorCases) / sizeof(cursorCases[0])));
   printf("POINTSCALE_SELFTEST_OK cases=%d\n", (int)(sizeof(cases) / sizeof(cases[0])));
+  printf("CONTENTSCALE_SELFTEST_OK cases=%d\n",
+         (int)(sizeof(contentCases) / sizeof(contentCases[0])));
   return 0;
 }
 
