@@ -8,6 +8,8 @@
 
 #if defined(__linux__)
 #include <dlfcn.h>
+
+#include "host/OptionalLibs.h"  // fontconfig soname list (one table; --doctor reports it)
 #elif defined(__APPLE__)
 #include <CoreText/CoreText.h>
 #elif defined(_WIN32)
@@ -70,7 +72,7 @@ struct Fc {
 Fc& FcLib() {
   static Fc fc = [] {
     Fc f;
-    f.lib = dlopen("libfontconfig.so.1", RTLD_NOW | RTLD_LOCAL);
+    f.lib = rni::optlib::Open("fontconfig").handle;
     if (!f.lib) return f;
     auto sym = [&](const char* n) { return dlsym(f.lib, n); };
     f.patCreate = (decltype(f.patCreate))sym("FcPatternCreate");

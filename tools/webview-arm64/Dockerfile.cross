@@ -1,0 +1,10 @@
+# x86_64 cross-build environment for WPE WebKit 2.54 (aarch64). The x64 WPE
+# image (wpe-ocdm:sid from ~/projects/wpe-impeller-probe: clang 21, lld, cmake,
+# ninja, ruby, perl, gperf, unifdef, glib host tools) plus aarch64 binutils
+# (its GNU ar cannot index aarch64 objects). The arm64 sysroot is mounted at
+# /sysroot by tools/webview-arm64/wpe-cross-build.sh; nothing arm64 lives here.
+FROM wpe-ocdm:sid
+USER root
+RUN apt-get -o Acquire::Retries=3 update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils-aarch64-linux-gnu \
+ && rm -rf /var/lib/apt/lists/*

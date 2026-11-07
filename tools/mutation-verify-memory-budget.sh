@@ -8,9 +8,12 @@
 #   M5  evicted visible images are never reloaded        -> purge: reloads= (did not repaint)
 #   M6  (FP-56) no keep-alive: a budget eviction drops a texture still on screen -> live: reloads= (loop)
 #   M7  (FP-56) keep-alive survives a purge too          -> purge: reloads= (Flutter clear() drops live)
+#   M8 a deleted <Image> does not trigger the prune   -> default: textures_live=
+#   M9 a source change does not trigger the prune     -> swap: textures_live=
+#   M10 the prune releases nothing                     -> default: textures_live=
 set -euo pipefail
 cd "$(dirname "$0")/.."
-FILES=(engine/fabric/ImageCache.cpp engine/scenegraph/ImagePaint.cpp)
+FILES=(engine/fabric/ImageCache.cpp engine/scenegraph/ImagePaint.cpp engine/scenegraph/SceneGraph.cpp)
 BAK="$(mktemp -d)"
 for i in "${!FILES[@]}"; do cp "${FILES[$i]}" "$BAK/$i"; done
 restore() { for i in "${!FILES[@]}"; do cp "$BAK/$i" "${FILES[$i]}"; done; }
@@ -78,4 +81,19 @@ mutate engine/scenegraph/ImagePaint.cpp "    if (!purged && it->second.lastUse +
 run_gate "$BAK/m7.log"; expect_killed M7 "$BAK/m7.log" "(purge|clear): reloads="
 restore
 
-echo "MUTATION_VERIFY_PASS (7 mutants killed)"
+echo "== M8: a deleted image does not trigger the prune =="
+mutate engine/scenegraph/SceneGraph.cpp "          ++imageRefsGen_;  // its texture may now be unreferenced" "          // MUTANT M8"
+run_gate "$BAK/m8.log"; expect_killed M8 "$BAK/m8.log" "default: textures_live="
+restore
+
+echo "== M9: a source change does not trigger the prune =="
+mutate engine/scenegraph/SceneGraph.cpp "    if (!sameSources && (!prevSources.empty() || !prevDefault.empty())) ++imageRefsGen_;" "    (void)sameSources;  // MUTANT M9"
+run_gate "$BAK/m9.log"; expect_killed M9 "$BAK/m9.log" "swap: textures_live="
+restore
+
+echo "== M10: the prune releases nothing =="
+mutate engine/scenegraph/ImagePaint.cpp "    if (uris.count(it->second.uri) != 0) {" "    if (true) {  // MUTANT M10"
+run_gate "$BAK/m10.log"; expect_killed M10 "$BAK/m10.log" "default: textures_live="
+restore
+
+echo "MUTATION_VERIFY_PASS (10 mutants killed)"

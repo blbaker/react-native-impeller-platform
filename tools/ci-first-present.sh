@@ -26,6 +26,7 @@
 # ⚠️ DISPLAY=:0 on linux; SDL_VIDEODRIVER unset (see ci-window.sh).
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/own-procs.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/qemu-timing.sh"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 BUNDLE="$ROOT/fixtures/first-present/prebuilt/first-present.bundle"
@@ -38,6 +39,7 @@ unset SDL_VIDEODRIVER || true
 OS="$(uname -s)"
 [ "$OS" = Linux ] && export DISPLAY="${DISPLAY:-:0}"
 [ -s "$BUNDLE" ] || fail "no committed bundle at $BUNDLE (tools/build-first-present-bundle.sh)"
+RELAXED=""
 
 if [ -n "${RNI_BIN:-}" ]; then
   BIN="$RNI_BIN"
@@ -56,6 +58,36 @@ fi
 WORK="$(mktemp -d)"
 cleanup() { rni_kill_own; [ "${KEEP_WORKDIR:-0}" = 1 ] && echo "workdir kept: $WORK" || rm -rf "$WORK"; }
 trap cleanup EXIT
+
+# qemu-aarch64 (M3 triage, docs/IMAGE-REQUIREMENTS.md): Hermes runs ~12-23x slower
+# there (JS start -> first rAF 550-1095 ms against 48 ms native; boot wait
+# 950-1850 ms against 80), while the fixture's clock is 1500 ms of WALL time.
+# The first frame was still the BOOT screen at +0 pt (step 3 passed), so the
+# engine presented the app's first commit; only the clock is out of scale.
+# Scale the clock in a copy of the bundle by K and judge step 5 against
+# 1500 * K. Steps 1-4 and 6 are unchanged.
+if rni_is_qemu; then
+  K="${RNI_QEMU_CLOCK_SCALE:-20}"
+  QB="$WORK/first-present-x$K.bundle"
+  python3 - "$BUNDLE" "$QB" "$K" <<'PY' || fail "qemu: could not scale the boot clock in the bundle (minified pattern changed?)"
+import sys
+src, dst, k = sys.argv[1], sys.argv[2], int(sys.argv[3])
+s = open(src).read()
+for a in ("i>=1500)", "i/1500*200"):
+    if s.count(a) != 1:
+        sys.exit(f"pattern {a!r} found {s.count(a)}x")
+    s = s.replace(a, a.replace("1500", str(1500 * k)))
+open(dst, "w").write(s)
+PY
+  BUNDLE="$QB"; BOOT_MS=$(( 1500 * K ))
+  # The engine's own boot-wait ceiling (10 s) scales with the clock, as the
+  # sanitizer gates do (RNI_TIME_SCALE, base/TestSync.h): unscaled, a boot that
+  # wrongly waited for JS idle would give up at 10 s, inside a 30 s clock, and
+  # present BOOT anyway, so the D-156 regression would pass here.
+  export RNI_TIME_SCALE="${RNI_TIME_SCALE:-$K}"
+  rni_qemu_relax "first-present boot clock scaled x$K to ${BOOT_MS} ms (fixture copy) and RNI_TIME_SCALE=$RNI_TIME_SCALE; step 5 judged against ${BOOT_MS} ms, steps 1-4 and 6 unchanged"
+  RELAXED=" qemu_clock_scale=$K"
+fi
 
 echo "== 1. windowed run, capture the FIRST presented frame =="
 LOG="$WORK/run.log"; SHOT="$WORK/first.ppm"
@@ -142,4 +174,4 @@ sleep 1
 if rni_have_own; then rni_kill_own; fail "rn-impeller still running after the bounded run"; fi
 echo "   OK"
 
-echo "FIRST_PRESENT_GATE_PASS (js_ms=$JS_MS first_present_ms=$FP_MS bg=$BG mark_x=$MARK_X)"
+echo "FIRST_PRESENT_GATE_PASS (js_ms=$JS_MS first_present_ms=$FP_MS bg=$BG mark_x=$MARK_X$RELAXED)"

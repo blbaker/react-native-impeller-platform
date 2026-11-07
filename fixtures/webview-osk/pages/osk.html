@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>osk</title>
+<style>
+  body { margin: 0; background: #fff; font: 16px sans-serif; }
+  input { position: absolute; left: 20px; width: 260px; height: 40px; font-size: 20px; }
+  #t { top: 20px; }
+  #p { top: 90px; }
+  #go { position: absolute; left: 320px; top: 20px; width: 80px; height: 40px; }
+  #blank { position: absolute; left: 20px; top: 200px; width: 400px; height: 120px; background: #ddd; }
+</style>
+</head>
+<body>
+<!-- Gate page for tools/ci-webview-osk.sh. Window coordinates = page + 40 (the RN bar):
+     #t text 20..280 x 20..60, #p password 20..280 x 90..130, #blank 20..420 x 200..320. -->
+<form id="f"><input id="t" autocomplete="off"><input id="p" type="password"><button id="go">Go</button></form>
+<div id="blank"></div>
+<script>
+  const log = (s) => console.log('WVPAGE ' + s);
+  const f = document.getElementById('f');
+  f.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = document.getElementById('t').value;
+    log('submit ' + JSON.stringify(v));
+    document.title = 'submitted:' + v;
+  });
+  for (const el of document.querySelectorAll('input')) {
+    el.addEventListener('beforeinput', (e) => log('beforeinput ' + el.id + ' ' + e.inputType + ' ' + JSON.stringify(e.data)));
+    el.addEventListener('input', () => log('input ' + el.id + ' ' + JSON.stringify(el.value)));
+    el.addEventListener('keydown', (e) => log('keydown ' + el.id + ' ' + e.key));
+    el.addEventListener('focus', () => log('focus ' + el.id));
+    el.addEventListener('blur', () => log('blur ' + el.id));
+  }
+</script>
+</body>
+</html>

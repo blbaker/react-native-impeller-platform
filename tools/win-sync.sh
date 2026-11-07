@@ -29,9 +29,14 @@ mkdir -p "$STAGE" "$SCRIPTS"
 # -L dereferences symlinks: npm/pnpm store links do not survive the hop.
 # The other platform's build dir is excluded — copying a configured CMake cache
 # to another OS produces a configure that "succeeds" against foreign paths.
+# Linux-only trees (the build-linux-<arch> dirs, the arm64 sysroot, ffmpeg, the
+# linux Impeller SDKs) are excluded too: CMake reads them only under
+# CMAKE_SYSTEM_NAME Linux, and they are ~2 GB, mostly small files, over the WSL mount.
+# The bare "-parity/" name is linux-x64; impeller-sdk-custom-parity-win is not excluded.
 echo "sync: engine sources -> $STAGE"
 rsync -aL --delete \
   --exclude 'build/' \
+  --exclude 'build-linux-*/' \
   --exclude 'third_party/hermes/' \
   --exclude 'third_party/hermes-build/' \
   --exclude 'third_party/impeller-sdk/' \
@@ -43,6 +48,10 @@ rsync -aL --delete \
   --exclude 'third_party/impeller-sdk-android/' \
   --exclude 'third_party/impeller-sdk-darwin/' \
   --exclude 'third_party/angle-darwin-arm64/' \
+  --exclude 'third_party/sysroot-linux-*/' \
+  --exclude 'third_party/ffmpeg8-linux-*/' \
+  --exclude 'third_party/impeller-sdk-custom-linux-*/' \
+  --exclude 'third_party/impeller-sdk-custom-parity/' \
   "$ROOT/engine/" "$STAGE/engine/"
 
 # Driver scripts live in their OWN sibling directory: if they sat inside the

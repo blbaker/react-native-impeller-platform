@@ -50,14 +50,69 @@ void* GlfwCocoaLayer(GLFWwindow* window) {
 // PHYSICAL backing store or the drawable desyncs from the default framebuffer.
 // pointScale_ can be overridden by --scale (PointScale.h doctrine: display is
 // source of truth, --scale is override-only), so it is the wrong number here.
-void GlfwCocoaSetLayerScale(GLFWwindow* window) {
+//
+// forceScale > 0 (--window-hidden) pins the layer to that scale instead: the
+// hidden surface is a fixed 1x canvas of --width x --height pixels whatever
+// display the process happens to run on, so its drawable must not follow the
+// backing store. Nobody sees the layer, so a mismatch with the display costs
+// nothing.
+void GlfwCocoaSetLayerScale(GLFWwindow* window, double forceScale) {
   NSWindow* nsWindow = glfwGetCocoaWindow(window);
   if (!nsWindow) return;
   NSView* view = [nsWindow contentView];
   if (!view) return;
   CALayer* layer = [view layer];
   if (!layer) return;
-  layer.contentsScale = [nsWindow backingScaleFactor];
+  layer.contentsScale = forceScale > 0 ? (CGFloat)forceScale : [nsWindow backingScaleFactor];
+}
+
+// --window-hidden: make this process one that can never be activated, before
+// glfwInit runs [NSApp run] (finishLaunching). Prohibited = no Dock icon, no
+// menu bar, never frontmost (LSBackgroundOnly). Accessory is the fallback if
+// AppKit refuses the switch: no Dock icon, and it is only ever activated by a
+// click on one of its windows or an explicit activate call, neither of which
+// a never-shown window can receive.
+//
+// The activity assertion keeps App Nap off. A background process with no
+// visible window is exactly what App Nap throttles, and the windowed tests
+// exist because they need live timers.
+const char* GlfwCocoaEnterBackgroundMode() {
+  @autoreleasepool {
+    NSApplication* app = [NSApplication sharedApplication];
+    if (![app setActivationPolicy:NSApplicationActivationPolicyProhibited]) {
+      [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    }
+    static id<NSObject> activity = nil;
+    if (!activity) {
+      activity = [[NSProcessInfo processInfo]
+          beginActivityWithOptions:(NSActivityUserInitiatedAllowingIdleSystemSleep |
+                                    NSActivityLatencyCritical)
+                            reason:@"rn-impeller --window-hidden test run"];
+#if !__has_feature(objc_arc)
+      [activity retain];
+#endif
+    }
+    switch ([app activationPolicy]) {
+      case NSApplicationActivationPolicyRegular: return "regular";
+      case NSApplicationActivationPolicyAccessory: return "accessory";
+      case NSApplicationActivationPolicyProhibited: return "prohibited";
+    }
+    return "unknown";
+  }
+}
+
+// --window-hidden proof: real AppKit state, read back. on_screen is the
+// window server's view (NSWindowOcclusionStateVisible), independent of
+// -isVisible, which is AppKit's own flag.
+void GlfwCocoaHiddenState(GLFWwindow* window, int* visible, int* onScreen, int* key,
+                          int* appActive, double* layerScale) {
+  NSWindow* nsWindow = glfwGetCocoaWindow(window);
+  *visible = nsWindow && [nsWindow isVisible] ? 1 : 0;
+  *onScreen = nsWindow && ([nsWindow occlusionState] & NSWindowOcclusionStateVisible) ? 1 : 0;
+  *key = nsWindow && [nsWindow isKeyWindow] ? 1 : 0;
+  *appActive = [NSApp isActive] ? 1 : 0;
+  CALayer* layer = nsWindow ? [[nsWindow contentView] layer] : nil;
+  *layerScale = layer ? layer.contentsScale : 0.0;
 }
 
 // Reads back the layer's ACTUAL contentsScale — not the value we intended, the

@@ -15,6 +15,8 @@
 
 #if defined(__linux__)
 #include <dlfcn.h>
+
+#include "host/OptionalLibs.h"  // fontconfig soname list (one table; --doctor reports it)
 #endif
 
 namespace rni {
@@ -42,7 +44,7 @@ struct Fc {
 Fc& FcSyms() {
   static Fc fc = [] {
     Fc f;
-    void* lib = dlopen("libfontconfig.so.1", RTLD_NOW | RTLD_LOCAL);
+    void* lib = rni::optlib::Open("fontconfig").handle;
     if (!lib) return f;
     auto sym = [&](const char* n) { return dlsym(lib, n); };
 #define RNI_FC(field, name) f.field = (decltype(f.field))sym(name)

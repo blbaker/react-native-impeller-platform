@@ -5,6 +5,7 @@
 
 #include "ImageCache.h"
 #include "ImageInternal.h"
+#include "base/MemTrim.h"
 
 namespace rni::image {
 namespace {
@@ -37,6 +38,7 @@ void HandleLowMemory(const char* source) {
               source, gPurges.fetch_add(1) + 1, (long long)before, (long long)Cache().Bytes(),
               (long long)freed);
   std::fflush(stdout);
+  rni::memtrim::Request("low_memory");  // the purged bitmaps' pages, not just the cache's bytes
   std::function<void()> wake;
   {
     std::lock_guard<std::mutex> lock(gListenerMutex);

@@ -23,6 +23,12 @@
 #include "host/RasterThread.h"
 #include "host/RecordNoGl.h"
 #include "scenegraph/CursorKinds.h"
+#if defined(__linux__) && !defined(__ANDROID__)
+#include "host/GlfwPlatformSelect.h"
+#endif
+#if defined(RNI_WITH_WAYLAND) && RNI_WITH_WAYLAND
+#include "host/WaylandTouch.h"
+#endif
 #if !defined(_WIN32) && !defined(__APPLE__)
 #include <EGL/egl.h>  // FP-14: eglGetCurrentContext for the record assert
 #endif
@@ -41,6 +47,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 
@@ -99,7 +106,13 @@ namespace rni {
 void* GlfwCocoaLayer(GLFWwindow* window);
 // Defined in GlfwCocoaView.mm — sets the CALayer contentsScale to the window's
 // backingScaleFactor so the drawable matches the physical framebuffer.
-void GlfwCocoaSetLayerScale(GLFWwindow* window);
+// forceScale > 0 pins it instead (--window-hidden: a fixed 1x surface).
+void GlfwCocoaSetLayerScale(GLFWwindow* window, double forceScale);
+// --window-hidden (GlfwCocoaView.mm): activation policy + App Nap opt-out,
+// and the AppKit state readback the hidden-mode proof lines print.
+const char* GlfwCocoaEnterBackgroundMode();
+void GlfwCocoaHiddenState(GLFWwindow* window, int* visible, int* onScreen, int* key,
+                          int* appActive, double* layerScale);
 // Defined in GlfwCocoaView.mm — reads back the layer's actual contentsScale and
 // the window's backingScaleFactor; the ENG-08 gate asserts they are equal.
 double GlfwCocoaLayerContentsScale(GLFWwindow* window);
@@ -335,6 +348,9 @@ GlfwSurface::~GlfwSurface() {
   }
   if (window_) glfwDestroyWindow(window_);
 #else
+#if defined(RNI_WITH_WAYLAND) && RNI_WITH_WAYLAND
+  rni::WaylandTouchDetach();  // its proxies live on GLFW's wl_display
+#endif
   if (window_) {
     glfwMakeContextCurrent(nullptr);
     glfwDestroyWindow(window_);
@@ -413,7 +429,7 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
   // FRAME-ONE SCALE. HostApp.app opens on 1x and may never resize, so the resize
   // callback that drives consumeDirty() can never fire. Set contentsScale here,
   // before the first present, or frame one paints a quarter window on hi-dpi.
-  GlfwCocoaSetLayerScale(window_);
+  GlfwCocoaSetLayerScale(window_, hidden_ ? 1.0 : 0.0);
   // ENG-08 OBSERVABLE. Print the layer's ACTUAL contentsScale (read back, not
   // the value we intended) beside the window's backingScaleFactor, ONCE, before
   // the first present. The gate asserts these are equal; reading real state is
@@ -424,6 +440,14 @@ bool GlfwSurface::initAngleForWindow(std::string* error) {
 
   eglSurface_ = eglCreateWindowSurface(display_, cfg,
                                        (EGLNativeWindowType)layer, nullptr);
+  if (eglSurface_ != EGL_NO_SURFACE && hidden_) {
+    // --window-hidden: the drawable ANGLE built from the 1x layer, read back.
+    EGLint ew = 0, eh = 0;
+    eglQuerySurface(display_, eglSurface_, EGL_WIDTH, &ew);
+    eglQuerySurface(display_, eglSurface_, EGL_HEIGHT, &eh);
+    std::printf("rn-impeller: window_hidden egl_surface=%dx%d\n", ew, eh);
+    std::fflush(stdout);
+  }
   if (eglSurface_ == EGL_NO_SURFACE) {
     // PRINT THE EGL ERROR CODE. Without it this line says only "failed" and
     // gives no way to tell a bad native window (0x300B, the wrong pointer
@@ -472,7 +496,74 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   // windowed run so the two modes resolve relative paths the same way.
   // Gate: tools/ci-app-chdir.sh (macOS).
   glfwInitHint(GLFW_COCOA_CHDIR_RESOURCES, GLFW_FALSE);
+#if defined(__APPLE__)
+  // --window-hidden: before glfwInit, because glfwInit runs [NSApp run]
+  // (finishLaunching). No GLFW menu bar, which is also what stops GLFW
+  // switching an unbundled process to the Regular (Dock icon) policy.
+  if (hidden_) {
+    glfwInitHint(GLFW_COCOA_MENUBAR, GLFW_FALSE);
+    hiddenPolicy_ = GlfwCocoaEnterBackgroundMode();
+  }
+#endif
+#if defined(__linux__) && !defined(__ANDROID__)
+  // Both linux packages (x64 and arm64) carry GLFW with the
+  // Wayland AND the X11 backends. Which one runs is decided here, at run time:
+  // see host/GlfwPlatformSelect.h for the order and why DISPLAY matters.
+  {
+    const rni::GlfwPlatformChoice pc = rni::ChooseGlfwPlatform(GLFW_PLATFORM_X11, GLFW_PLATFORM_WAYLAND);
+    if (pc.hint != 0) glfwInitHint(GLFW_PLATFORM, pc.hint);
+    std::printf("rn-impeller: glfw_platform_hint=%s reason=%s\n", pc.name, pc.reason);
+  }
+  // No libdecor: a kiosk window has no title bar, and libdecor's plugins pull
+  // GTK/cairo onto an image that has neither.
+  glfwInitHint(GLFW_WAYLAND_LIBDECOR, GLFW_WAYLAND_DISABLE_LIBDECOR);
+#endif
   if (!glfwInit()) return fail("glfwInit failed");
+  {
+    const int p = glfwGetPlatform();
+    std::printf("rn-impeller: glfw_platform=%s\n",
+                p == GLFW_PLATFORM_WAYLAND ? "wayland" : p == GLFW_PLATFORM_X11 ? "x11"
+                : p == GLFW_PLATFORM_COCOA ? "cocoa" : p == GLFW_PLATFORM_WIN32 ? "win32"
+                : "other");
+    std::fflush(stdout);
+#if defined(__linux__) && !defined(__ANDROID__)
+    // ⛔ NO CLIENT-SIDE DECORATIONS ON WAYLAND. With libdecor off and no
+    // xdg-decoration from the compositor (Weston kiosk-shell has none), GLFW
+    // 3.4 draws its own fallback frame (4 px border + 24 px title bar) and
+    // reports a window geometry that much LARGER than the surface. kiosk-shell
+    // configures the toplevel fullscreen at the output size, so the first
+    // commit is a protocol violation and Weston disconnects the client:
+    //   xdg_wm_base: error 4: xdg_surface geometry (608 x 424) is larger than
+    //   the configured fullscreen state (600 x 400)
+    // Measured in the arm64 container, 2026-10-18. RNI_WAYLAND_DECORATED=1
+    // restores GLFW's frame for a desktop compositor.
+    const char* deco = std::getenv("RNI_WAYLAND_DECORATED");
+    if (p == GLFW_PLATFORM_WAYLAND && !(deco && deco[0] == '1')) {
+      glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+    }
+    // xdg_toplevel app_id: what Weston's kiosk-shell matches `app-ids=` in
+    // weston.ini [output] sections against, to put the engine on a given
+    // output next to another kiosk client (Chromium). RNI_WAYLAND_APP_ID
+    // overrides the default.
+    if (p == GLFW_PLATFORM_WAYLAND) {
+      const char* appId = std::getenv("RNI_WAYLAND_APP_ID");
+      glfwWindowHintString(GLFW_WAYLAND_APP_ID, appId && appId[0] ? appId : "rn-impeller");
+    }
+#endif
+  }
+
+  // ⛔ --window-hidden: THE WINDOW IS NEVER SHOWN, SO IT CAN NEVER BE FOCUSED.
+  // GLFW only orders a window in (and only activates the app, via
+  // _glfwFocusWindowCocoa) when GLFW_VISIBLE is true at creation, or on an
+  // explicit glfwShowWindow/glfwFocusWindow, and nothing in this host makes
+  // either call. FOCUSED / FOCUS_ON_SHOW are set too, so even a later show
+  // could not steal focus. The surface is still a real window surface: the
+  // same run loop, timers, frame loop, capture and input hooks as --window.
+  if (hidden_) {
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
+    glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+  }
 
 #if defined(__APPLE__)
   // ⛔ GLFW MUST NOT TRY TO MAKE A CONTEXT ON DARWIN.
@@ -492,6 +583,16 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   // ProcAddressCallback here is glfwGetProcAddress, which only resolves GLES
   // symbols correctly when the context was created through EGL.
   glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
+#if defined(__linux__) && defined(__aarch64__) && !defined(__ANDROID__)
+  // ⛔ linux-arm64 (RK3588 libmali): EGL serves OpenGL ES ONLY. GLFW's default
+  // client API is desktop OpenGL, which libmali's eglBindAPI refuses, so the
+  // window would fail with "EGL: Failed to find support for OpenGL". x86_64
+  // Mesa keeps its desktop-GL-through-EGL context (unchanged, gated).
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+  if (rni::glvalidation::Enabled()) glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
+#endif
 #if defined(_WIN32)
   // GLFW's EGL path loads libEGL.dll/libGLESv2.dll (ANGLE, shipped beside
   // the exe). ANGLE implements GLES only, so the client API must be ES 3.0;
@@ -573,6 +674,12 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
 
   window_ = glfwCreateWindow(width, height, title_.c_str(), nullptr, nullptr);
   if (!window_) return fail("glfwCreateWindow failed");
+  // Fail closed: a --window-hidden run whose window is visible is the exact
+  // thing the flag exists to prevent, so it never gets as far as a frame.
+  if (hidden_ && glfwGetWindowAttrib(window_, GLFW_VISIBLE)) {
+    glfwHideWindow(window_);
+    return fail("--window-hidden: the window was created visible");
+  }
 
   // ⛔ CENTRE IN THE MONITOR WORK AREA WHEN WE CHOSE THE SIZE OURSELVES.
   // GLFW places a new window wherever the WM decides (often 0,0 -> under the
@@ -594,7 +701,7 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   }
 
   int fbWidth = 0, fbHeight = 0;
-  glfwGetFramebufferSize(window_, &fbWidth, &fbHeight);
+  framebufferSize(&fbWidth, &fbHeight);
   width_ = fbWidth;
   height_ = fbHeight;
 
@@ -623,6 +730,9 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   // API has no other channel. Only the flag is set here: see GlfwSurface.h on
   // why the GL work belongs to the frame loop.
   glfwSetWindowUserPointer(window_, this);
+#if defined(RNI_WITH_WAYLAND) && RNI_WITH_WAYLAND
+  rni::WaylandTouchAttach(this, window_);  // no-op off Wayland; logs either way
+#endif
   // desktop-input-gap P0 item 1. Ask X11/Win32 to fold Caps/Num Lock into the
   // mods bitmask every key event carries (GLFW_MOD_CAPS_LOCK/NUM_LOCK),
   // rather than the default of reporting only transient modifiers. Without
@@ -818,6 +928,7 @@ bool GlfwSurface::initWindow(int width, int height, std::string* error) {
   if (metalRequested_) {  // FP-21: no ANGLE, no EGL on the window
     metal_ = std::make_unique<MetalSurface>();
     if (!metal_->Attach(window_, error)) return false;
+    if (hidden_) GlfwCocoaSetLayerScale(window_, 1.0);  // --window-hidden: 1x layer
     metal_->SetDamageHandler([this] {  // the refresh callback, as updateLayer would raise it
       if (refreshHandler_ && !paintInFlight_) refreshHandler_();
     });
@@ -918,12 +1029,15 @@ bool GlfwSurface::consumeDirty() {
   // first restores the 2x drawable, so the framebuffer query below reports the
   // true 2x pixel size and width_/height_ carry the physical backing again.
   // The old code set the scale AFTER the query, one frame too late.
-  GlfwCocoaSetLayerScale(window_);
+  GlfwCocoaSetLayerScale(window_, hidden_ ? 1.0 : 0.0);
   if (metal_) metal_->SyncFromWindow();  // FP-21: live-resize flag for the raster side
+  // SyncFromWindow re-applies the backing scale to the Metal layer; a hidden
+  // surface stays 1x (--window-hidden).
+  if (metal_ && hidden_) GlfwCocoaSetLayerScale(window_, 1.0);
 #endif
 
   int fbWidth = 0, fbHeight = 0;
-  glfwGetFramebufferSize(window_, &fbWidth, &fbHeight);
+  framebufferSize(&fbWidth, &fbHeight);
   int winWidth = 0, winHeight = 0;
   glfwGetWindowSize(window_, &winWidth, &winHeight);
   // A minimised window reports 0 in at least one axis on every platform. Zero
@@ -1071,7 +1185,7 @@ void GlfwSurface::dispatchExtraButton(double screenX, double screenY,
   if (!extraButtonHandler_) return;
   int fbW = 0, fbH = 0, winW = 0, winH = 0;
   if (window_) {
-    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    framebufferSize(&fbW, &fbH);
     glfwGetWindowSize(window_, &winW, &winH);
   }
   ExtraButtonEvent ev;
@@ -1161,7 +1275,7 @@ void GlfwSurface::dispatchCursorPoint(double screenX, double screenY,
   // entirely.
   int fbW = 0, fbH = 0, winW = 0, winH = 0;
   if (window_) {
-    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    framebufferSize(&fbW, &fbH);
     glfwGetWindowSize(window_, &winW, &winH);
   }
   const float px = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
@@ -1184,7 +1298,7 @@ void GlfwSurface::dispatchScrollPoint(double screenX, double screenY,
   // resize drag.
   int fbW = 0, fbH = 0, winW = 0, winH = 0;
   if (window_) {
-    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    framebufferSize(&fbW, &fbH);
     glfwGetWindowSize(window_, &winW, &winH);
   }
   const float px = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
@@ -1313,7 +1427,7 @@ void GlfwSurface::dispatchHoverPoint(double screenX, double screenY) {
   // geometry that exists now.
   int fbW = 0, fbH = 0, winW = 0, winH = 0;
   if (window_) {
-    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    framebufferSize(&fbW, &fbH);
     glfwGetWindowSize(window_, &winW, &winH);
   }
   const float px = CursorPointsFromScreen(screenX, fbW, winW, pointScale_);
@@ -1384,6 +1498,38 @@ void GlfwSurface::synthesiseMouse(int op, double screenX, double screenY,
   dispatchCursorPoint(screenX, screenY, op == 0, shift ? GLFW_MOD_SHIFT : 0);
 }
 
+void GlfwSurface::synthesiseTouch(int op, double screenX, double screenY) {
+  touchInput_ = true;
+  touchCancel_ = op == 3;
+  switch (op) {
+    case 0:
+      // A mouse reaches the press point before it presses; a finger does not.
+      // Move first so hover/enter state matches what the press will hit-test.
+      synthesiseMouse(2, screenX, screenY, false);
+      synthesiseMouse(0, screenX, screenY, false);
+      break;
+    case 1:
+      synthesiseMouse(1, screenX, screenY, false);
+      synthesiseCursorLeave();  // a lifted finger is not hovering anything
+      break;
+    case 2:
+      synthesiseMouse(2, screenX, screenY, false);  // held => a drag
+      break;
+    case 3:
+      // The compositor took the sequence. It must NOT fire onPress, so the
+      // release happens far outside the window: Pressability sees it outside
+      // the press rect.
+      synthesiseMouse(2, -100000.0, -100000.0, false);
+      synthesiseMouse(1, -100000.0, -100000.0, false);
+      synthesiseCursorLeave();
+      break;
+    default:
+      break;
+  }
+  touchInput_ = false;
+  touchCancel_ = false;
+}
+
 void GlfwSurface::synthesiseClick(double screenX, double screenY) {
   // Down then up, in that order, through the SAME conversion the callback
   // uses. RN's Pressability needs both: a lone down highlights and never
@@ -1435,6 +1581,7 @@ void GlfwSurface::pollEvents() {
   glfwPollEvents();
 #if defined(__APPLE__)
   if (metal_) metal_->SyncFromWindow();  // FP-21: inLiveResize for the raster side
+  if (metal_ && hidden_) GlfwCocoaSetLayerScale(window_, 1.0);  // --window-hidden: stay 1x
 #endif
 }
 
@@ -1443,6 +1590,7 @@ void GlfwSurface::waitEvents(double timeoutSeconds) {
   glfwWaitEventsTimeout(timeoutSeconds);
 #if defined(__APPLE__)
   if (metal_) metal_->SyncFromWindow();
+  if (metal_ && hidden_) GlfwCocoaSetLayerScale(window_, 1.0);  // --window-hidden: stay 1x
 #endif
 }
 

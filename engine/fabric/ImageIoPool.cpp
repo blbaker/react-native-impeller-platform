@@ -11,6 +11,7 @@
 #include <pthread.h>
 #endif
 
+#include "base/MemTrim.h"
 #include "base/Trace.h"
 
 namespace rni::image {
@@ -20,6 +21,7 @@ struct IoPool::State {
   std::condition_variable cv;
   std::deque<std::function<void()>> queue;
   int started{0};
+  int running{0};  // jobs being run right now
 };
 
 IoPool::IoPool(const char* osName, int threads)
@@ -57,8 +59,18 @@ void IoPool::Post(std::function<void()> task) {
             s->cv.wait(lock, [s] { return !s->queue.empty(); });
             job = std::move(s->queue.front());
             s->queue.pop_front();
+            ++s->running;
           }
           job();
+          job = nullptr;  // the job's captures (fetched bodies, decode buffers) go before the idle check
+          bool idle = false;
+          {
+            std::lock_guard<std::mutex> lock(s->mutex);
+            idle = --s->running == 0 && s->queue.empty();
+          }
+          // A burst of decodes (a screen of images) leaves its scratch buffers free in
+          // this pool's arenas: hand those pages back once the burst is over.
+          if (idle) rni::memtrim::Request("image_io");
         }
       }).detach();
     }

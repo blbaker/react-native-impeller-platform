@@ -326,6 +326,16 @@ ReactHost::ReactHost(bool withInspector) {
   modules_->add("ImpellerTextureRegistry", [r = textureRegistry_](auto inv) {
     return std::make_shared<rni::TextureRegistryModule>(inv, r);
   });
+  // Row 3. Video players painting through the same texture
+  // registry (package/src/video: expo-video's useVideoPlayer / VideoView).
+  modules_->add("ImpellerVideo", [r = textureRegistry_](auto inv) {
+    return std::make_shared<rni::VideoModule>(inv, r);
+  });
+  // web view: react-native-webview's <WebView> on WPE WebKit, rendered in
+  // the rni-webhelper process and painted through the same texture registry.
+  modules_->add("ImpellerWebView", [r = textureRegistry_](auto inv) {
+    return std::make_shared<rni::WebViewModule>(inv, r);
+  });
   // FP-43. react-native-view-shot's native module (captureRef / captureScreen).
   modules_->add("RNViewShot", [c = snapshots_](auto inv) {
     return std::make_shared<rni::ViewShotModule>(inv, c);

@@ -1,0 +1,29 @@
+{
+  "name": "@blbaker/react-native-impeller-platform-engine-linux-arm64",
+  "version": "0.9.2",
+  "description": "Prebuilt Impeller engine host for linux-arm64 (installed automatically by react-native-impeller-platform)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blbaker/react-native-impeller-platform.git",
+    "directory": "packages-engine/engine-linux-arm64"
+  },
+  "homepage": "https://blbaker.github.io/react-native-impeller-platform/",
+  "bugs": {
+    "url": "https://github.com/blbaker/react-native-impeller-platform/issues"
+  },
+  "author": "Brandon Baker",
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ]
+}

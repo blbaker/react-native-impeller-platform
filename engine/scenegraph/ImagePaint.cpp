@@ -55,6 +55,20 @@ void ImageTextures::Sweep() {
   }
 }
 
+size_t ImageTextures::ReleaseUnreferenced(const std::unordered_set<std::string>& uris) {
+  size_t released = 0;
+  for (auto it = entries_.begin(); it != entries_.end();) {
+    if (uris.count(it->second.uri) != 0) {
+      ++it;
+      continue;
+    }
+    auto dead = it++;
+    Release(dead);
+    ++released;
+  }
+  return released;
+}
+
 size_t ImageTextures::Clear() {
   const size_t n = entries_.size();
   for (auto& [d, e] : entries_) {

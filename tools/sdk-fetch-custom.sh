@@ -2,11 +2,12 @@
 # Fetch the prebuilt custom Impeller SDK for one platform: the pinned Flutter
 # engine (engine/IMPELLER_SHA) plus engine/impeller-sdk-patches/*.patch.
 #
-#   bash tools/sdk-fetch-custom.sh <linux-x64|darwin-arm64|win32-x64|android-arm64|android-x64> [dest]
+#   bash tools/sdk-fetch-custom.sh <linux-x64|linux-arm64|darwin-arm64|win32-x64|android-arm64|android-x64> [dest]
 #
 # android-x64 is for an emulator-only engine build (CI, never published to
 # npm); android-arm64 is what a device build links. Both are cross-built on
-# a linux-x64 host (tools/impeller-sdk-custom-build.sh RNI_SDK_TARGET=android-*).
+# a linux-x64 host (tools/impeller-sdk-custom-build.sh RNI_SDK_TARGET=android-*),
+# and so is linux-arm64 (RNI_SDK_TARGET=linux-arm64).
 #
 # WHY PREBUILT
 # The patches add what the stock SDK lacks and the engine relies on: letter and
@@ -32,9 +33,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PLAT="${1:?usage: sdk-fetch-custom.sh <linux-x64|darwin-arm64|win32-x64|android-arm64|android-x64> [dest]}"
+PLAT="${1:?usage: sdk-fetch-custom.sh <linux-x64|linux-arm64|darwin-arm64|win32-x64|android-arm64|android-x64> [dest]}"
 case "$PLAT" in
   linux-x64)    DEFAULT_DEST="engine/third_party/impeller-sdk-custom-parity" ;;
+  linux-arm64)  DEFAULT_DEST="engine/third_party/impeller-sdk-custom-linux-arm64" ;;
   darwin-arm64) DEFAULT_DEST="engine/third_party/impeller-sdk-custom-parity-darwin" ;;
   win32-x64)    DEFAULT_DEST="engine/third_party/impeller-sdk-custom-parity-win" ;;
   android-arm64) DEFAULT_DEST="engine/third_party/impeller-sdk-custom-parity-android" ;;

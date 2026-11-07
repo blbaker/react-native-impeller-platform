@@ -19,6 +19,10 @@ on:
       - 'engine/**'
       - 'packages-engine/**'
       - 'tools/engine-build.sh'
+      - 'tools/engine-build-linux.sh'
+      - 'tools/ffmpeg8-fetch.sh'
+      - 'tools/arm64-sysroot.sh'
+      - 'tools/arm64-testenv/**'
       - 'tools/ci-engine-pack.sh'
       - 'tools/mutation-verify-engine-pack.sh'
       - 'tools/glfw-fetch.sh'
@@ -71,6 +75,14 @@ jobs:
             platform: linux
             arch: x64
             os: ubuntu-24.04
+          # Cross-built on an x86_64 runner, the same way the developer build
+          # works: clang + lld against a Debian bookworm arm64 sysroot that
+          # tools/arm64-sysroot.sh exports from a docker image (qemu binfmt).
+          # The package's own --help check runs the binary under that image.
+          - triple: linux-arm64
+            platform: linux
+            arch: arm64
+            os: ubuntu-24.04
           - triple: darwin-arm64
             platform: darwin
             arch: arm64
@@ -101,7 +113,22 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build g++ libicu-dev \
             libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libglvnd-dev \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev pkg-config \
+            clang lld llvm file
+
+      # arm64 only: qemu binfmt, so docker can run the arm64 images the
+      # sysroot is exported from (and the staged binary's --help check).
+      # Pinned to the v3.6.0 commit, like the MSVC action below.
+      - name: qemu binfmt (linux-arm64)
+        if: matrix.triple == 'linux-arm64'
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+        with:
+          platforms: arm64
+
+      - name: arm64 sysroot (linux-arm64)
+        if: matrix.triple == 'linux-arm64'
+        run: bash tools/arm64-sysroot.sh
 
       # Xcode's toolchain and CMake are on the macOS image; Ninja is not
       # guaranteed to be.
@@ -111,6 +138,14 @@ jobs:
           command -v ninja >/dev/null || brew install ninja
           cmake --version | head -1
           ninja --version
+          # ⛔ PIN OpenSSL 3. The macos-15 image moved Homebrew's default
+          # OpenSSL to openssl@4 (4.1.0 on image 20261104), which makes
+          # ASN1_STRING opaque, and boost 1.83's asio::ssl
+          # (rfc2818_verification.ipp) no longer compiles against it.
+          # FindOpenSSL reads OPENSSL_ROOT_DIR from the environment.
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          "$(brew --prefix openssl@3)/bin/openssl" version
 
       # cl, link and dumpbin on PATH for the steps that follow. Pinned to the
       # v1.13.0 commit: third-party code running in the job that produces a

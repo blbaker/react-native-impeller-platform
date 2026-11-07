@@ -1,0 +1,61 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WV-EME</title>
+<style>
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  video { position: fixed; left: 0; top: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+</style></head>
+<body>
+<video id="v" muted autoplay playsinline></video>
+<!-- Shaka Player 4.16 (Apache-2.0, vendored from the 10-01 WPE probe). -->
+<script src="eme/vendor/shaka-player.compiled.js"></script>
+<script>
+// EME arm of tools/ci-webview.sh and tools/ci-webview-arm64.sh: the Shaka
+// Widevine test asset sintel-widevine with a licence from cwip-shaka-proxy
+// (the Shaka-only proof target, Mac decision 2026-10-18), through WebKit EME ->
+// OpenCDM (libocdm.so) -> the CDM. H.264 (avdec_h264 decodes it), audio
+// disabled (no sound device in the container: DRM audio is untested).
+const MANIFEST = 'https://storage.googleapis.com/shaka-demo-assets/sintel-widevine/dash.mpd';
+const LICENSE = 'https://cwip-shaka-proxy.appspot.com/no_auth';
+const L = (...a) => console.log('WVEME ' + a.join(' '));
+const v = document.getElementById('v');
+async function main() {
+  shaka.polyfill.installAll();
+  try {
+    const acc = await navigator.requestMediaKeySystemAccess('com.widevine.alpha', [{
+      initDataTypes: ['cenc'],
+      videoCapabilities: [{contentType: 'video/mp4; codecs="avc1.4d401f"'}],
+    }]);
+    L('keysystem', acc.keySystem);
+  } catch (e) {
+    L('keysystem-fail', e.name);
+  }
+  const player = new shaka.Player();
+  await player.attach(v);
+  player.configure({
+    drm: {servers: {'com.widevine.alpha': LICENSE}},
+    preferredVideoCodecs: ['avc1'],
+    abr: {enabled: false, defaultBandwidthEstimate: 1e9},
+    manifest: {disableAudio: true},
+    restrictions: {maxHeight: 546},
+    streaming: {bufferingGoal: 12, rebufferingGoal: 2},
+  });
+  player.addEventListener('error', (e) => L('fail shaka', e.detail && e.detail.code));
+  player.getNetworkingEngine().registerResponseFilter((type, resp) => {
+    if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) L('license', resp.data.byteLength);
+  });
+  try {
+    await player.load(MANIFEST, 120);  // mid-film: high detail and motion
+    L('loaded');
+  } catch (e) {
+    L('fail load', e && e.code);
+  }
+  v.play().catch((e) => L('fail play', e.name));
+  setInterval(() => {
+    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+    L('tick t=' + v.currentTime.toFixed(2), 'rs=' + v.readyState, 'frames=' + (q.totalVideoFrames || 0),
+      'dropped=' + (q.droppedVideoFrames || 0), 'w=' + v.videoWidth);
+  }, 1000);
+}
+main();
+</script>
+</body></html>

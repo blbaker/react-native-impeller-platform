@@ -36,11 +36,25 @@ fi
 cp "$SRC/index.js" "$APP/index.js"
 # Sibling modules the entry imports (e.g. eng10-world-sprites/scene.js).
 for m in "$SRC"/*.js; do [ "$(basename "$m")" = index.js ] || cp "$m" "$APP/"; done
+# Image assets the entry require()s. With any present, metro also writes them
+# with --assets-dest next to the bundle, and they are committed beside it in
+# prebuilt/assets (RN resolves a require()d asset relative to the bundle path).
+ASSET_ARGS=()
+if compgen -G "$SRC/*.png" >/dev/null; then
+  cp "$SRC"/*.png "$APP/"
+  ASSET_ARGS=(--assets-dest impeller/build)
+fi
 npx --no-install react-native init-impeller >/dev/null 2>&1 || true
 npx --no-install react-native bundle --platform impeller --dev false \
-    --entry-file index.js --bundle-output impeller/build/fixture.bundle > "$WORK/bundle.log" 2>&1 \
+    --entry-file index.js --bundle-output impeller/build/fixture.bundle \
+    ${ASSET_ARGS[@]+"${ASSET_ARGS[@]}"} > "$WORK/bundle.log" 2>&1 \
   || { tail -20 "$WORK/bundle.log" >&2; echo "build-fixture-bundle: FAIL — metro bundle failed" >&2; exit 1; }
 [ -s "$APP/impeller/build/fixture.bundle" ] || { echo "build-fixture-bundle: FAIL — bundle empty" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 cp "$APP/impeller/build/fixture.bundle" "$OUT"
+if [ -d "$APP/impeller/build/assets" ]; then
+  rm -rf "$(dirname "$OUT")/assets"
+  cp -R "$APP/impeller/build/assets" "$(dirname "$OUT")/assets"
+  echo "build-fixture-bundle: assets -> $(dirname "$OUT")/assets ($(find "$(dirname "$OUT")/assets" -type f | wc -l) files)"
+fi
 echo "build-fixture-bundle: wrote $OUT ($(wc -c < "$OUT") bytes)"

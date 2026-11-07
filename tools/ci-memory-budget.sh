@@ -6,7 +6,10 @@
 #   cycle    500 distinct images through 8-image groups with --image-cache-mb 6: all 500 decode, the cache
 #            never holds more than 6 MB (peak and every frame's image_cache_bytes), it IS used (>= 5 MB),
 #            evictions >= 400, the last group (most recently used) stays resident (reloads=0) and paints
-#   default  the same without the flag: the cache stops at Flutter's 100 MiB
+#   default  the same without the flag: the cache stops at Flutter's 100 MiB, and the painter holds
+#            only the 8 mounted images' textures (unmounted ones go back, their bitmaps stay cached)
+#   swap     the same with stable=1: 8 <Image> nodes change source in place; still 8 textures, and the
+#            last sources paint
 #   rss      peak RSS of the 500-image run is within 24 MB of the 250-image run (plateau), and an
 #            unbounded control run (--image-cache-mb 100000) peaks >= 60 MB higher (the metric can see it)
 #   purge    RNI_TEST_LOW_MEMORY_AT_FRAME=100 with floor 1 MB: the cache drops to the floor but keeps the
@@ -51,7 +54,7 @@ run() {
   set +e
   ( cd "$(dirname "$BIN")" && env RNI_IMAGE_LOG=1 ${envs[@]+"${envs[@]}"} "$BIN" --headless --probe-banner off \
       --bundle "$BUNDLE" --app-name Fp33MemoryBudget --width 1536 --height 192 --scale 1 --supersample-rnsvg 0 \
-      --initial-url "fp33://cycle?dir=$WORK/img&count=$count&per=8&box=192" --frames 150 \
+      --initial-url "fp33://cycle?dir=$WORK/img&count=$count&per=8&box=192${FP33_EXTRA:-}" --frames 150 \
       --frame-timings-out "$WORK/$tag.json" --screenshot "$WORK/$tag.ppm" "$@" ) > "$WORK/$tag.log" 2>&1
   local rc=$?
   set -e
@@ -97,6 +100,16 @@ need default "$DPEAK"; need default "$DEVI"
 [ "$DPEAK" -le $((100 * MB)) ] || fail "default: cache peak $DPEAK bytes exceeds Flutter's 100 MiB"
 [ "$DPEAK" -ge $((90 * MB)) ] || fail "default: cache peak $DPEAK bytes, expected it to fill toward 100 MiB"
 [ "$DEVI" -ge 50 ] || fail "default: evictions=$DEVI, expected >= 50"
+# an unmounted <Image> gives its GPU texture back while its bitmap stays cached.
+DTEX="$(sv default "image_cache bytes" textures_live)"; need default "$DTEX"
+[ "$DTEX" -eq 8 ] || fail "default: textures_live=$DTEX, expected the 8 mounted images (unmounted images kept their textures)"
+
+echo "== swap: the same 8 <Image> nodes change source =="
+FP33_EXTRA='&stable=1' run swap 500 --
+STEX="$(sv swap "image_cache bytes" textures_live)"; need swap "$STEX"
+[ "$STEX" -eq 8 ] || fail "swap: textures_live=$STEX, expected 8 (a replaced source kept its texture)"
+T="$(tiles swap 492)"
+[ "$T" = "tiles_bad=0 of 8" ] || fail "swap: $T painted the wrong colour"
 
 echo "== rss: plateau + unbounded control =="
 run half 250 -- --image-cache-mb 6
@@ -113,7 +126,9 @@ fi
 
 purge_arm() {  # tag floor_mb expect: 500-free run, 64 images, signal at frame 100
   local tag="$1" floor="$2"
-  run "$tag" 64 RNI_TEST_LOW_MEMORY_AT_FRAME=100 RNI_IMAGE_CACHE_FLOOR_MB="$floor" --
+  # RNI_MEM_PSI=off: the arm counts purges from the test signal alone; host memory pressure (or a
+  # concurrent tools/ci-mem-psi.sh hog) would add a linux-psi purge (host/MemoryPressure.cpp).
+  run "$tag" 64 RNI_TEST_LOW_MEMORY_AT_FRAME=100 RNI_IMAGE_CACHE_FLOOR_MB="$floor" RNI_MEM_PSI=off --
   local line; line="$(grep -m1 'low_memory source=test' "$WORK/$tag.log" || true)"
   [ -n "$line" ] || fail "$tag: no low_memory line, the signal never arrived"
   BEFORE="$(echo "$line" | grep -oE 'image_cache_bytes_before=[0-9]+' | cut -d= -f2)"

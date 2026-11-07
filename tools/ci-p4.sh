@@ -60,12 +60,9 @@ echo "== 1. the URL predicate self-test (no side effects, no browser) =="
 # shell; Windows ShellExecuteW RESOLVES it the way the shell would, so a
 # one-for-one port would launch a .bat or a UNC path. The predicate is shared
 # code precisely so the Linux gate exercises the Windows guard.
-OPENURL="$("$ENGINE_LOCAL" --test-openurl)" || fail "openurl self-test exited nonzero: $OPENURL"
+. "$CI_TOOLS/lib/openurl-selftest.sh"
+OPENURL="$(rni_openurl_selftest "$ENGINE_LOCAL")" || fail "openurl self-test $OPENURL"
 echo "   $OPENURL"
-case "$OPENURL" in
-  OPENURL_PASS*) ;;
-  *) fail "openurl self-test did not pass: $OPENURL" ;;
-esac
 
 # ---------------------------------------------------------------------------
 echo "== 2. the module manifest, enumerated FROM JAVASCRIPT =="
@@ -238,6 +235,10 @@ const OWN_SPEC_FOR = {
   RNViewShot: 'src/viewshot/index.js',
   // Desktop notifications. Our own module: its JS half is package/src/notifications.
   Notifications: 'src/notifications/index.js',
+  // Our own module: its JS half is package/src/video (expo-video shape).
+  ImpellerVideo: 'src/video/index.js',
+  // Our own module: its JS half is package/src/webview (react-native-webview shape).
+  ImpellerWebView: 'src/webview/index.js',
 };
 // Where OWN_SPEC_FOR paths resolve: our installed package, not react-native.
 const OWN_PKG = 'node_modules/react-native-impeller-platform';
