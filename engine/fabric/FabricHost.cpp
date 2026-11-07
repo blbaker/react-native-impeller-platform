@@ -1684,9 +1684,12 @@ int FabricHost::dispatchKey(KeyAction action, unsigned int codepoint,
   }
 
   // item 4a: the anchor stays put only for a Shift+move and for SelectAll;
-  // every other action collapses the selection onto the new caret.
-  const bool keepAnchor =
-      (isMove && extendSelection) || action == KeyAction::SelectAll;
+  // every other action collapses the selection onto the new caret. ENG-57:
+  // Copy only reads the selection, so it keeps it too (a later Backspace or
+  // typed character must still act on the whole selected range).
+  const bool keepAnchor = (isMove && extendSelection) ||
+                          action == KeyAction::SelectAll ||
+                          action == KeyAction::Copy;
   if (!keepAnchor) anchor = caret;
 
   // Apply to the paint buffer first so a paint scheduled by the JS re-render
