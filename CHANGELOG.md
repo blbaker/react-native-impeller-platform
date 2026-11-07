@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.10.0](https://github.com/blbaker/react-native-impeller-platform/compare/v0.9.2...v0.10.0) (2026-11-07)
+
+
+### Features
+
+* **win32:** https through WinHTTP and the Windows certificate store [ENG-51] ([c9b9c60](https://github.com/blbaker/react-native-impeller-platform/commit/c9b9c60694eec0c2d3b37df2aaf1e0d5e77be4a5))
+* **window:** --icon flag and a dark Windows title bar [ENG-54] ([cfe970e](https://github.com/blbaker/react-native-impeller-platform/commit/cfe970e7f02161fd35dcf91cef33b7b9fce465b3))
+
+
+### Bug Fixes
+
+* **ci:** exclude the Windows-only WinHTTP backend from the iOS source check [ENG-51] ([053db84](https://github.com/blbaker/react-native-impeller-platform/commit/053db84a8763952cdfaa2ed942ed5e450370255d))
+* **engine:** Copy keeps the TextInput selection [ENG-57] ([b573dfb](https://github.com/blbaker/react-native-impeller-platform/commit/b573dfb6b39371f99eac692680c37e85dd0c522a))
+* **engine:** Copy keeps the TextInput selection [ENG-57] ([d6dcc0c](https://github.com/blbaker/react-native-impeller-platform/commit/d6dcc0c106b364b429ca3dfec53235b5831350cf))
+* **engine:** Linking.openURL opens http(s) URLs with & and %HH escapes (ENG-38, ENG-55) ([5dfca49](https://github.com/blbaker/react-native-impeller-platform/commit/5dfca491383f507a2b523cbe0ae9c0daee283c39))
+* **win32:** define IN/OUT for winhttp.h after folly removes them [ENG-51] ([da81082](https://github.com/blbaker/react-native-impeller-platform/commit/da810822b77f5f7d223d79165780a48cec871072))
+* **win32:** https, &lt;world&gt; paint, monitor scale, icon and dark title bar [ENG-51..54] ([2c72146](https://github.com/blbaker/react-native-impeller-platform/commit/2c7214608807aa619eccdeab2070f9d5d0fbb2ed))
+* **win32:** paint &lt;world&gt; rasters and sprites on Windows [ENG-52] ([2f507f7](https://github.com/blbaker/react-native-impeller-platform/commit/2f507f7a876df609bf8664531cbd571dc87bb2ff))
+* **win32:** take the window scale from the monitor content scale [ENG-53] ([69197b1](https://github.com/blbaker/react-native-impeller-platform/commit/69197b12a2ac62c10eef7fab700e61ca6505e2a7))
+
 ## [0.9.2](https://github.com/blbaker/react-native-impeller-platform/compare/v0.9.1...v0.9.2) (2026-11-06)
 
 
