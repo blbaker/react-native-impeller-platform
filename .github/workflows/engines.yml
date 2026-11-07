@@ -36,6 +36,9 @@ on:
       - '.gitattributes'
       - 'tools/sdk-fetch-custom.sh'
       - 'tools/angle-fetch.sh'
+      - 'tools/ci-openurl-window.sh'
+      - 'tools/win-browser-cmdline.ps1'
+      - 'fixtures/eng38-openurl/**'
       - '.github/workflows/engines.yml'
       - 'tools/ci-idle-commit-paint.sh'
       - 'tools/mutation-verify-idle-commit-paint.sh'
@@ -190,6 +193,18 @@ jobs:
       - name: Prove the pack gate can fail (macOS)
         if: runner.os == 'macOS'
         run: bash tools/mutation-verify-engine-pack.sh "packages-engine/engine-${{ matrix.triple }}"
+      # ENG-55: Linking.openURL on the Windows engine, windowed, through
+      # ShellExecuteW into the runner's real browser. ShellExecuteW cannot be
+      # stubbed, so the gate reads the launched browser's command line instead
+      # (tools/win-browser-cmdline.ps1). Opening a browser is fine here: nobody
+      # sees a runner's desktop, and the gate closes it between arms.
+      - name: Linking.openURL gate (Windows, windowed)
+        if: runner.os == 'Windows'
+        env:
+          RNI_OPENURL_ALLOW_LAUNCH: '1'
+        run: |
+          packages-engine/engine-win32-x64/bin/rn-impeller.exe --test-openurl
+          bash tools/ci-openurl-window.sh
 
       # A whole-screen JS commit on an IDLE windowed loop must be on screen
       # 300 ms later (fixtures/idle-commit-paint). Runs here because the loss it
@@ -273,6 +288,17 @@ jobs:
         env:
           RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
         run: bash tools/ci-key-root.sh
+
+      # ENG-38: windowed JS Linking.openURL with & and %HH escapes reaches
+      # /usr/bin/open (the same predicate as Windows), and a hostile URL is
+      # refused. /usr/bin/open cannot be stubbed, so A/B/D open the runner's
+      # browser; nobody sees a runner's desktop.
+      - name: Linking.openURL with & and %HH (macOS windowed)
+        if: runner.os == 'macOS'
+        env:
+          RNI_BIN: packages-engine/engine-darwin-arm64/bin/rn-impeller
+          RNI_OPENURL_ALLOW_LAUNCH: '1'
+        run: bash tools/ci-openurl-window.sh
 
       # ENG-48: two same-size gradient <Svg>s on the per-<Svg> supersample
       # path each paint their OWN gradient, on the darwin binary the npm

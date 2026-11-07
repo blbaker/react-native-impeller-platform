@@ -1,5 +1,6 @@
 #include "modules/PlatformModules.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -94,10 +95,33 @@ bool isOpenableUrl(const std::string& url) {
   if (!allowed) return false;
 
   // No control characters, no quotes, and none of the characters a shell or
-  // ShellExecute treats structurally. A legitimate URL needs none of these
-  // unescaped.
-  for (unsigned char c : url) {
+  // ShellExecute treats structurally.
+  //
+  // EXCEPT `&` and `%` on http/https (ENG-38). Every OAuth URL needs both:
+  // `response_type=code&client_id=...&redirect_uri=http%3A%2F%2F...`. Refusing
+  // them refused every sign-in link. They are safe on these two schemes:
+  //   - POSIX: the URL is argv[1] of execl/execlp. No shell ever parses it.
+  //   - Windows: ShellExecuteW hands an http(s) URL to the registered browser
+  //     handler, not to cmd.exe, so `&` is not a command separator there.
+  //     `%` is the dangerous one: MS07-061 (CVE-2007-3896) used a MALFORMED
+  //     escape (`mailto:x%../../windows/system32/calc.exe".cmd`) to make
+  //     ShellExecute fall back to treating the URL as a file path. So `%` is
+  //     accepted ONLY as a well-formed `%HH` escape; `%zz`, `%2`, a trailing
+  //     `%` and `%..` all refuse. `"` and `\` stay refused, as before.
+  // Every other scheme (mailto, tel) keeps the full deny set.
+  const bool web = (scheme == "http" || scheme == "https");
+  for (size_t i = 0; i < url.size(); ++i) {
+    unsigned char c = (unsigned char)url[i];
     if (c < 0x20 || c == 0x7f) return false;
+    if (web && c == '&') continue;
+    if (web && c == '%') {
+      if (i + 2 >= url.size() || !std::isxdigit((unsigned char)url[i + 1]) ||
+          !std::isxdigit((unsigned char)url[i + 2])) {
+        return false;
+      }
+      i += 2;
+      continue;
+    }
     if (std::string("\"'`$|&;<>^%\\ ").find((char)c) != std::string::npos) {
       return false;
     }
@@ -115,7 +139,25 @@ int runOpenUrlSelfTest() {
       {"http://example.com/a/b?c=d#e", true},
       {"mailto:someone@example.com", true},
       {"tel:+15551234567", true},
+      // ENG-38: query separators and percent-escapes on http(s) must open.
+      {"https://example.com/a?b=1&c=2", true},
+      {"https://example.com/a%20b", true},
+      {"http://127.0.0.1:8791/x?a=1&b=2", true},
+      {"https://auth.example.com/oauth/authorize?response_type=code"
+       "&client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A8791%2Fcb", true},
+      {"https://example.com/%2f%2F", true},
       // --- must be refused ---
+      // ENG-38 boundary: `%` only as a well-formed %HH escape...
+      {"https://example.com/%zz", false},
+      {"https://example.com/a%2", false},
+      {"https://example.com/a%", false},
+      {"https://example.com/%PATH%", false},
+      {"https://example.com/%../../windows/system32/calc.exe", false},
+      // ...and `&`/`%` only on http(s). mailto keeps the full deny set.
+      {"mailto:a@example.com?subject=x&body=y", false},
+      {"mailto:a@example.com?subject=a%20b", false},
+      // `&` allowed does not let the other structural characters through.
+      {"https://example.com/?a=1&b=2|calc", false},
       {"file:///etc/passwd", false},
       {"file://C:/Windows/System32/cmd.exe", false},
       {"\\\\attacker\\share\\evil.bat", false},
